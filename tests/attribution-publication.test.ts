@@ -153,3 +153,17 @@ test('Complete persisted mapping publishes one anchored receipt without counting
   assert.equal(customer.anchor_result_id, anchor.id);
   assert.equal(customer.contribution_minor, null);
 });
+
+test('Filtered publication derives its proof from complete persisted account reads', async()=>{
+ const {publishScopedAttribution}=await import('../src/lib/attribution');
+ const {input,refs,ad}=fixture();
+ const {Temporal}=await import('@js-temporal/polyfill');
+ const run={id:ids.run,source:'meta',source_namespace:refs.paidAccountId,stream_key:'ad_daily',query_profile_key:'v23.0-ad-day-none',status:'complete',pagination_complete:true,date_from:'2026-01-01',date_to:'2026-02-01',covered_from:input.policy!.cohort.from,covered_to:input.policy!.cohort.to,rows_rejected:0,source_as_of:'2026-02-02T10:00:00Z',started_at:'2026-02-02T10:00:00Z'};
+ const costs=Array.from({length:31},(_,i)=>({id:'cost-'+i,ad_id:ids.ad,sync_run_id:ids.run,date:Temporal.PlainDate.from('2026-01-01').add({days:i}).toString(),spend_minor:String(i<9?162:161),currency:'EUR',currency_exponent:2,timezone:'Europe/Paris',base_profile_key:'ad-day-no-breakdown-v1',campaign_id:'campaign-A'}));
+ const calls:{name:string;args:Row}[]=[];
+ const db:Database={async select(table,options){if(table==='ads')return [ad];if(table==='v_ad_daily')return costs;if(table==='sync_runs')return [run];throw Error('Unexpected table');},async upsert(){assert.fail();},async probe(){assert.fail();},async rpc<T>(name:string,args:Row){calls.push({name,args});return ids.run as T;}};
+ const result=await publishScopedAttribution(db,input,refs,{source:'paid',tunnel:'all',campaign:'meta:campaign-A'});
+ assert.equal(result.available,true);assert.equal(result.proof.spendMinor,5000);assert.equal(result.proof.costRowIds.length,31);assert.equal(calls.length,1);
+ const header=calls[0].args.p_run as Row;assert.deepEqual(header.scope,{source:'paid',tunnel:'all',campaign:'meta:campaign-A'});assert.equal(((header.input_manifest as Row).scopeProof as Row).accountId,refs.paidAccountId);
+ costs.pop();calls.length=0;await assert.rejects(publishScopedAttribution(db,input,refs,{source:'paid',tunnel:'all',campaign:'meta:campaign-A'}));assert.equal(calls.length,0);
+});

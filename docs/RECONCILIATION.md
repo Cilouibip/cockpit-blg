@@ -20,6 +20,8 @@ Le code est testé sur des fixtures synthétiques ; cette recette reste à exéc
 | Saut/relecture vidéo ou autre version | Union des intervalles réellement lus ; versions séparées | domain-tracking, dashboard |
 | Vue question et réponse dans deux tentatives | Aucun appariement entre tentatives | dashboard |
 | Attribution corrigée après publication | Nouveau snapshot ; précédent immuable, cibles/FK cohérentes | domain, PostgreSQL, dashboard |
+| Plus de 10 000 événements, filtre après le seuil,15 005 prospects | Total exact en SQL, pages séparées et recherche globale | dashboard-sql, pagination, dashboard-read, UI ciblée |
+| Campagne A puis B, publicité sans conversion, créative absente | B garde l’acquisition ; toutes les dépenses du périmètre comptent ; créative manquante refusée | attribution-scope, attribution-publication |
 | Accès anonyme, origine étrangère, brute force | Refus ; aucune fuite de réponse source | security, HTTP, PostgreSQL |
 
 ## Avant lecture financière réelle

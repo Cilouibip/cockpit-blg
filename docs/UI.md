@@ -6,9 +6,9 @@ Référence produit : `DECISIONS-ACTEES.md`. Réalisation du 7 septembre 2026. C
 
 `src/components/Cockpit.tsx` est le composant client unique intégré dans la page privée. Il reçoit `mode: 'demo' | 'live'` et `user: string`. Le layout fournit le conteneur `#atelier-a` ; le composant n’ajoute pas un second identifiant identique.
 
-- Résultats : KPI globaux, comparaison, source et couverture, détail modal, montants quotidiens et relevés accessibles sous la courbe, détail des campagnes et liens.
+- Résultats : KPI globaux, comparaison, source et couverture, détail modal, montants quotidiens et relevés accessibles sous la courbe, détail paginé des campagnes et liens. Les pages de détail ne rechargent pas les agrégats du tableau de bord.
 - Parcours : contenu, acquisition, conversion ; étapes des tunnels quiz et masterclass ; volumes accompagnant les taux.
-- Commercial : recherche, responsable, rendez-vous et présence, prochaine relance, résultat ; détail du prospect. Le miroir est présenté en lecture seule et n’est pas filtré par les dates du tableau de bord.
+- Commercial : recherche et statut filtrés par le serveur, pagination, responsable affiché, rendez-vous et présence, prochaine relance, résultat ; détail du prospect. Le miroir est présenté en lecture seule et n’est pas filtré par les dates du tableau de bord.
 - Liens : création par emplacement/destination/campagne/nom ; copie et explication de l’endroit où coller ; versions visibles ; archivage/restauration. Une nouvelle version est une mutation contrôlée par `expectedVersion`, jamais un remplacement de l’ancienne URL.
 - Connexions : état technique, couverture, dernière synchronisation et limites. Lecture manuelle seulement pour les connecteurs Meta et Notion lorsque le serveur renvoie `canSync: true`.
 
@@ -19,7 +19,8 @@ Les types partagés sont dans `src/lib/ui-contract.ts`. Les exemples et identit�
 | Route privée | Usage |
 | --- | --- |
 | `GET /api/dashboard` | Query `from`, `to`, `source`, `tunnel`, `campaign`, `compare`; réponse `DashboardResponse`. |
-| `GET /api/prospects` | Réponse `ProspectsResponse` ; miroir commercial disponible. |
+| `GET /api/details` | Query `from`, `to`, `source`, `tunnel`, `campaign`, `page` ; réponse `DetailsResponse` avec pagination de 50 lignes. |
+| `GET /api/prospects` | Query `search`, `stage`, `page` ; réponse `ProspectsResponse`, pagination de 50 lignes et liste globale des statuts. |
 | `GET /api/connections` | Réponse `ConnectionsResponse`. |
 | `GET /api/links` | Réponse `LinksResponse`, dont `persistent` et limites de stockage. |
 | `POST /api/links` | `LinkInput`; réponse `LinksResponse`. |
@@ -30,6 +31,8 @@ Les types partagés sont dans `src/lib/ui-contract.ts`. Les exemples et identit�
 Les dates `from` et `to` sont toutes deux incluses et interprétées en Europe/Paris. Le serveur convertit la borne finale en lendemain exclusif. Les valeurs de métrique ayant l’unité `percent` sont exprimées en points de pourcentage, par exemple `12.5` pour 12,5 %. Les dénominateurs absents et nuls restent distincts.
 
 Une absence ne devient jamais zéro. Une base précédente nulle n’est pas convertie en variation infinie. Un trou dans les relevés interrompt la courbe : il n’est ni interpolé ni remplacé par zéro. La variation verte/rouge indique seulement le signe numérique.
+
+Les numéros de page commencent à zéro. `pagination.total` et `detailsPagination.total` fournissent les totaux des listes, indépendamment des seules lignes visibles ; ils ne deviennent jamais des KPI. La première page de détail vient du tableau de bord, les pages suivantes de l’API privée dédiée. Changer les filtres du tableau de bord réinitialise le détail ; rechercher ou choisir un statut commercial puis valider réinitialise la liste commerciale à la page zéro. Les contrôles Précédent/Suivant affichent la plage courante et désactivent les pages inexistantes. Les anciennes fixtures sans métadonnées de pagination restent lisibles, avec filtrage local de leur liste complète.
 
 Les erreurs du serveur doivent respecter `ApiError` et être expurgées. L’interface donne un message spécifique pour la session expirée et les conflits de version. La lecture en cours est annulée lors d’un changement de requête ; une actualisation sur la même vue conserve les données et la saisie avec un état explicite de lecture.
 
@@ -51,4 +54,4 @@ Les grilles passent de quatre à deux cartes KPI, les panneaux se placent sur un
 
 `node --import tsx --test tests/ui-format.test.ts` : 5 tests réussis. Ils couvrent absence contre zéro, comparaison depuis une base nulle, calendrier invalide, date de Paris à minuit et changement d’heure, ainsi que l’encodage d’une campagne contenant des caractères de requête.
 
-Le contrôle TypeScript global passe après intégration. Le parcours navigateur intégré passe 27 contrôles sur les cinq vues en ordinateur 1440 px et mobile 390 px, avec zéro erreur JavaScript ou serveur 5xx. Les interactions, corrections et limites sont détaillées dans `docs/QA-NAVIGATEUR.md`.
+Le contrôle TypeScript global passe après intégration. Le parcours navigateur initial passe 27 contrôles sur les cinq vues en ordinateur 1440 px et mobile 390 px, avec zéro erreur JavaScript ou serveur 5xx. Le complément de pagination passe 9 contrôles UI ciblés sur des réponses HTTP synthétiques, sans nouvelle exécution de la recette générale. Les interactions, corrections et limites sont détaillées dans `docs/QA-NAVIGATEUR.md`.

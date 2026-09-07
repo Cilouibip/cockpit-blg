@@ -86,3 +86,9 @@ Le collecteur expire la session après 30 minutes d'inactivité. Les tentatives 
 ## Validation effectuée
 
 `tests/domain.test.ts`, `tests/domain-tracking.test.ts` et `tests/connectors.test.ts` couvrent données synthétiques, frontières DST, identités, échéances/refunds, reports, attribution, fenêtres/cohortes, source financière exclusive, schémas stricts, signatures, ordre quiz, opt-in et lecture réelle avec seek, pagination, erreurs et checkpoints. Le test des snippets exécute leurs callbacks avec des surfaces navigateur simulées ; la validation visuelle de l'application et les tests PostgreSQL sont des preuves distinctes tenues par l'intégrateur.
+
+## Préparation et publication d’un périmètre
+
+Le serveur `publishScopedAttribution` lit les preuves persistées du compte, les transmet au préparateur pur, puis publie dans la même fonction atomique que le global. Les périmètres `meta:campagne`, `meta-ad:publicité` et `meta-creative:créative` exigent un coût explicite chaque jour, une couverture de compte complète et un profil cohérent. La somme compte doit correspondre au global ; aucun coût n'est sélectionné seulement parce qu'il a une conversion. Une créative exige les métadonnées complètes du compte. Le filtre tunnel attend un mapping versionné disponible.
+
+Le choix du dernier contact est effectué sur le global avant de retenir les personnes du périmètre. Les contacts candidats, l'ancre, les échéances et remboursements conservent leur filiation. Les publicités, coûts et synchronisations utilisés sont figés dans le manifeste. Le publisher direct refuse un scope filtré non passé par ce préparateur.

@@ -60,6 +60,28 @@ Ces fichiers sont volontairement ignorés par Git et restent disponibles sur la 
 Chaque capture de vue possède aussi une version cadrée à la fenêtre, suffixée `-viewport.png`, pour lire les détails à leur taille réelle.
 Les cadrages isolés `-metrics.png` et `-chart.png` masquent uniquement la navigation fixe et l’indicateur de développement pendant la capture pour éviter leur superposition ; les captures de vues conservent l’interface complète.
 
+## Complément de pagination
+
+Après ajout des listes paginées, **9 contrôles UI ciblés supplémentaires passent** sur 120 détails et 125 prospects fictifs. Ce scénario utilise des réponses HTTP synthétiques pour vérifier le comportement de l’interface, indépendamment des tests PostgreSQL du responsable des agrégats. La recette générale de 27 contrôles n’a pas été rejouée pour ce complément.
+
+- Une page de 50 détails ne remplace pas l’agrégat fictif d’un million de leads. Paginer les détails n’émet aucun nouvel appel au tableau de bord.
+- Les dates, source, tunnel et campagne appliqués sont conservés dans l’appel privé de la page suivante.
+- Les dernières pages partielles, les plages de lignes et les boutons Précédent/Suivant respectent les bornes.
+- Le total commercial de 125 reste distinct des 50 lignes de la page ; une dernière page de 25 lignes est affichée correctement.
+- Recherche et statut sont transmis au serveur et remettent la liste à la page zéro. Un statut absent des 50 premières lignes reste disponible grâce à la liste globale des statuts.
+- Une recherche sans résultat donne zéro ligne et ne propose aucune page suivante.
+- Les commandes restent utilisables à 390 px sans débordement de page.
+- Les anciennes fixtures sans pagination restent compatibles et filtrent leur liste complète.
+- Aucune erreur JavaScript n’est observée.
+
+Preuves locales : `.local/qa/pagination-result.json`, `.local/qa/pagination-details.png`, `.local/qa/pagination-mobile-commercial.png`. Exécution ciblée :
+
+```text
+node --import tsx tests/ui-pagination.integration.ts
+```
+
+Ce scénario ne crée aucun prospect ni détail dans la base, ne modifie aucune source externe et ne constitue pas une preuve de performance ou de justesse de l’agrégation SQL. Le contrôle TypeScript global passe après ce complément.
+
 ## Rejouer le contrôle
 
 Précondition : application de démonstration locale et base PostgreSQL de démonstration actives, Chrome installé, accès local généré. Le script refuse de poursuivre sans les accès privés et vérifie la mention de démonstration avant les mutations.

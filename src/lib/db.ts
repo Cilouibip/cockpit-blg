@@ -15,7 +15,7 @@ export interface Database {
 }
 const validIdentifier=(s:string)=>/^[a-z_][a-z0-9_]*$/.test(s);
 function checkIdentifier(s:string) { if(!validIdentifier(s)) throw new AppError('Champ interne invalide.',500); return '"'+s+'"'; }
-const allowedRPC = new Set(['save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution']);
+const allowedRPC = new Set(['save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution','cockpit_dashboard_rollup','cockpit_dashboard_lists','cockpit_prospects_page','cockpit_attribution_snapshot','cockpit_attribution_detail','cockpit_connection_status']);
 function dbError(code:unknown):never {
   if(code==='40001') throw new AppError('Le lien a changé. Recharge sa dernière version.',409,'version_conflict');
   if(code==='55000') throw new AppError('Restaure le lien avant de créer une version.',409,'link_archived');

@@ -1,6 +1,6 @@
 # Installation et exploitation
 
-État au 7 septembre 2026 : application et trois migrations testées localement ; aucune installation SQL distante, aucun déploiement et aucun snippet ajouté à une page réelle. Lire les décisions dans `../DECISIONS-ACTEES.md` avant toute reprise.
+État au 7 septembre 2026 : application et cinq migrations testées localement ; aucune installation SQL distante, aucun déploiement et aucun snippet ajouté à une page réelle. Lire les décisions dans `../DECISIONS-ACTEES.md` avant toute reprise.
 
 ## 1. Base du cockpit
 
@@ -11,10 +11,12 @@ Appliquer une fois, dans l'ordre, les fichiers entiers :
 1. `supabase/migrations/001_cockpit.sql` : 19 tables métier et 2 tables techniques, droits, vues, contraintes et fonctions.
 2. `supabase/migrations/002_integrity_hardening.sql` : immutabilité et cohérence des paiements/corrections.
 3. `supabase/migrations/003_attribution_publication.sql` : publication atomique des calculs d'attribution.
+4. `supabase/migrations/004_dashboard_rollups.sql` : agrégats SQL des vues principales, filtrés par période, avec index de dates.
+5. `supabase/migrations/005_paginated_reads.sql` : détails et prospects paginés, snapshots ciblés et état compact des connexions.
 
 Chaque fichier porte sa transaction et son numéro dans `cockpit_migrations`. Ne pas réappliquer un fichier dont le numéro est enregistré. Les rôles Supabase `anon`, `authenticated`, `service_role` sont attendus. Les deux premiers ne reçoivent aucun droit métier ; seul le serveur accède aux données. Les vues respectent les droits du rôle appelant. Aucune table existante n'est supprimée.
 
-Après installation, vérifier les versions 1–3, les 21 tables et leur RLS, puis l'accès privé et l'interdiction des accès directs navigateur. Les tests locaux ne prouvent pas l'état du projet distant.
+Après installation, vérifier les versions 1–5, les 21 tables et leur RLS, puis l'accès privé et l'interdiction des accès directs navigateur. Les tests locaux ne prouvent pas l'état du projet distant.
 
 ## 2. Accès privé et variables serveur
 
@@ -48,9 +50,9 @@ Recette minimale : déconnexion→API privée401 ; connexion valide→résultats
 
 ## 4. Synchronisations préparées
 
-Meta et Notion disposent d'un bouton de synchronisation authentifié dans Connexions. Les appels externes sont exclusivement en lecture. Meta relit par défaut les35 jours précédents (jusqu'à hier inclus), avec un maximum de93 jours par appel. Notion relit le périmètre courant autorisé, page par page, et conserve les modifications observées ; cela ne reconstitue pas l'histoire antérieure.
+Meta et Notion disposent d'un bouton de synchronisation authentifié dans Connexions. Les appels externes sont exclusivement en lecture. Meta relit par défaut les 35 jours précédents (jusqu'à hier inclus), avec un maximum de 93 jours par appel. Notion relit le périmètre courant autorisé, page par page, et conserve les modifications observées ; cela ne reconstitue pas l'histoire antérieure.
 
-Les routes `GET /api/jobs/meta` et `GET /api/jobs/notion` sont prêtes pour un ordonnanceur avec `Authorization: Bearer <CRON_SECRET>`. Aucun ordonnanceur n'a été installé. Choisir sa fréquence après contrôle du premier import et des limites de l'hébergement. Un import partiel ne devient pas une partition Meta publiée ; une relance reprend la partition bornée depuis le début. Une interruption serveur laissant un run `running` requiert examen de ce run avant clôture en échec et relance ; pas de prise de contrôle silencieuse d'un import actif.
+Les routes `GET /api/jobs/meta` et `GET /api/jobs/notion` sont prêtes pour un ordonnanceur avec `Authorization: Bearer <CRON_SECRET>`. Aucun ordonnanceur n'a été installé. Choisir sa fréquence après contrôle du premier import et des limites de l'hébergement. Un import partiel ne devient pas une partition Meta publiée ; une relance reprend la partition bornée depuis le début. Une relance de la même partition clôt en échec une ancienne tentative restée `running` depuis plus de dix minutes ; une tentative plus récente conserve son verrou et refuse une synchronisation concurrente. Examiner les erreurs persistantes avant nouvelle relance.
 
 Wix fournit un adaptateur d'agrégats sous mapping relu, sans route automatique activée ni transactions inventées. La clé Wix serveur et le raccord aux paiements par personne manquent. PostHog fournit un contrôle de projet ; aucun export Query massif ni alimentation automatique du cockpit n'est activé. Le raccord first-party prévu suffit à recevoir les observations nécessaires sans abonnement supplémentaire.
 
@@ -64,8 +66,10 @@ Valider un parcours technique autorisé de bout en bout avant de présenter la c
 
 ## 6. Attribution et exploitation
 
-`publishAttribution` dans `src/lib/attribution.ts` attend des données préparées par un opérateur serveur de confiance et des références exactes aux lignes persistées. La V1 accepte uniquement la cohorte globale (`all/all`, sans campagne filtrée) ; elle vérifie la publicité, son compte source et sa campagne contre la ligne persistée. La politique, les preuves, les candidats, les coûts et les contributions sont figés dans une transaction. Une correction produit un nouveau run ; aucun historique publié n'est modifié. Il n'existe pas d'API publique de calcul acceptant des montants arbitraires.
+`publishAttribution` dans `src/lib/attribution.ts` attend des données préparées par un opérateur serveur de confiance et des références exactes aux lignes persistées. L'appel direct accepte uniquement la cohorte globale. `publishScopedAttribution` prépare et publie les périmètres globaux, payants, campagne Meta, publicité ou créative depuis les publicités, coûts et synchronisations persistés du compte. Il vérifie chaque jour, rapproche les coûts du compte avec le global et inclut les publicités sans conversion. Les ancres globales sont choisies avant filtrage : une campagne antérieure ne récupère pas la vente acquise par un contact plus récent. Le calcul conserve des snapshots des publicités, coûts et runs. Une créative sans métadonnées complètes ou un tunnel sans mapping de dépenses reste indisponible ; aucune allocation proportionnelle. Le publisher vérifie aussi publicité, compte et campagne contre la ligne persistée. La politique, les preuves, les candidats, les coûts et les contributions sont figés dans une transaction. Une correction produit un nouveau run ; aucun historique publié n'est modifié. Il n'existe pas d'API publique de calcul acceptant des montants arbitraires.
 
 Le cockpit choisit le cutoff de données le plus récent, puis la date de publication. Les comparaisons demandent une même définition et des fenêtres identiques. Il lit un calcul publié pour la même cohorte et le même périmètre seulement si sa couverture est validée. La route privée `GET /api/attribution?run=<uuid>` restitue les preuves. Aucun calcul réel n'est publié avant réconciliation des paiements, identités, acquisitions et dépenses.
 
-Les lectures sont paginées et plafonnées à10000 lignes par table : au-delà, la requête échoue explicitement plutôt que d'afficher un total tronqué. Avant ce seuil, ajouter des agrégations SQL filtrées/paginées pour le volume réel. L'application n'embarque pas encore ce travail d'optimisation. Aucune purge automatique ne supprime les preuves ou snapshots ; définir une politique de conservation avec le propriétaire avant accumulation importante. Les limites de requêtes expirées peuvent être nettoyées séparément sans toucher aux données métier.
+Les vues principales calculent les totaux dans PostgreSQL sur toute la période demandée, sans transférer les événements, inscriptions ou transactions au serveur applicatif. Les intervalles vidéo sont réunis dans la base ; les séries sont agrégées par jour de Paris. Les détails et prospects sont lus séparément par pages de 50, avec total calculé avant pagination. Les comparaisons interrogent leur propre période. Les snapshots d’attribution sont ciblés par cohorte et périmètre, et la vue Connexions ne charge que les dernières synchronisations. Des tests dépassent 10 000 événements et 15 000 prospects.
+
+Le registre de liens et la préparation opérateur d'attribution conservent une lecture bornée explicite ; ils refusent un jeu dépassant10 000 lignes au lieu de tronquer. Cette borne n'affecte plus les totaux du tableau de bord ni les listes commerciales. Aucune purge automatique ne supprime les preuves ou snapshots ; définir une politique de conservation avec le propriétaire avant accumulation importante. Les limites de requêtes expirées peuvent être nettoyées séparément.

@@ -5,13 +5,15 @@ import { AppError } from './errors';
 import type { DashboardResponse, Metric, DataMode, DashboardFilters, JourneyStep } from './ui-contract';
 import { parisPeriod, inPeriod } from '../domain/dates';
 import { watchedSeconds, type WatchedInterval } from '../domain/video';
+import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
+import type {DetailsResponse} from './ui-contract';
 export function parseFilters(url:URL):DashboardFilters {
  const today=Temporal.Now.plainDateISO('Europe/Paris');
  const from=url.searchParams.get('from')||today.with({day:1}).toString(),to=url.searchParams.get('to')||today.toString();
  try{const a=Temporal.PlainDate.from(from),b=Temporal.PlainDate.from(to);if(a.until(b).days<0||a.until(b).days>366)throw 0;}catch{throw new AppError('Choisis une période valide de 367 jours maximum.',400,'invalid_period');}
  return {from,to,source:z.enum(['all','paid','organic','unknown']).parse(url.searchParams.get('source')||'all'),tunnel:z.enum(['all','quiz','masterclass']).parse(url.searchParams.get('tunnel')||'all'),campaign:(url.searchParams.get('campaign')||'').slice(0,150),compare:url.searchParams.get('compare')==='true'};
 }
-type Dataset={leads:Row[];events:Row[];payments:Row[];appointments:Row[];deals:Row[];ads:Row[];revisions:Row[];runs:Row[];aggregates:Row[];attributionRuns?:Row[];attributionResults?:Row[]};
+type Dataset={leads:Row[];events:Row[];payments:Row[];appointments:Row[];deals:Row[];ads:Row[];revisions:Row[];runs:Row[];aggregates:Row[];adCatalog?:Row[];attributionRuns?:Row[];attributionResults?:Row[]};
 const time=(v:unknown)=>v instanceof Date?v.toISOString():String(v);
 const parisDay=(v:unknown)=>Temporal.Instant.from(time(v)).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString();
 const sum=(rows:Row[],key:string)=>rows.reduce((n,r)=>n+Number(r[key]||0),0);
@@ -26,15 +28,17 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
  const leads=data.leads.filter(r=>within(r.registered_at)&&linkScope(r));
  const resolved=leads.filter(r=>r.person_id!==null);const unique=new Set(resolved.map(r=>r.person_id)).size;const unresolved=leads.length-resolved.length;
  const completeDemo=mode==='demo';
- const leadAssignable=!hasCampaign||!filters.campaign.startsWith('meta:');
+ const metaScoped=/^meta(?:-ad|-creative)?:/.test(filters.campaign);
+ const leadAssignable=!hasCampaign||!metaScoped;
  const leadValue=!leadAssignable?null:leads.length&&unresolved===0?unique:completeDemo&&!unresolved?0:null;
  const events=data.events.filter(r=>within(r.occurred_at)&&linkScope(r));
  const appointments=data.appointments.filter(r=>within(r.scheduled_at)&&r.identity_basis==='stable_booking');
  const attended=appointments.filter(r=>r.status==='attended'&&r.attended_at&&r.attendance_evidence);
  const noShow=appointments.filter(r=>r.status==='no_show');
  const apptValue=financialFilter?null:appointments.length||completeDemo?attended.length:null;
- const ads=data.ads.filter(r=>String(r.date).slice(0,10)>=filters.from&&String(r.date).slice(0,10)<=filters.to&&(!hasCampaign||filters.campaign===`meta:${r.campaign_id}`));
- const spendScope=filters.tunnel==='all'&&['all','paid'].includes(filters.source)&&(!hasCampaign||filters.campaign.startsWith('meta:'));
+ const adCatalog=(r:Row)=>data.adCatalog?.find(ad=>ad.id===r.ad_id);
+ const ads=data.ads.filter(r=>String(r.date).slice(0,10)>=filters.from&&String(r.date).slice(0,10)<=filters.to&&(!hasCampaign||filters.campaign===`meta:${r.campaign_id}`||filters.campaign===`meta-ad:${adCatalog(r)?.external_id}`||filters.campaign===`meta-creative:${adCatalog(r)?.creative_id}`));
+ const spendScope=filters.tunnel==='all'&&['all','paid'].includes(filters.source)&&(!hasCampaign||metaScoped);
  const compatibleAds=ads.filter(r=>r.currency==='EUR'&&r.timezone==='Europe/Paris');
  const adReady=spendScope&&ads.length>0&&compatibleAds.length===ads.length&&ads.every(r=>r.spend_minor!==null);
  const spend=adReady?sum(ads,'spend_minor')/100:null;
@@ -123,9 +127,9 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
   const rows=ads.filter(r=>r.ad_id===ad.ad_id);
   details.push({id:String(ad.ad_id),label:String(ad.ad_name||'Publicité identifiée'),source:'paid',leads:null,appointments:null,clients:null,spend:adReady?sum(rows,'spend_minor')/100:null,coverage:'Annonce Meta · dépenses observées. Créative/asset et conversions commerciales non rapprochés.'});
  }
- const campaigns=[...new Map(data.revisions.map(r=>[`link:${r.campaign}`,{id:`link:${r.campaign}`,label:`Liens · ${r.campaign}`}])).values(),...new Map(data.ads.filter(r=>r.campaign_id).map(r=>[`meta:${r.campaign_id}`,{id:`meta:${r.campaign_id}`,label:`Meta · ${r.campaign_name||r.campaign_id}`}])).values()];
+ const campaigns=[...new Map(data.revisions.map(r=>[`link:${r.campaign}`,{id:`link:${r.campaign}`,label:`Liens · ${r.campaign}`}])).values(),...new Map(data.ads.filter(r=>r.campaign_id).map(r=>[`meta:${r.campaign_id}`,{id:`meta:${r.campaign_id}`,label:`Meta · ${r.campaign_name||r.campaign_id}`}])).values(),...(data.adCatalog||[]).map(r=>({id:`meta-ad:${r.external_id}`,label:`Publicité · ${r.ad_name||r.external_id}`})),...new Map((data.adCatalog||[]).filter(r=>r.creative_id).map(r=>[`meta-creative:${r.creative_id}`,{id:`meta-creative:${r.creative_id}`,label:`Créative · ${r.creative_id}`}])).values()];
  const series=[];for(let day=Temporal.PlainDate.from(filters.from);Temporal.PlainDate.compare(day,Temporal.PlainDate.from(filters.to))<=0;day=day.add({days:1})){const d=day.toString();const dailyAds=ads.filter(r=>String(r.date).slice(0,10)===d);const cash=payments.filter(r=>parisDay(r.effective_at)===d);series.push({date:d,revenue:usingTransactions&&cash.length?cash.reduce((n,r)=>n+Number(r.gross_minor)*(r.kind==='refund'?-1:r.kind==='receipt'?1:Number(r.reversal_direction)),0)/100:null,spend:adReady&&dailyAds.length?sum(dailyAds,'spend_minor')/100:null});}
- const response:DashboardResponse={mode,generatedAt:new Date().toISOString(),period:{from:filters.from,to:filters.to,timezone:'Europe/Paris'},metrics,pillars,journeys,details,series,campaigns,notices:[mode==='demo'?'Données synthétiques de test. Aucun chiffre de cette vue ne décrit BLG.':'Les valeurs absentes restent indisponibles ; un accès technique ne prouve pas une alimentation automatique.','Activité : dates effectives / prévues à Paris. Attribution : cohorte de contacts, 30 jours / 90 jours.',...(hasCampaign&&filters.campaign.startsWith('meta:')?['Campagne Meta : inscriptions sans raccord au compte publicitaire indisponibles.']:[])]};
+ const response:DashboardResponse={mode,generatedAt:new Date().toISOString(),period:{from:filters.from,to:filters.to,timezone:'Europe/Paris'},metrics,pillars,journeys,details,series,campaigns,notices:[mode==='demo'?'Données synthétiques de test. Aucun chiffre de cette vue ne décrit BLG.':'Les valeurs absentes restent indisponibles ; un accès technique ne prouve pas une alimentation automatique.','Activité : dates effectives / prévues à Paris. Attribution : cohorte de contacts, 30 jours / 90 jours.',...(hasCampaign&&metaScoped?['Périmètre Meta : inscriptions sans raccord au compte publicitaire indisponibles.']:[])]};
  if(filters.compare){const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;const previous=buildDashboard(data,{...filters,from:Temporal.PlainDate.from(filters.from).subtract({days}).toString(),to:Temporal.PlainDate.from(filters.from).subtract({days:1}).toString(),compare:false},mode);response.comparisonLabel=`Période précédente : ${previous.period.from} au ${previous.period.to}`;for(const m of response.metrics)m.previous=mode==='demo'||(['cash','roas','ad_customer_cost'].includes(m.id)&&m.value!==null)?previous.metrics.find(p=>p.id===m.id)?.value??null:null;
   if(mode!=='demo'&&published){
    const previousPeriod=parisPeriod(previous.period.from,Temporal.PlainDate.from(previous.period.to).add({days:1}).toString());
@@ -135,8 +139,32 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
  }
  return response;
 }
+export async function dashboardDetails(db:Database,filters:DashboardFilters,page=0){
+ return db.rpc<DetailsResponse&{campaigns:DashboardResponse['campaigns']}>('cockpit_dashboard_lists',{p_from:filters.from,p_to:Temporal.PlainDate.from(filters.to).add({days:1}).toString(),p_source:filters.source,p_tunnel:filters.tunnel,p_campaign:filters.campaign==='all'?'':filters.campaign,p_page:page,p_page_size:50});
+}
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
- const entries=await Promise.all([['leads','lead_registrations'],['events','v_events_canonical'],['payments','payments'],['appointments','appointments'],['deals','deals'],['ads','v_ad_daily'],['revisions','link_revisions'],['runs','sync_runs'],['aggregates','source_aggregates'],['attributionRuns','attribution_runs'],['attributionResults','v_attribution_published']].map(async([key,table])=>[key,await allRows(db,table as Parameters<typeof allRows>[1])])) as [string,Row[]][];
- return buildDashboard(Object.fromEntries(entries) as Dataset,filters,mode);
+ async function view(selected:DashboardFilters,withLists:boolean){
+  const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
+  const [rollup,snapshot,lists]=await Promise.all([
+   db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
+   db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
+   withLists?dashboardDetails(db,selected):Promise.resolve(null),
+  ]);
+  const skeleton=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[],attributionRuns:snapshot.run?[snapshot.run]:[],attributionResults:snapshot.results},{...selected,compare:false},mode);
+  const response=applyDashboardRollup(skeleton,rollup,selected,mode);
+  if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
+  return {response,run:snapshot.run};
+ }
+ const current=await view(filters,true);
+ if(filters.compare){
+  const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;
+  const prior=await view({...filters,from:Temporal.PlainDate.from(filters.from).subtract({days}).toString(),to:Temporal.PlainDate.from(filters.from).subtract({days:1}).toString(),compare:false},false);
+  current.response.comparisonLabel=`Période précédente : ${prior.response.period.from} au ${prior.response.period.to}`;
+  const compatible=current.run&&prior.run&&['metric_definition_version','model','lookback_days','observation_horizon_days'].every(key=>current.run![key]===prior.run![key]);
+  for(const metric of current.response.metrics){
+   metric.previous=mode==='demo'||(metric.value!==null&&(metric.id==='cash'||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?prior.response.metrics.find(m=>m.id===metric.id)?.value??null:null;
+  }
+ }
+ return current.response;
 }
 export function emptyDashboard(filters:DashboardFilters,mode:DataMode){const d=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[]},filters,mode);d.metrics.forEach(m=>{m.value=null;m.coverage='Base du cockpit à installer.';});d.notices.unshift('Les tables Supabase ne sont pas encore installées.');return d;}

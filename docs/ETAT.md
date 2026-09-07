@@ -7,12 +7,12 @@ Mis à jour le 7 septembre 2026. Référence : `../DECISIONS-ACTEES.md`. Aucun c
 - Application Next.js/React/TypeScript : Résultats, Parcours, Commercial, Liens et Connexions. Kit Atelier A repris, affichage ordinateur/mobile, filtres dates/source/tunnel/campagne et détails des mesures.
 - Accès privé par mot de passe dédié partagé, cookie signé, contrôle d'origine, ingestion navigateur séparée de l'inscription serveur signée, limitation persistante des tentatives côté hébergement.
 - Registre de liens PostgreSQL : création, copie, versions immuables, concurrence, archivage/restauration et persistance après rechargement. Destinations quiz et masterclass fixes ; macros Meta préservées.
-- Trois migrations additives appliquées sur une base PostgreSQL17 locale : 19 tables métier, 2 techniques, RLS, droits client retirés, fonctions serveur, intégrité des inscriptions/identités/RDV/paiements et snapshots.
+- Cinq migrations additives appliquées sur une base PostgreSQL17 locale : 19 tables métier, 2 techniques, RLS, droits client retirés, fonctions serveur, intégrité des inscriptions/identités/RDV/paiements et snapshots.
 - Connecteurs Meta et Notion en lecture seule, synchronisation manuelle privée et routes planifiables préparées. Lots, pagination et checkpoint atomiques ; aucun ordonnanceur installé.
 - Détail de chaque question du quiz et visionnage en intervalles uniques par version vidéo. Contrats/snippets destinés aux responsables des pages, sans installation réelle.
-- Moteur d'attribution testé ; publication atomique globale avec preuves figées, contrôle pub/compte/campagne, sélection du cutoff récent. Lecture des ROAS/coûts seulement depuis les snapshots admissibles. Pas de publication financière réelle ni de préparateur de cohorte filtrée.
+- Moteur d'attribution testé ; publication atomique globale avec preuves figées, contrôle pub/compte/campagne, sélection du cutoff récent. Lecture des ROAS/coûts seulement depuis les snapshots admissibles. Préparateur de campagne/publicité/créative avec coûts complets du compte, pubs sans conversion et preuves figées. Pas de publication financière réelle ; tunnel sans mapping et créative sans métadonnées complètes restent indisponibles.
 - CA encaissé net TTC distinct du CA contracté. Autorité transactionnelle ou agrégat source exact, sans addition. Comparaisons financières seulement avec deux périodes couvertes et définition compatible.
-- Tests unitaires, PostgreSQL, HTTP et navigateur exécutés. Rapport navigateur :27 contrôles réussis, aucune erreur JS/API5xx. Détail des scénarios dans RECONCILIATION.md ; preuves brutes privées dans `.local/`.
+- 78 tests unitaires, 30 PostgreSQL et 3 HTTP réussis. Navigateur :27 contrôles intégrés ordinateur/mobile et9 contrôles ciblés de pagination sur fixtures HTTP, sans erreur JS. Captures finales relues après les nouvelles migrations. Détail des scénarios dans RECONCILIATION.md ; preuves brutes privées dans `.local/`.
 
 ## Connexions et limites réelles
 
@@ -27,10 +27,10 @@ Mis à jour le 7 septembre 2026. Référence : `../DECISIONS-ACTEES.md`. Aucun c
 
 Les nouveaux clients globaux, le CPL attribué, le closing par cohorte, le CAC complet et la LTV ne sont pas fabriqués à partir de données manquantes. Une date Notion courante ne prouve pas un rendez-vous distinct et un clic bilan ne prouve pas une présence. Les étapes affichent des observations par tentative, sans entonnoir séquentiel inventé. Les créatives/appareils et les conversions Meta détaillées ne sont pas automatiquement rapprochés dans cette version. Instagram natif est reporté.
 
-La lecture est plafonnée à10000 lignes par table et échoue explicitement au plafond. Prévoir une agrégation SQL filtrée avant ce volume. Les limites et états observés sont visibles dans l'application. Aucun diagnostic automatique ni achat d'abonnement.
+Les vues principales utilisent des agrégats SQL sur la période entière ; détails et prospects disposent de pages de 50 et de totaux indépendants. Tests sur 10 051 événements et 15 005 prospects, y compris un filtre retrouvant les éléments après le seuil de 10 000. Les snapshots sont lus par cohorte précise. Le registre de liens et les préparations opérateur restent bornés explicitement, sans troncature silencieuse. Les limites et états observés sont visibles dans l'application. Aucun diagnostic automatique ni achat d'abonnement.
 
 ## Livraison et suite
 
-Code et documentation prêts pour une demande de revue en brouillon sur la branche `codex/build`. Le propriétaire déploie Vercel et coordonne les autres tâches. Aucune mise en ligne ni migration distante effectuée. Procédure : DEPLOIEMENT.md ; recette : RECONCILIATION.md ; revue du contrat : SCHEMA-REVU.md et REVUE-INDEPENDANTE.md.
+Code et documentation publiés sur `codex/build`, [PR1 en brouillon](https://github.com/Cilouibip/cockpit-blg/pull/1). Le propriétaire déploie Vercel et coordonne les autres tâches. Aucune mise en ligne ni migration distante effectuée. Procédure : DEPLOIEMENT.md ; recette : RECONCILIATION.md ; revue du contrat : SCHEMA-REVU.md et REVUE-INDEPENDANTE.md.
 
 Prochaine action : terminer la revue du code, fournir la connexion SQL du projet neuf, appliquer les migrations après vérification du projet, puis valider les premiers imports. L'accès SQL et la vérification REST sont distincts ; ne pas demander de nouvelles clés déjà fournies.

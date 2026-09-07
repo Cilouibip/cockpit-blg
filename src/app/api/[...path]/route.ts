@@ -5,11 +5,11 @@ import { authenticate, cookieHeader, requireUser, requireOrigin } from '@/lib/au
 import { json, readBody, errorResponse } from '@/lib/http';
 import { AppError } from '@/lib/errors';
 import { rateLimit } from '@/lib/rate-limit';
-import { database, allRows } from '@/lib/db';
+import { database } from '@/lib/db';
 import { linkInputSchema, linkMutationSchema, listLinks, saveLink } from '@/lib/links';
 import { connections } from '@/lib/connections';
 import { listProspects } from '@/lib/prospects';
-import { dashboard, emptyDashboard, parseFilters } from '@/lib/dashboard';
+import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
 import { synchronize } from '@/lib/sync';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
 export const runtime='nodejs';
@@ -37,8 +37,9 @@ async function handle(request:Request){
   if(route==='dashboard'&&method==='GET'){
    const filters=parseFilters(url);try{return json(await dashboard(database(),filters,config.mode));}catch(e){if(e instanceof AppError&&['schema_missing','database_missing'].includes(e.code))return json(emptyDashboard(filters,config.mode));throw e;}
   }
-  if(route==='attribution'&&method==='GET'){const id=z.uuid().parse(url.searchParams.get('run'));const runs=await database().select('attribution_runs',{eq:{id,status:'published'}});if(!runs.length)throw new AppError('Calcul publié introuvable.',404,'not_found');const results=(await allRows(database(),'v_attribution_published')).filter(r=>r.attribution_run_id===id);return json({run:runs[0],results});}
-  if(route==='prospects'&&method==='GET')return json(await listProspects(database(),config.mode));
+  if(route==='attribution'&&method==='GET'){const id=z.uuid().parse(url.searchParams.get('run'));const result=await database().rpc<{run:unknown;results:unknown[]}>('cockpit_attribution_detail',{p_run:id});if(!result.run)throw new AppError('Calcul publié introuvable.',404,'not_found');return json(result);}
+  if(route==='details'&&method==='GET')return json(await dashboardDetails(database(),parseFilters(url),z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||0)));
+  if(route==='prospects'&&method==='GET')return json(await listProspects(database(),config.mode,z.string().max(200).parse(url.searchParams.get('search')||''),z.string().max(200).parse(url.searchParams.get('stage')||''),z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||0)));
   if(route==='links'){
    const db=database();
    if(method==='POST'){const input=linkInputSchema.parse(await readBody(request));await saveLink(db,input);}

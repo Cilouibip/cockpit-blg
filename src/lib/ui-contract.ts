@@ -10,13 +10,16 @@ export type Metric = {
   numerator?: number | null; denominator?: number | null; unavailableReason?: string;
 };
 export type DetailRow = { id: string; label: string; source: string; leads: number | null; appointments: number | null; clients: number | null; spend: number | null; coverage: string };
+export type Pagination = { page: number; pageSize: number; total: number };
+export type DetailsResponse = { details: DetailRow[]; pagination: Pagination };
+export type ProspectsQuery = { search: string; stage: string; page: number };
 export type JourneyStep = { id: string; label: string; value: number | null; denominator?: number | null; source: string; coverage: string };
 export type DashboardResponse = {
   mode: DataMode; generatedAt: string; period: { from: string; to: string; timezone: string }; comparisonLabel?: string;
   metrics: Metric[]; series: { date: string; revenue: number | null; spend: number | null }[];
   pillars: { id: string; title: string; description: string; metrics: Metric[] }[];
   journeys: { id: string; title: string; description: string; steps: JourneyStep[] }[];
-  details: DetailRow[]; campaigns: { id: string; label: string }[]; notices: string[];
+  details: DetailRow[]; detailsPagination?: Pagination; campaigns: { id: string; label: string }[]; notices: string[];
 };
 export type LinkPlacement = 'instagram_bio' | 'youtube_description' | 'meta_ad' | 'email' | 'other';
 export type LinkInput = { placement: LinkPlacement; destination: 'quiz' | 'masterclass'; campaign: string; label: string };
@@ -30,7 +33,7 @@ export type Prospect = {
   appointmentAt: string | null; appointmentStatus: 'planned' | 'attended' | 'no_show' | 'cancelled' | 'rescheduled' | 'unknown';
   followUpAt: string | null; outcome: string | null; updatedAt: string | null;
 };
-export type ProspectsResponse = { mode: DataMode; prospects: Prospect[]; updatedAt: string | null; coverage: string; notice?: string };
+export type ProspectsResponse = { mode: DataMode; prospects: Prospect[]; updatedAt: string | null; coverage: string; notice?: string; pagination?: Pagination; stages?: string[] };
 export type Connection = {
   id: string; name: string; status: 'connected' | 'partial' | 'missing' | 'error' | 'demo';
   summary: string; lastSyncAt: string | null; coverage: string; limits: string[]; canSync: boolean;

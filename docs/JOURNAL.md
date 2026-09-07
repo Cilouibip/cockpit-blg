@@ -27,3 +27,9 @@ La relecture finale du publisher a identifié un scope filtré déclaré sans pr
 La validation automatique a refusé le contrôle Supabase avec clé secrète avant son exécution. Le coordinateur a repris ce point d'autorisation ; aucune tentative de contournement et aucune migration distante. Les lectures Meta/Notion/PostHog autorisées ont été bornées ; aucun contenu client ni secret n'est conservé dans le dépôt public.
 
 L'application, les contrats de tracking, la procédure de déploiement et la checklist de réconciliation sont livrés pour revue. Le build et les tests sont reproductibles par les commandes documentées ; les rapports bruts et captures restent privés. Aucun déploiement Vercel ni modification des pages ou sources réelles.
+
+## 7 septembre 2026 — complément de granularité et de capacité
+
+PR1 ouverte en brouillon après le premier push. Le préparateur a été étendu aux campagnes, publicités et créatives prouvées : coûts complets du compte, jour par jour, publicités sans conversion, ancres globales avant filtre, snapshots de toutes les preuves.13 tests ciblés plus le test de publication couvrent ces cas et refusent les périmètres non justifiés.
+
+Le plafond de lecture des lignes brutes a été retiré des vues principales. Deux migrations supplémentaires ajoutent agrégats SQL par période et listes paginées séparément. Les tests vérifient10 051 événements et 15 005 prospects avec totaux exacts et filtres sur l'ensemble du périmètre. La pagination UI possède9 contrôles supplémentaires. Cinq migrations appliquées localement, aucune distante. Les captures finales confirment les valeurs synthétiques et la présentation après cette évolution.

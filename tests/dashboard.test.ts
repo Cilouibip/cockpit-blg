@@ -54,3 +54,9 @@ test('comparaison attribution refusée entre deux versions de définition',()=>{
  const results=[current,prior].map(r=>({attribution_run_id:r.id,target_kind:'payment',dimensions_snapshot:{source:'paid'},contribution_minor:40000,currency:'EUR',person_id:'p'}));
  const d=buildDashboard({...empty,attributionRuns:[current,prior],attributionResults:results},{...filters,compare:true},'live');assert.equal(value(d,'roas'),4);assert.equal(d.metrics.find(m=>m.id==='roas')?.previous,null);
 });
+
+test('publicité et créative filtrent leur dépense sans copier les leads globaux',()=>{
+ const catalog=[{id:'ad-row-a',external_id:'ad-a',creative_id:'creative-a',ad_name:'A'},{id:'ad-row-b',external_id:'ad-b',creative_id:'creative-b',ad_name:'B'}];
+ const ads=catalog.map((r,i)=>({id:'daily-'+i,ad_id:r.id,date:'2026-02-01',spend_minor:(i+1)*1000,currency:'EUR',timezone:'Europe/Paris',campaign_id:'campaign'}));
+ for(const campaign of ['meta-ad:ad-a','meta-creative:creative-a']){const d=buildDashboard({...empty,ads,adCatalog:catalog},{...filters,campaign},'live');assert.equal(value(d,'spend'),10);assert.equal(value(d,'leads'),null);assert.ok(d.campaigns.some(c=>c.id===campaign));}
+});

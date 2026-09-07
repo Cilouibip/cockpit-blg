@@ -1,9 +1,9 @@
 import type { ConnectionsResponse, Connection } from './ui-contract';
 import { getConfig } from './config';
-import { database, allRows } from './db';
+import { database } from './db';
 export async function connections():Promise<ConnectionsResponse> {
-  const config=getConfig();let available=false;let runs:Record<string,unknown>[]=[];
-  try {await database().probe();available=true;runs=await allRows(database(),'sync_runs');}catch{/* only sanitized state is exposed */}
+  const config=getConfig();let available=false;let runs:Record<string,unknown>[]=[];let firstParty:{eventAt:string|null;leadAt:string|null}={eventAt:null,leadAt:null};
+  try {await database().probe();available=true;const state=await database().rpc<{runs:Record<string,unknown>[];firstParty:typeof firstParty}>('cockpit_connection_status',{});runs=state.runs;firstParty=state.firstParty;}catch{/* only sanitized state is exposed */}
   const recent=(source:string)=>runs.filter(r=>r.source===source).sort((a,b)=>String(b.started_at).localeCompare(String(a.started_at)))[0];
   const connection=(id:string,name:string,configured:boolean,limits:string[],syncable=false):Connection=>{
     const last=recent(id);const complete=last?.status==='complete';
@@ -18,6 +18,6 @@ export async function connections():Promise<ConnectionsResponse> {
     connection('notion','Notion · commercial',!!process.env.NOTION_TOKEN&&!!process.env.NOTION_DATA_SOURCE_ID,['Lecture des propriétés commerciales autorisées uniquement.','Historique observé à partir du premier import. Une date courante ne prouve pas un RDV distinct.'],true),
     connection('wix','Wix · encaissements',!!process.env.WIX_API_KEY,['Accès MCP interactif distinct du serveur autonome.','Agrégats séparés des transactions. Attribution et LTV attendent les paiements par personne.']),
     connection('posthog','PostHog · parcours',!!process.env.POSTHOG_PERSONAL_API_KEY,['Clé de lecture disponible : elle ne prouve pas une alimentation du cockpit.','Raccord first-party préparé ; aucun export massif Query ni nouvel abonnement activé.']),
-    connection('first_party','Quiz et masterclass',false,['Snippets préparés à transmettre aux responsables des pages.','Installation et premier enregistrement serveur signé à vérifier après déploiement.']),
+    firstParty.leadAt?{id:'first_party',name:'Quiz et masterclass',status:config.mode==='demo'?'demo':'partial',summary:'Inscriptions serveur reçues. Couverture de la collecte à valider.',lastSyncAt:firstParty.leadAt,coverage:'Premier raccord observé ; un enregistrement ne prouve pas une couverture exhaustive.',limits:['Observations navigateur et inscriptions serveur distinctes.','Vérifier le parcours réel de bout en bout après installation.'],canSync:false}:connection('first_party','Quiz et masterclass',false,['Snippets préparés à transmettre aux responsables des pages.','Installation et premier enregistrement serveur signé à vérifier après déploiement.']),
   ]};
 }

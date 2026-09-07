@@ -96,7 +96,7 @@ try {
   assert.ok(await page.getByRole('dialog').getByText('Responsable', { exact: true }).count());
   await screenshot('desktop-prospect-detail'); await page.keyboard.press('Escape');
   const search = page.getByRole('textbox', { name: 'Rechercher un prospect' });
-  await search.fill('synthetic-nobody-should-match-this'); assert.ok(await page.getByText('Aucun résultat pour cette recherche', { exact: true }).count()); await search.clear();
+  await search.fill('synthetic-nobody-should-match-this'); await page.getByRole('button', { name: 'Rechercher', exact: true }).click(); await page.getByText('Aucun résultat pour cette recherche', { exact: true }).waitFor(); assert.ok(await page.getByText('Aucun résultat pour cette recherche', { exact: true }).count()); await search.clear(); await page.getByRole('button', { name: 'Rechercher', exact: true }).click(); await page.locator('.blg-table-link').first().waitFor(); await ready(page);
   await noPageOverflow('desktop sales'); await screenshot('desktop-sales'); pass('read-only commercial detail and empty search state');
 
   checkpoint = 'link creation';

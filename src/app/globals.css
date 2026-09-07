@@ -176,6 +176,11 @@ summary { cursor: pointer; padding: 4px 0; }
 .blg-table-link:hover { text-decoration: underline; text-underline-offset: 4px; }
 .blg-table-link svg { color: #626a78; }
 .blg-panel-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; border-top: 1px solid #e9ecf2; padding: 14px 20px; font-size: 9px; color: #626a78; }
+.blg-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid #e9ecf2; }
+.blg-pagination > span { color: #626a78; font-size: 11px; }
+.blg-pagination > div { display: flex; gap: 8px; }
+.blg-pagination .blg-button { min-height: 38px; font-size: 11px; }
+@media (max-width: 700px) { .blg-pagination { align-items: stretch; flex-direction: column; padding: 15px 18px; } .blg-pagination > div { justify-content: flex-end; } .blg-pagination .blg-button { min-height: 44px; } }
 .blg-links-layout { display: grid; grid-template-columns: 315px minmax(0,1fr); gap: 21px; align-items: start; }
 .blg-link-builder .blg-panel-heading { border-bottom: 1px solid #eaedf2; }
 .blg-link-builder .blg-panel-heading > svg { color: #626a78; }

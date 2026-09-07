@@ -14,7 +14,7 @@ try {
  const organic=makeRevision({placement:'instagram_bio',destination:'quiz',campaign:'Rentrée · démo',label:'Bio Instagram · test'});
  const paid=makeRevision({placement:'meta_ad',destination:'masterclass',campaign:'Rentrée · démo',label:'Publicité masterclass · test'});
  for(const r of [organic,paid])await db.query('SELECT save_tracked_link($1,$2,0)',[r.link_id,JSON.stringify(r)]);
- const metaRun=(await db.query("SELECT begin_sync('meta','demo-meta-account',$1,$2,'v23-ad-day-none','aggregate_period',$3,$4) AS id",[stamp(0),today.add({days:1}).toString()+'T00:00:00Z',day(0),today.add({days:1}).toString()])).rows[0].id;
+ const metaRun=(await db.query("SELECT begin_sync('meta','demo-meta-account',$1,$2,'v23.0-ad-day-none','aggregate_period',$3,$4) AS id",[stamp(0),today.add({days:1}).toString()+'T00:00:00Z',day(0),today.add({days:1}).toString()])).rows[0].id;
  const records=[];
  for(let i=0;i<Math.min(today.day,14);i++)records.push({source:'meta',accountId:'demo-meta-account',externalId:`9001:${day(i)}`,adId:'9001',adName:'Annonce de démonstration',adsetId:'8001',campaignId:'7001',campaignName:'Acquisition · démo',date:day(i),currency:'EUR',timezone:'Europe/Paris',spendMinor:3600+i*173,impressions:1800+i*310,outboundClicks:46+i*7,reportedConversions:[],connectorVersion:'synthetic-v1',observedAt:now});
  await db.query('SELECT import_meta_page($1,$2,NULL)',[metaRun,JSON.stringify(records)]);await db.query("SELECT finish_sync($1,'complete',$2,0,true,NULL)",[metaRun,records.length]);

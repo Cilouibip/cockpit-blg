@@ -1,8 +1,9 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {z} from 'zod';
 import {attributeCohort,type AttributionInput} from '../domain/attribution';
+import {prepareAttributionScope,type ScopeAdEvidence,type ScopeCostEvidence,type ScopeSyncEvidence} from '../domain/attribution-scope';
 import {evidenceKey} from '../domain/metrics';
-import type {Database,Row} from './db';
+import {allRows,type Database,type Row} from './db';
 import {AppError} from './errors';
 const uuid=z.uuid();
 export interface AttributionReferences {
@@ -15,7 +16,10 @@ export interface AttributionReferences {
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** Called only by the trusted server/operator after authoritative input preparation. No public calculation input API. */
 export async function publishAttribution(db:Database,input:AttributionInput,refs:AttributionReferences,supersedesId?:string){
- if(refs.scope.source!=='all'||refs.scope.tunnel!=='all'||refs.scope.campaign!=='')throw new AppError('La publication V1 exige la cohorte globale ; un périmètre filtré nécessite un préparateur dédié.',422,'attribution_scope');
+ if(refs.scope.source!=='all'||refs.scope.tunnel!=='all'||refs.scope.campaign!=='')throw new AppError('Le périmètre filtré exige ses preuves persistées et le préparateur serveur.',422,'attribution_scope');
+ return persistAttribution(db,input,refs,supersedesId);
+}
+async function persistAttribution(db:Database,input:AttributionInput,refs:AttributionReferences,supersedesId?:string,scopeProof?:unknown){
  const calculated=attributeCohort(input);if(!input.policy)throw new AppError('Politique d’attribution absente.',422,'attribution_policy');
  const verifiedAds=new Map<string,string>();
  for(const anchor of calculated.anchors){
@@ -39,7 +43,24 @@ export async function publishAttribution(db:Database,input:AttributionInput,refs
   results.push(base);
   if(result.paymentKey===input.newCustomerEvidence[result.personId]?.firstReceiptKey)results.push({...base,id:randomUUID(),target_kind:'new_customer',contribution_minor:null});
  }
- const run={calculation_fingerprint:digest({input,refs}),supersedes_run_id:supersedesId||null,code_version:'attribution-v1',metric_definition_version:input.policy.version,identity_cutoff_at:input.manifest.inputCutoffAt,input_cutoff_at:input.manifest.inputCutoffAt,input_manifest:{...input.manifest,spend:input.spend},model:input.policy.method,lookback_days:30,observation_horizon_days:90,cohort_from:input.policy.cohort.from,cohort_to:input.policy.cohort.to,cohort_timezone:input.policy.cohort.timezone,currency:input.currency,scope:refs.scope,coverage_summary:{available:calculated.available,reason:calculated.reason,dependencies:input.coverage}};
+ const run={calculation_fingerprint:digest({input,refs}),supersedes_run_id:supersedesId||null,code_version:'attribution-v1',metric_definition_version:input.policy.version,identity_cutoff_at:input.manifest.inputCutoffAt,input_cutoff_at:input.manifest.inputCutoffAt,input_manifest:{...input.manifest,spend:input.spend,...(scopeProof?{scopeProof}:{})},model:input.policy.method,lookback_days:30,observation_horizon_days:90,cohort_from:input.policy.cohort.from,cohort_to:input.policy.cohort.to,cohort_timezone:input.policy.cohort.timezone,currency:input.currency,scope:refs.scope,coverage_summary:{available:calculated.available,reason:calculated.reason,dependencies:input.coverage}};
  const runId=await db.rpc<string>('publish_attribution',{p_run:run,p_results:results});
  return {runId,available:calculated.available,reason:calculated.reason};
+}
+
+/** Read complete persisted account evidence, prepare a scoped cohort, then publish atomically.
+ * No caller-supplied proof/readsComplete flag is accepted by this server boundary.
+ */
+export async function publishScopedAttribution(db:Database,global:AttributionInput,refs:AttributionReferences,scope:AttributionReferences['scope'],supersedesId?:string){
+ const [catalog,daily,runs]=await Promise.all([allRows(db,'ads'),allRows(db,'v_ad_daily'),allRows(db,'sync_runs')]);
+ const ads=catalog.filter(row=>row.source==='meta'&&row.source_namespace===refs.paidAccountId);
+ const adIds=new Set(ads.map(row=>row.id));
+ const safeInteger=(value:unknown):number|null=>value===null?null:typeof value==='number'?value:typeof value==='string'&&/^-?\d+$/.test(value)?Number(value):NaN;
+ const costs=daily.filter(row=>adIds.has(row.ad_id)).map(row=>({...row,spend_minor:safeInteger(row.spend_minor),currency_exponent:safeInteger(row.currency_exponent)}));
+ const syncRuns=runs.filter(row=>row.source==='meta'&&row.source_namespace===refs.paidAccountId).map(row=>({...row,rows_rejected:safeInteger(row.rows_rejected)}));
+ const prepared=prepareAttributionScope({global,scope,evidence:{accountId:refs.paidAccountId,ads:ads as unknown as ScopeAdEvidence[],daily:costs as unknown as ScopeCostEvidence[],syncRuns:syncRuns as unknown as ScopeSyncEvidence[],readsComplete:{ads:true,daily:true,syncRuns:true}}});
+ if(!prepared.ok)throw new AppError(prepared.reason,422,'attribution_scope_'+prepared.code);
+ const selectedRefs={...refs,scope:prepared.proof.scope};
+ const result=await persistAttribution(db,prepared.input,selectedRefs,supersedesId,prepared.proof);
+ return {...result,scope:prepared.proof.scope,proof:prepared.proof};
 }
