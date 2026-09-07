@@ -107,3 +107,34 @@ export async function syncNotion(config: NotionConfig) {
     batch.records = [...seen.values()]; batch.status = seen.size ? 'partial' : 'failed'; batch.safeError = safeConnectorError(error); batch.coverage.reason = 'Import interrompu ; reprise au dernier checkpoint validé'; return batch;
   }
 }
+
+/** Notion limits one query to 10,000 rows. Split saturated edit intervals instead of
+ * publishing the first 10,000 as a complete mirror. Boundaries are [from, to). */
+export async function syncNotionSnapshot(config: NotionConfig) {
+  let partitions = 0;
+  async function readInterval(from: string, to: string, depth: number): ReturnType<typeof syncNotion> {
+    const result = await syncNotion({ ...config, from, to, cursor: undefined, maxPages: 100 });
+    if (result.counts.read < 10_000 || result.counts.rejected || result.safeError) return result;
+    const edits = [...new Set(result.records.map(row => row.sourceUpdatedAt).filter((value): value is string => !!value && Date.parse(value) > Date.parse(from) && Date.parse(value) < Date.parse(to)))].sort();
+    if (!edits.length || depth >= 12 || ++partitions > 32) {
+      result.status = 'partial'; result.safeError = 'NOTION_INTERVAL_TOO_DENSE';
+      result.coverage.complete = false; result.coverage.reason = 'Une période dépasse la capacité de lecture complète';
+      return result;
+    }
+    const split = edits[Math.floor(edits.length / 2)];
+    const left = await readInterval(from, split, depth + 1);
+    if (!left.coverage.complete) return left;
+    const right = await readInterval(split, to, depth + 1);
+    const records = new Map([...left.records, ...right.records].map(row => [row.externalId, row]));
+    const complete = right.coverage.complete;
+    return {
+      ...result, records: [...records.values()],
+      status: complete ? (records.size ? 'complete' : 'empty') : 'partial',
+      counts: { read: left.counts.read + right.counts.read, accepted: records.size, rejected: left.counts.rejected + right.counts.rejected, pages: result.counts.pages + left.counts.pages + right.counts.pages },
+      checkpoint: complete ? { completedThrough: to } : right.checkpoint,
+      coverage: { ...result.coverage, from, to, complete, reason: complete ? 'État courant lu sur des périodes disjointes' : right.coverage.reason },
+      ...(right.safeError ? { safeError: right.safeError } : {}),
+    };
+  }
+  return readInterval(config.from, config.to, 0);
+}

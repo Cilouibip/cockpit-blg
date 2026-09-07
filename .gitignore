@@ -19,3 +19,6 @@ playwright-report/
 *.log
 
 *.tsbuildinfo
+
+supabase/.temp/
+supabase/.branches/

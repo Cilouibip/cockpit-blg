@@ -11,10 +11,17 @@ import { connections } from '@/lib/connections';
 import { listProspects } from '@/lib/prospects';
 import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
 import { synchronize } from '@/lib/sync';
+import { synchronizeWix } from '@/lib/sync-wix';
+import { Temporal } from '@js-temporal/polyfill';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
+async function syncSource(source:'meta'|'notion'|'wix') {
+ if(source!=='wix')return synchronize(source);
+ const today=Temporal.Now.plainDateISO('Europe/Paris');
+ return synchronizeWix(today.with({day:1}).toString(),today.add({days:1}).toString());
+}
 async function handle(request:Request){
  try{
   const config=getConfig(),url=new URL(request.url),route=url.pathname.replace(/^\/api\//,''),method=request.method;
@@ -28,7 +35,7 @@ async function handle(request:Request){
   if(route.startsWith('jobs/')&&method==='GET'){
    const supplied=request.headers.get('authorization')||'',expected='Bearer '+config.cronSecret;
    if(config.cronSecret.length<32||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError('Accès refusé.',401,'unauthorized');
-   const source=z.enum(['meta','notion']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await synchronize(source));
+   const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await syncSource(source));
   }
   requireUser(request,config);
   if(!['GET','HEAD'].includes(method))requireOrigin(request,config);
@@ -47,7 +54,7 @@ async function handle(request:Request){
    else if(method!=='GET')throw new AppError('Méthode non autorisée.',405,'method_not_allowed');
    return json(await listLinks(db,config.mode));
   }
-  if(route.startsWith('sync/')&&method==='POST'){const source=z.enum(['meta','notion']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await synchronize(source));}
+  if(route.startsWith('sync/')&&method==='POST'){const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await syncSource(source));}
   throw new AppError('Page introuvable.',404,'not_found');
  }catch(e){return errorResponse(e);}
 }

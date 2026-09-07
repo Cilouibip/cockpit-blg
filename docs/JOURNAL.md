@@ -49,3 +49,12 @@ TypeScript, build, 78 tests unitaires, 27 parcours navigateur, 9 contrôles de p
 Après livraison du commit UX, le coordinateur confirme avoir appliqué et vérifié les cinq migrations inchangées de `a79f991` via MCP. Versions métier 1–5 et contrôles de fonctionnement réussis. Les preuves détaillées d’installation sont conservées dans le journal privé. Aucun import métier ou jeu de démonstration distant.
 
 L’état, les connexions et la livraison retirent le blocage SQL/MCP et la demande d’installer ces migrations. Cette tâche n’a effectué aucune action distante. La revue locale de Résultats reste la prochaine étape UX.
+
+
+## 7 septembre 2026 — alimentation réelle et filtres de dates
+
+Après autorisation explicite, les six documents de cadrage ont été publiés. Le coordinateur a ensuite importé le miroir Notion complet et l’historique quotidien Meta. Le total Meta a été rapproché de l’export source à périmètre identique, sans importer une seconde fois les dépenses du fichier. Les lectures interrompues ont été reprises par sous-périodes.
+
+Wix fournit la synthèse des paiements et les montants quotidiens. Sa définition source reste explicite même si certains détails sont absents. PostHog est raccordé par requêtes agrégées avec hôtes de production, distincts sur la période et question technique ; aucun export de réponses ou profil client. Les agrégats sont persistés dans les tables existantes. La migration additive 006 ajoute uniquement PostHog à la liste des sources du journal ; relecture indépendante, tests SQL et application via MCP réussis, droits serveur conservés.
+
+Le cockpit réel est séparé des deux environnements de démonstration/QA. Le même accès privé est conservé. Les dates rapides et les trimestres sont testés ; les métriques commerciales non raccordées restent indisponibles. Aucun déploiement ni modification des pages sources.

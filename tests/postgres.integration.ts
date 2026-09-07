@@ -106,3 +106,10 @@ test('publication attribution atomique : un lien cible invalide annule tout le c
  const success=(await db.query('SELECT publish_attribution($1,$2) AS id',[JSON.stringify(payload),'[]'])).rows[0].id;
  const retry=(await db.query('SELECT publish_attribution($1,$2) AS id',[JSON.stringify(payload),'[]'])).rows[0].id;assert.equal(success,retry);
 });
+
+test('PostHog aggregate source uses the existing private import journal and rejects other sources',async()=>{
+ const run=await begin('posthog','synthetic-project','posthog-production-aggregates-v1');await finish(run);
+ const row=(await db.query('SELECT source,stream_key,status FROM sync_runs WHERE id=$1',[run])).rows[0];
+ assert.deepEqual(row,{source:'posthog',stream_key:'aggregates',status:'complete'});
+ await fails(()=>begin('unsupported','synthetic-project'), '23514');
+});

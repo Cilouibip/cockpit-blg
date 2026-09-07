@@ -7,13 +7,13 @@ export function safeConnectorError(error: unknown): string {
   return error instanceof ConnectorError && /^[A-Z_]{1,60}$/.test(error.code) ? `${error.code}${error.status ? ` (HTTP ${error.status})` : ''}` : 'CONNECTOR_FAILED';
 }
 
-export async function readJson(url: URL, init: RequestInit, options: { fetcher?: typeof fetch; sleep?: (ms: number) => Promise<void>; attempts?: number } = {}): Promise<unknown> {
+export async function readJson(url: URL, init: RequestInit, options: { fetcher?: typeof fetch; sleep?: (ms: number) => Promise<void>; attempts?: number; timeoutMs?: number } = {}): Promise<unknown> {
   const fetcher = options.fetcher ?? fetch;
   const attempts = Math.min(Math.max(options.attempts ?? 3, 1), 4);
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   for (let attempt = 0; attempt < attempts; attempt++) {
     let response: Response;
-    try { response = await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(15_000) }); }
+    try { response = await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.min(Math.max(options.timeoutMs ?? 15_000, 1_000), 60_000)) }); }
     catch {
       if (attempt + 1 < attempts) { await sleep(250 * 2 ** attempt); continue; }
       throw new ConnectorError('NETWORK_ERROR');

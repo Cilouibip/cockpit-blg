@@ -2,7 +2,7 @@
 
 Application privée descriptive pour lire les résultats, les parcours quiz/masterclass, les liens de campagne et le suivi commercial. Next.js, React et TypeScript ; persistance Supabase, PostgreSQL pour la démonstration locale. Le kit Atelier A fournit l'identité visuelle.
 
-Le code fonctionne localement avec des données explicitement synthétiques. Les cinq migrations ont été installées et vérifiées sur le projet Supabase par le coordinateur. L’application n’est pas encore déployée et aucun import métier réel n’a été effectué. Les intégrations réelles attendent les raccordements détaillés dans [l'état du chantier](docs/ETAT.md).
+Une prévisualisation privée fonctionne avec les données réelles de Supabase. Les historiques Meta et le miroir commercial Notion sont importés ; les encaissements Wix et les agrégats PostHog sont lus pour la période sélectionnée. La démonstration reste isolée. Aucun déploiement Vercel ni ajout de tracking aux pages n’a été effectué. État détaillé : [chantier](docs/ETAT.md).
 
 ## Démarrage local
 

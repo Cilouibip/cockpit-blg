@@ -8,7 +8,7 @@ L’installation sur le projet Supabase choisi est **terminée**. Le coordinateu
 
 Les fichiers `001_cockpit.sql` à `005_paginated_reads.sql` sont enregistrés comme versions 1–5 dans `cockpit_migrations`. Le coordinateur a vérifié le schéma et les lectures serveur ; les droits directs du navigateur restent retirés. Les preuves détaillées d’installation sont conservées dans le journal privé.
 
-Aucun import métier réel ni donnée de démonstration distante. Le schéma est prêt pour les premiers imports contrôlés. Pour une future évolution, vérifier l’identité du projet, relire l’historique, produire une nouvelle migration additive et sauvegarder les données concernées ; ne pas utiliser de reset. La démonstration locale reste indépendante.
+Les imports métier réels sont chargés ; aucune donnée de démonstration distante. Pour une future évolution, vérifier l’identité du projet, relire l’historique, produire une nouvelle migration additive et sauvegarder les données concernées ; ne pas utiliser de reset. La démonstration locale reste indépendante.
 
 ## 2. Accès privé et variables serveur
 
@@ -46,7 +46,9 @@ Meta et Notion disposent d'un bouton de synchronisation authentifié dans Connex
 
 Les routes `GET /api/jobs/meta` et `GET /api/jobs/notion` sont prêtes pour un ordonnanceur avec `Authorization: Bearer <CRON_SECRET>`. Aucun ordonnanceur n'a été installé. Choisir sa fréquence après contrôle du premier import et des limites de l'hébergement. Un import partiel ne devient pas une partition Meta publiée ; une relance reprend la partition bornée depuis le début. Une relance de la même partition clôt en échec une ancienne tentative restée `running` depuis plus de dix minutes ; une tentative plus récente conserve son verrou et refuse une synchronisation concurrente. Examiner les erreurs persistantes avant nouvelle relance.
 
-Wix fournit un adaptateur d'agrégats sous mapping relu, sans route automatique activée ni transactions inventées. La clé Wix serveur est reçue ; le coordinateur a lu les modèles Analytics et une transaction APPROVED avec succès. Le raccord métier aux paiements par personne reste à réaliser. PostHog fournit un contrôle de projet ; aucun export Query massif ni alimentation automatique du cockpit n'est activé. Le raccord first-party prévu suffit à recevoir les observations nécessaires sans abonnement supplémentaire.
+Wix et PostHog lisent des agrégats pour la période choisie dans le cockpit ; ils les conservent dans Supabase et réutilisent les lectures pendant 15 minutes. Wix fournit également le détail quotidien réellement retourné par la source. Une route `GET /api/jobs/wix` et un bouton privé permettent de relire le mois courant. Les lectures source restent sans modification des comptes. Les visiteurs PostHog ne sont jamais convertis en leads backend.
+
+Pour une prévisualisation locale réelle, utiliser un processus distinct avec `COCKPIT_MODE=live`, les variables serveur privées et l’origine correspondant au port choisi. L’aperçu réel préparé est sur `http://127.0.0.1:3102/` ; le port 3100 conserve la démonstration et 3101 reste réservé à la QA. Ne jamais lancer le jeu de données de test sur le projet réel.
 
 ## 5. Installation coordonnée du tracking
 
@@ -65,3 +67,8 @@ Le cockpit choisit le cutoff de données le plus récent, puis la date de public
 Les vues principales calculent les totaux dans PostgreSQL sur toute la période demandée, sans transférer les événements, inscriptions ou transactions au serveur applicatif. Les intervalles vidéo sont réunis dans la base ; les séries sont agrégées par jour de Paris. Les détails et prospects sont lus séparément par pages de 50, avec total calculé avant pagination. Les comparaisons interrogent leur propre période. Les snapshots d’attribution sont ciblés par cohorte et périmètre, et la vue Connexions ne charge que les dernières synchronisations. Des tests dépassent 10 000 événements et 15 000 prospects.
 
 Le registre de liens et la préparation opérateur d'attribution conservent une lecture bornée explicite ; ils refusent un jeu dépassant10 000 lignes au lieu de tronquer. Cette borne n'affecte plus les totaux du tableau de bord ni les listes commerciales. Aucune purge automatique ne supprime les preuves ou snapshots ; définir une politique de conservation avec le propriétaire avant accumulation importante. Les limites de requêtes expirées peuvent être nettoyées séparément.
+
+
+Extension 006 installée et vérifiée : PostHog est ajouté au journal d’import existant. Registre métier 1–6 ; aucune table, politique ou permission supplémentaire. Les cinq migrations initiales ne sont pas réappliquées.
+
+Le miroir Notion complet peut dépasser la durée d’une requête hébergée. Avant de planifier son exécution en production, utiliser un worker adapté ou des partitions reprises par curseur ; la route locale seule ne garantit pas ce fonctionnement sur Vercel.

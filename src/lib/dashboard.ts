@@ -7,6 +7,8 @@ import { parisPeriod, inPeriod } from '../domain/dates';
 import { watchedSeconds, type WatchedInterval } from '../domain/video';
 import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
 import type {DetailsResponse} from './ui-contract';
+import { ensureWixPeriod, readWixReportedPeriod } from './sync-wix';
+import { postHogPeriod, applyPostHogQuiz } from './posthog-dashboard';
 export function parseFilters(url:URL):DashboardFilters {
  const today=Temporal.Now.plainDateISO('Europe/Paris');
  const from=url.searchParams.get('from')||today.with({day:1}).toString(),to=url.searchParams.get('to')||today.toString();
@@ -145,6 +147,7 @@ export async function dashboardDetails(db:Database,filters:DashboardFilters,page
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
  async function view(selected:DashboardFilters,withLists:boolean){
   const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
+  if(mode==='live' && selected.source==='all' && selected.tunnel==='all' && !campaign) await ensureWixPeriod(selected.from,to);
   const [rollup,snapshot,lists]=await Promise.all([
    db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
    db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
@@ -152,7 +155,16 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
   ]);
   const skeleton=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[],attributionRuns:snapshot.run?[snapshot.run]:[],attributionResults:snapshot.results},{...selected,compare:false},mode);
   const response=applyDashboardRollup(skeleton,rollup,selected,mode);
+  if(mode==='live' && selected.source==='all' && selected.tunnel==='all' && !campaign) {
+   const wix=await readWixReportedPeriod(db,selected.from,to);
+   if(wix) {
+    response.metrics=response.metrics.map(m=>m.id==='cash'?wix.cash:m);
+    const daily=new Map(wix.dailyRevenue.map(row=>[row.date,row.value]));
+    response.series=response.series.map(row=>({...row,revenue:daily.get(row.date)??null}));
+   }
+  }
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
+  if(mode==='live'&&withLists&&selected.source==='all'&&!campaign&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await postHogPeriod(selected.from,to),selected);
   return {response,run:snapshot.run};
  }
  const current=await view(filters,true);

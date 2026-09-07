@@ -2,7 +2,7 @@ import type { DashboardFilters, Metric } from '../lib/ui-contract';
 
 export function formatNumber(value: number | null | undefined, unit: Metric['unit'] = 'count'): string {
   if (value == null || !Number.isFinite(value)) return '—';
-  const digits = unit === 'count' ? 0 : unit === 'ratio' ? 2 : 1;
+  const digits = unit === 'count' ? 0 : ['ratio','eur'].includes(unit) ? 2 : 1;
   const number = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: digits }).format(value);
   if (unit === 'eur') return `${number} €`;
   if (unit === 'percent') return `${number} %`;

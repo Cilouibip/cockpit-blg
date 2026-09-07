@@ -44,7 +44,7 @@ export async function syncMeta(config: MetaConfig) {
       url.searchParams.set('time_range', JSON.stringify({ since: config.from, until })); url.searchParams.set('limit', '100');
       if (windows.length) { url.searchParams.set('action_attribution_windows', JSON.stringify(windows)); url.searchParams.set('action_report_time', 'impression'); }
       if (cursor) { if (cursors.has(cursor)) throw new ConnectorError('PAGINATION_LOOP'); cursors.add(cursor); url.searchParams.set('after', cursor); }
-      const payload = object(await readJson(url, { method: 'GET', headers }, config));
+      const payload = object(await readJson(url, { method: 'GET', headers }, { ...config, timeoutMs: 60_000 }));
       if (!Array.isArray(payload.data)) throw new ConnectorError('INVALID_RESPONSE');
       const records: MetaAdDay[] = [];
       for (const raw of payload.data) {
