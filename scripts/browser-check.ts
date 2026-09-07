@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { chromium, type Page } from '@playwright/test';
 
 // Local synthetic-data QA only. No password, cookie, token or storage state is logged.
-const baseURL = 'http://127.0.0.1:3100';
+const baseURL = process.env.BROWSER_TEST_ORIGIN ?? 'http://127.0.0.1:3101';
+if (!['localhost','127.0.0.1'].includes(new URL(baseURL).hostname)) throw new Error('LOCAL_QA_ONLY');
+if (!process.argv.includes('--capture-only') && baseURL === 'http://127.0.0.1:3100') throw new Error('Use the isolated QA server; keep the review demo clean.');
 const output = path.resolve('.local/qa');
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
 const access = await fs.readFile('.local/access.txt', 'utf8');
@@ -20,8 +22,8 @@ const page = await context.newPage();
 page.on('pageerror', () => { pageErrors += 1; });
 page.on('response', response => { const url = new URL(response.url()); if (url.origin === baseURL && url.pathname.startsWith('/api/') && response.status() >= 500) failedRequests.push({ path: url.pathname, status: response.status() }); });
 function pass(name: string) { checks.push({ name, ok: true }); console.log(`PASS ${name}`); }
-async function screenshot(name: string) { const modal = await page.locator('dialog[open]').count(); if (!modal) await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: !modal }); if (!modal) await page.screenshot({ path: path.join(output, `${name}-viewport.png`), fullPage: false }); if (name.endsWith('-results')) { await page.locator('.blg-chart').screenshot({ path: path.join(output, `${name}-chart.png`), style: '.blg-sidebar,.blg-skip,nextjs-portal{visibility:hidden!important}' }); await page.locator('.blg-metrics').screenshot({ path: path.join(output, `${name}-metrics.png`), style: '.blg-sidebar,.blg-skip,nextjs-portal{visibility:hidden!important}' }); } }
-async function ready(p: Page) { await p.waitForFunction(() => document.querySelector('.blg-content')?.getAttribute('aria-busy') === 'false' && !!document.querySelector('.blg-content .blg-panel')); }
+async function screenshot(name: string) { const modal = await page.locator('dialog[open]').count(); if (!modal) await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: !modal }); if (!modal) await page.screenshot({ path: path.join(output, `${name}-viewport.png`), fullPage: false }); if (name.endsWith('-results')) { await page.locator('.results-chart').screenshot({ path: path.join(output, `${name}-chart.png`), style: '.blg-sidebar,.blg-skip,nextjs-portal{visibility:hidden!important}' }); await page.locator('.results-kpis').screenshot({ path: path.join(output, `${name}-metrics.png`), style: '.blg-sidebar,.blg-skip,nextjs-portal{visibility:hidden!important}' }); } }
+async function ready(p: Page) { await p.waitForFunction(() => document.querySelector('.blg-content')?.getAttribute('aria-busy') === 'false' && !!document.querySelector('.blg-content .blg-panel, .blg-results')); }
 async function view(name: string) { await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('button', { name, exact: true }).click(); await ready(page); }
 async function noPageOverflow(name: string) {
   const overflowing = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
@@ -35,7 +37,7 @@ try {
   await page.getByLabel('Mot de passe', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Ouvrir le cockpit', exact: true }).click();
   await page.waitForURL(baseURL + '/'); await ready(page);
-  assert.equal(await page.locator('.blg-demo-banner').count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Démo — en savoir plus', exact: true }).count(), 1);
   pass('private login uses a dedicated password and opens demo space');
   if (process.argv.includes('--capture-only')) {
     for (const size of [{ width: 1440, height: 1000, name: 'desktop' }, { width: 390, height: 844, name: 'mobile' }]) {
@@ -49,10 +51,12 @@ try {
   await noPageOverflow('desktop results'); await screenshot('desktop-results');
 
   checkpoint = 'KPI detail and keyboard';
-  const metric = page.locator('.blg-metric').first();
+  const metric = page.getByRole('button', { name: 'Voir le détail : CA encaissé', exact: true });
   await metric.click(); await page.getByRole('dialog').waitFor();
-  assert.ok(await page.getByRole('dialog').getByText('Couverture', { exact: true }).count());
-  assert.ok(await page.getByRole('dialog').getByText('Données synthétiques de démonstration', { exact: true }).count());
+  await page.getByRole('dialog').locator('summary').filter({ hasText: 'Source et mise à jour' }).click();
+  assert.ok(await page.getByRole('dialog').getByText('Source', { exact: true }).count());
+  await page.getByRole('dialog').locator('summary').filter({ hasText: 'Détails du calcul' }).click();
+  assert.ok(await page.getByRole('dialog').getByText(/remboursements déduits/).count());
   await screenshot('desktop-kpi-detail'); await page.keyboard.press('Tab');
   assert.equal(await page.getByRole('dialog').evaluate(element => document.activeElement === document.body || element.contains(document.activeElement)), true);
   await page.keyboard.press('Shift+Tab');
@@ -60,7 +64,7 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('dialog').waitFor({ state: 'detached' });
   assert.equal(await page.locator('dialog[open]').count(), 0);
-  assert.equal(await metric.evaluate(element => element === document.activeElement), true); pass('KPI source, coverage, demo label, Escape and focus return');
+  assert.equal(await metric.evaluate(element => element === document.activeElement), true); pass('KPI source, calculation, Escape and focus return');
 
   checkpoint = 'filter validation';
   await page.getByLabel('Du', { exact: true }).fill('2026-09-07');
@@ -69,12 +73,14 @@ try {
   assert.ok(await page.getByText('La date de fin doit suivre la date de début.', { exact: true }).count());
   await page.getByLabel('Du', { exact: true }).fill('2026-09-01');
   await page.getByLabel('Au', { exact: true }).fill('2026-09-07');
+  await page.getByRole('button', { name: /^Filtres/ }).click();
   await page.getByLabel('Source', { exact: true }).selectOption('paid');
   await page.getByLabel('Tunnel', { exact: true }).selectOption('quiz');
   const filterResponse = page.waitForResponse(response => response.url().includes('/api/dashboard?') && response.url().includes('source=paid') && response.url().includes('tunnel=quiz'));
   await page.getByRole('button', { name: 'Appliquer', exact: true }).click();
   assert.equal((await filterResponse).status(), 200); await ready(page);
-  assert.equal(await page.locator('.blg-filter-error').count(), 0); pass('invalid range rejected; paid and quiz filters applied');
+  assert.equal(await page.locator('.results-error').count(), 0); pass('invalid range rejected; paid and quiz filters applied');
+  await page.getByRole('button', { name: /^Filtres/ }).click();
   await page.getByLabel('Source', { exact: true }).selectOption('all'); await page.getByLabel('Tunnel', { exact: true }).selectOption('all');
   await page.getByRole('button', { name: 'Appliquer', exact: true }).click(); await ready(page);
 
@@ -172,7 +178,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   for (const [name, filename] of [['Résultats','results'],['Parcours','journey'],['Commercial','sales'],['Liens','links'],['Connexions','connections']]) {
     await view(name); await noPageOverflow(`mobile ${filename}`);
-    assert.equal(await page.locator('.blg-demo-banner').isVisible(), true);
+    assert.equal(await (name === 'Résultats' ? page.locator('.results-demo') : page.locator('.blg-demo-banner')).isVisible(), true);
     await screenshot(`mobile-${filename}`);
   }
   pass('all mobile views preserve explicit demo indication');

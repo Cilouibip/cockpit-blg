@@ -16,7 +16,8 @@
     "test:http": "node --import tsx --test tests/http.integration.ts",
     "test:browser": "node --import tsx scripts/browser-check.ts",
     "access:prepare": "node --import tsx scripts/create-private-access.ts",
-    "test:pagination-ui": "node --import tsx tests/ui-pagination.integration.ts"
+    "test:pagination-ui": "node --import tsx tests/ui-pagination.integration.ts",
+    "test:results-ui": "node --import tsx tests/results-ui.integration.ts"
   },
   "engines": {
     "node": ">=22"

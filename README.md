@@ -23,13 +23,13 @@ Ouvrir http://127.0.0.1:3100. Le mot de passe local généré est dans `.local/a
 ```sh
 npm run check
 npm run test:db
-# Application locale démarrée et accès synthétique configuré :
+# Serveur QA isolé sur 3101, accès synthétique configuré :
 npm run test:http
 npm run test:browser
 npm run test:pagination-ui
 ```
 
-Les tests PostgreSQL créent puis suppriment uniquement leur base locale temporaire `cockpit_test_*`. `TEST_DATABASE_URL` permet de choisir l'instance locale. Les tests navigateur nécessitent Chrome installé. Les captures, accès et rapports bruts restent dans `.local/`.
+Les tests PostgreSQL créent puis suppriment uniquement leur base locale temporaire `cockpit_test_*`. `TEST_DATABASE_URL` permet de choisir l'instance locale. Les tests HTTP et navigateur qui créent des données utilisent le serveur QA local sur 3101 ; ils refusent le port 3100 réservé à la revue. Préparation détaillée dans [QA-NAVIGATEUR.md](docs/QA-NAVIGATEUR.md#rejouer-le-contrôle). Les tests navigateur nécessitent Chrome installé. Les captures, accès et rapports bruts restent dans `.local/`.
 
 ## Reprise et exploitation
 

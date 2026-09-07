@@ -12,7 +12,7 @@ Chrome en contexte isolé piloté par Playwright, langue française, fuseau Euro
 | --- | --- | --- |
 | Accès privé | Redirection vers le login, mot de passe dédié sans identifiant, accès à la démonstration | Réussi |
 | Résultats | Affichage des sources et couvertures, absence distincte de zéro, un seul conteneur visuel | Réussi |
-| Détail KPI | Source, couverture et mention synthétique ; Échap ; retour au bouton d’origine ; Tab ne rejoint pas les commandes de fond | Réussi |
+| Détail KPI | Source et calcul accessibles dans les sections repliables ; Échap ; retour au bouton d’origine ; Tab ne rejoint pas les commandes de fond | Réussi |
 | Filtres | Période inversée rejetée ; application de dates inclusives, source payée et tunnel quiz ; retour aux valeurs globales | Réussi |
 | Navigation clavier | Passage de Résultats à Parcours avec Tab puis Entrée | Réussi |
 | Parcours | Trois piliers présents ; sélection de la masterclass et de ses étapes | Réussi |
@@ -84,12 +84,29 @@ Ce scénario ne crée aucun prospect ni détail dans la base, ne modifie aucune 
 
 ## Rejouer le contrôle
 
-Précondition : application de démonstration locale et base PostgreSQL de démonstration actives, Chrome installé, accès local généré. Le script refuse de poursuivre sans les accès privés et vérifie la mention de démonstration avant les mutations.
+Précondition : application de démonstration et base PostgreSQL QA séparées, Chrome installé, accès local généré. Le port 3100 reste réservé à la revue ; les tests qui créent des données utilisent le port 3101. Le script refuse de poursuivre sans les accès privés et vérifie la mention de démonstration avant les mutations.
 
-```text
-node --import tsx scripts/browser-check.ts
-node --import tsx scripts/browser-check.ts --capture-only
+Préparation d’un serveur QA avec la même configuration privée, sur une base synthétique dédiée (une seule fois pour la création de base) :
+
+```sh
+createdb -h localhost -p 55440 cockpit_blg_qa_demo
+DATABASE_URL=postgresql://localhost:55440/cockpit_blg_qa_demo npm run migrate:local
+DATABASE_URL=postgresql://localhost:55440/cockpit_blg_qa_demo npm run seed:local
+npm run build
+DATABASE_URL=postgresql://localhost:55440/cockpit_blg_qa_demo APP_ORIGIN=http://127.0.0.1:3101 npx next start --hostname 127.0.0.1 --port 3101
 ```
+
+Puis, dans un autre terminal :
+
+```sh
+npm run test:http
+npm run test:browser
+npm run test:pagination-ui
+# Captures en lecture seule de la revue ouverte sur 3100 :
+BROWSER_TEST_ORIGIN=http://127.0.0.1:3100 node --import tsx scripts/browser-check.ts --capture-only
+```
+
+Les 12 contrôles ciblés `npm run test:results-ui` utilisent le jeu de revue du 7 septembre 2026 (12 leads, trois lignes de détail) et ne créent aucune donnée métier.
 
 Le premier parcours crée un lien explicitement nommé « QA synthétique », ses versions et une modification concurrente dans la base locale. Il ne modifie aucune source externe. Les anciennes exécutions peuvent donc laisser plusieurs liens de test dans le registre. Le second mode relit seulement les écrans et actualise les captures.
 
@@ -98,3 +115,17 @@ La sortie détaillée et les captures sont conservées dans `.local/qa`, dossier
 ## Portée
 
 Ce contrôle couvre l’application locale, Chrome et deux tailles de fenêtre. Il ne vaut ni vérification d’un déploiement Vercel, ni test des intégrations externes en production, ni validation sur téléphone physique, Safari ou lecteur d’écran.
+
+
+## Reprise Résultats du 7 septembre 2026
+
+Le périmètre UX porte sur Résultats uniquement, après l’audit des cinq pages ([AUDIT-UX.html](AUDIT-UX.html)). Les assertions des recettes existantes ont été adaptées aux nouveaux contrôles accessibles ; les scénarios de recherche, persistance, conflit de versions, copie de secours, archivage, déconnexion et pagination restent présents.
+
+- 27 contrôles de parcours complets réussis sur le serveur QA 3101, avec la base synthétique antérieure.
+- 9 contrôles de pagination réussis avec réponses HTTP synthétiques ; tous les filtres passent aux pages suivantes et les KPI restent indépendants des 50 lignes affichées.
+- 12 contrôles ciblés de Résultats réussis sur la revue 3100 : huit cartes visibles en 1366 × 768 et 1440 × 900, une seule indication Démo, volets/focus/Échap, filtres/compteur/effacement/dates invalides, courbe et valeurs accessibles, accordéons et dénominateur de présence, liste mobile, absence/zéro/variation, non-régression des quatre autres pages.
+- Zéro erreur JavaScript et zéro réponse serveur 5xx dans ces recettes.
+
+Les captures ont été inspectées en 1366/1440 px et 390/320 px. Les fichiers et résultats détaillés sont privés, sous `.local/ux/`. La base de revue reste à trois lignes de détail sans campagne QA ; les essais qui créent des liens ne l’utilisent plus. Aucun filtre de données réelles n’a été ajouté pour masquer les lignes de test.
+
+Statut : **prêt pour revue humaine de Résultats**, sans validation esthétique anticipée, sans connexion réelle ou déploiement nouveau. Arrêt avant la reconstruction de Parcours.

@@ -1,4 +1,12 @@
 @import url('../../public/kit/atelier.css') layer(kit);
+@import url('../../public/kit/navigation.css') layer(kit);
+@import url('../../public/kit/lumiere.css') layer(kit);
+@import url('../../public/kit/formulaires.css') layer(kit);
+@import url('../../public/kit/retours.css') layer(kit);
+@import url('../../public/kit/tableaux.css') layer(kit);
+@import url('../../public/kit/hierarchie.css') layer(kit);
+@import url('../../public/kit/dashboards.css') layer(kit);
+@import url('../components/results.css');
 
 * { box-sizing: border-box; }
 html { scroll-behavior: auto; }

@@ -9,7 +9,7 @@ Lire `../DECISIONS-ACTEES.md` et `SCHEMA-REVU.md` à chaque reprise. Les clés r
 | Meta | Nouveau module `syncMeta` exécuté sur le compte fourni, contrôle d'identité/devise/fuseau puis Insights publicité/jour du 1 au 6 septembre. Réponse complète vide ; aucun montant ou campagne copié dans le dépôt. | Accès de lecture vérifié. Le bouton d'import/persistance est intégré séparément ; la preuve HTTP n'est pas une programmation automatique. |
 | Notion | GET du schéma de la data source, HTTP 200 et identité correspondante. Projection commerciale ci-dessous contrôlée. Aucun prospect ni bloc de page lu pour cette vérification. | Module paginé prêt. Un miroir actuel ne prouve pas l'historique des rendez-vous ni la présence ou les ventes. |
 | PostHog | Nouveau `probePostHog` exécuté : GET du projet exact accepté. Aucune Query/export d'événements. | `automaticFeed:false`. Instrumentation first-party préparée, non installée ; conserver la mesure existante. |
-| Wix | Recette officielle Analytics lue ; adaptateur testé avec fixtures synthétiques. L'accès MCP aux agrégats avait été confirmé dans le cadrage. | Clé serveur autonome absente. Aucun import de transactions individuelles, attribution ou LTV réelle. |
+| Wix | Recette officielle Analytics lue ; adaptateur testé avec fixtures synthétiques. L'accès MCP aux agrégats avait été confirmé dans le cadrage. | Clé privée reçue et lectures Analytics/transaction APPROVED réussies HTTP 200 par le coordinateur. Aucun import métier, attribution ou LTV réelle. |
 
 Une réponse Meta vide correspond à `status:'empty'`, `records:[]`. Aucun enregistrement de dépense nulle n'est créé. Un checkpoint complet documente la lecture demandée ; il ne garantit ni activité nulle ni couverture historique commerciale. Les statuts sont distincts : `not_configured`, `failed`, `partial`, `empty`, `complete`.
 
@@ -62,7 +62,9 @@ Documentation primaire : [Query a data source](https://developers.notion.com/ref
 
 ## Wix
 
-`wixConnectionState` distingue clé absente de clé présente non vérifiée. L'authentification serveur est `Authorization` + `wix-site-id` ; le MCP interactif n'est pas une réserve de clés à extraire. Permission minimale pour Analytics : Site Analytics – read.
+`wixConnectionState` distingue clé absente de clé présente non vérifiée. L'authentification serveur est `Authorization` + `wix-site-id` ; le MCP interactif n'est pas une réserve de clés à extraire. Le droit documenté par l’API Analytics est `Site Analytics – read` ; ce nom ne décrit pas une case vérifiée dans l’interface de création de clé. La liste transmise par Mehdi le 7 septembre 2026 affiche **Wix Données analytiques** (consulter les statistiques) et **Wix Cashier** (consulter les transactions). Ces deux cases sont retenues, avec Sites spécifiques → BLG Studio et autorisation de base ; ni Tout, ni Wix Payments. Mise à jour du coordinateur : clé et site ID reçus dans l’environnement privé racine ; lectures des modèles Analytics et d’une transaction APPROVED réussies HTTP 200. Aucun import métier ni copie de transaction dans Git. Ces lectures ont été effectuées séparément de la tâche UX.
+
+Le caractère exclusivement lecteur de cet adaptateur décrit ses appels, pas une garantie de restriction de la clé entière. Le [support officiel Wix](https://support.wix.com/en/article/developer-request-adding-granular-scope-permissions-for-api-keys) signale des limites de granularité des clés API. Voir [CONNEXIONS.md](CONNEXIONS.md) pour distinguer le droit requis par l’API, les libellés réellement vus et l’état des accès.
 
 `syncWixAggregates` exige un mapping revu : ID/slug de modèle réellement découvert, champ de mesure, champ devise, dépendances, date de revue, exposant et base de taxe. Il vérifie List→Get contre ce mapping explicite avant Query. Aucun champ n'est choisi par ressemblance de nom. Les dépendances et l'identité du modèle sont contrôlées ; un champ silencieusement absent entraîne un rejet, jamais zéro.
 

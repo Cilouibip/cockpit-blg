@@ -2,6 +2,12 @@
 
 Mis à jour le 7 septembre 2026. Référence : `../DECISIONS-ACTEES.md`. Aucun chiffre synthétique n'est une mesure BLG.
 
+## Priorité actuelle : revue humaine de Résultats
+
+L’audit des cinq pages est livré dans [AUDIT-UX.html](AUDIT-UX.html). Résultats seule a été reconstruite avec les composants Atelier A : cartes courtes, filtres repliables, volets, courbe et accordéons. Les huit cartes sont entièrement visibles de y209 à y541 en 1366 × 768 et 1440 × 900. Démonstration propre, trois lignes de détail ; les mutations de QA utilisent une base distincte.
+
+12 contrôles UX ciblés, les 27 parcours existants et les 9 scénarios de pagination passent. La revue humaine reste à faire. Ne pas reconstruire Parcours, Commercial, Liens ou Connexions avant le retour sur Résultats. Aucun changement de calcul ou accès réel n’entre dans cette reprise.
+
 ## Réalisé et vérifié localement
 
 - Application Next.js/React/TypeScript : Résultats, Parcours, Commercial, Liens et Connexions. Kit Atelier A repris, affichage ordinateur/mobile, filtres dates/source/tunnel/campagne et détails des mesures.
@@ -18,10 +24,10 @@ Mis à jour le 7 septembre 2026. Référence : `../DECISIONS-ACTEES.md`. Aucun c
 
 | Source | Fait et preuve disponibles | Ce qui reste |
 |---|---|---|
-| Supabase | Configuration privée disponible ; migrations validées localement | Connexion SQL autorisée et installation distante. Le contrôle REST privilégié a été refusé par la validation automatique et n'a pas été exécuté. |
+| Supabase | Coordinateur : MCP disponible, projet ACTIVE_HEALTHY ; schéma public et registre de migrations initialement vides | Application et vérification des cinq migrations inchangées prises en charge exclusivement par le coordinateur ; la tâche UX n’intervient pas dans cette opération. |
 | Meta Ads | Lecture réelle du compte et Insights réussie par connecteur ; réponse vide conservée comme vide | Premier import persistant après installation de la base, contrôle de la couverture puis choix d'une fréquence. |
 | Notion | Schéma commercial autorisé lu avec succès ; adaptateur testé avec fixtures | Premier import des seules propriétés autorisées. Historique antérieur non reconstitué, aucune écriture Notion. |
-| Wix | Lecture MCP d'agrégats vérifiée par le coordinateur ; adaptateur serveur borné sous mapping | Clé serveur autonome, mapping des agrégats relu et paiements individuels réconciliés. Aucune route Wix automatique activée. |
+| Wix | Coordinateur : clé privée reçue ; lectures des modèles Analytics et d’une transaction APPROVED réussies HTTP 200 | Aucun import métier. Mapping des agrégats et paiements individuels à réconcilier ; aucune route Wix automatique activée. |
 | PostHog | Contrôle de projet réussi ; contrat first-party prêt | Pas d'export Query ni d'alimentation automatique du cockpit installée. |
 | Pages quiz/masterclass | Collecteur, adaptateurs et confirmation backend signée préparés | Installation coordonnée par le propriétaire et vérification réelle de bout en bout. |
 
@@ -33,4 +39,4 @@ Les vues principales utilisent des agrégats SQL sur la période entière ; dét
 
 Code et documentation publiés sur `codex/build`, [PR1 en brouillon](https://github.com/Cilouibip/cockpit-blg/pull/1). Le propriétaire déploie Vercel et coordonne les autres tâches. Aucune mise en ligne ni migration distante effectuée. Procédure : DEPLOIEMENT.md ; recette : RECONCILIATION.md ; revue du contrat : SCHEMA-REVU.md et REVUE-INDEPENDANTE.md.
 
-Prochaine action : terminer la revue du code, fournir la connexion SQL du projet neuf, appliquer les migrations après vérification du projet, puis valider les premiers imports. L'accès SQL et la vérification REST sont distincts ; ne pas demander de nouvelles clés déjà fournies.
+Prochaine action immédiate : revue humaine de Résultats. Les raccordements restent un chantier séparé : revue du code, installation SQL autorisée, puis validation des premiers imports. L'accès SQL et la vérification REST sont distincts ; ne pas demander de nouvelles clés déjà fournies.

@@ -1,7 +1,9 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import {randomUUID} from 'node:crypto';
 import {signIngestion} from '../src/domain/ingestion';
 process.loadEnvFile('.env.local');
-const origin='http://127.0.0.1:3100';if(process.env.COCKPIT_MODE!=='demo')throw new Error('LOCAL_DEMO_ONLY');
+const origin=process.env.BROWSER_TEST_ORIGIN ?? 'http://127.0.0.1:3101';
+if(!['localhost','127.0.0.1'].includes(new URL(origin).hostname)||new URL(origin).port==='3100')throw new Error('ISOLATED_LOCAL_QA_SERVER_REQUIRED');
+if(process.env.COCKPIT_MODE!=='demo')throw new Error('LOCAL_DEMO_ONLY');
 const access=fs.readFileSync('.local/access.txt','utf8');const password=access.match(/Mot de passe : (.+)/)?.[1];if(!password)throw new Error('LOCAL_ACCESS_MISSING');
 const bodyHeaders={'Content-Type':'application/json',Origin:origin};
 const login=await fetch(origin+'/api/login',{method:'POST',headers:bodyHeaders,body:JSON.stringify({password})});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie')!.split(';')[0];

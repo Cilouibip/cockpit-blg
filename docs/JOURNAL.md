@@ -33,3 +33,12 @@ L'application, les contrats de tracking, la procédure de déploiement et la che
 PR1 ouverte en brouillon après le premier push. Le préparateur a été étendu aux campagnes, publicités et créatives prouvées : coûts complets du compte, jour par jour, publicités sans conversion, ancres globales avant filtre, snapshots de toutes les preuves.13 tests ciblés plus le test de publication couvrent ces cas et refusent les périmètres non justifiés.
 
 Le plafond de lecture des lignes brutes a été retiré des vues principales. Deux migrations supplémentaires ajoutent agrégats SQL par période et listes paginées séparément. Les tests vérifient10 051 événements et 15 005 prospects avec totaux exacts et filtres sur l'ensemble du périmètre. La pagination UI possède9 contrôles supplémentaires. Cinq migrations appliquées localement, aucune distante. Les captures finales confirment les valeurs synthétiques et la présentation après cette évolution.
+
+
+## 7 septembre 2026 — correction UX de Résultats
+
+Mehdi demande l’audit des cinq pages puis la reconstruction de Résultats seulement, avant une revue humaine. Le constat initial mesuré à 1366 × 768 place la première carte entre y645,6 et y831,8. Le texte et les avertissements occupent le premier écran.
+
+Les familles Atelier A A.11.4, A.10.3, A.04.2 et A.08 sont portées dans un composant Résultats séparé. Huit cartes entre y209 et y541, filtres secondaires repliés, une seule indication Démo, volet de définition puis calcul/source repliables, courbe et piliers en accordéons. Les autres pages gardent leur composition. Une base locale neuve sert à la revue ; l’ancienne base synthétique est conservée pour les tests qui créent des données. Aucun filtre de masquage QA n’est ajouté au produit.
+
+TypeScript, build, 78 tests unitaires, 27 parcours navigateur, 9 contrôles de pagination et 12 contrôles UX passent. Les captures restent privées. Les docs Wix distinguent le droit Analytics documenté, les cases réellement transmises par Mehdi (Wix Données analytiques et Wix Cashier) et les limites des clés. Le coordinateur confirme ensuite la réception privée de la clé et du site ID, ainsi que deux lectures HTTP 200 (modèles Analytics et une transaction APPROVED), sans import métier. Ces opérations sont distinctes du chantier UX. Livraison pour revue humaine, arrêt avant la page suivante.

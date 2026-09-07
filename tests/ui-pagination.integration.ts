@@ -6,7 +6,8 @@ import type { DashboardResponse, DetailRow, Prospect, ProspectsResponse } from '
 
 // Synthetic HTTP fixtures verify UI pagination independently from the SQL tests.
 // Only the local login uses the real app; all list and KPI data below are fictitious.
-const origin = 'http://127.0.0.1:3100';
+const origin = process.env.BROWSER_TEST_ORIGIN ?? 'http://127.0.0.1:3101';
+if (!['localhost','127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('LOCAL_QA_ONLY');
 const output = path.resolve('.local/qa');
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
 const access = await fs.readFile('.local/access.txt', 'utf8');
@@ -27,7 +28,7 @@ let errors = 0;
 let checkpoint = 'private local login';
 page.on('pageerror', () => { errors += 1; });
 function pass(name: string) { checks.push(name); console.log(`PASS ${name}`); }
-async function ready(p: Page) { await p.waitForFunction(() => document.querySelector('.blg-content')?.getAttribute('aria-busy') === 'false' && !!document.querySelector('.blg-content .blg-panel')); }
+async function ready(p: Page) { await p.waitForFunction(() => document.querySelector('.blg-content')?.getAttribute('aria-busy') === 'false' && !!document.querySelector('.blg-content .blg-panel, .blg-results')); }
 async function navigate(name: string) { await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('button', { name, exact: true }).click(); await ready(page); }
 await page.route('**/api/dashboard?*', async route => {
   dashboardReads += 1;
@@ -55,31 +56,34 @@ try {
   await page.goto(origin); await page.waitForURL('**/login');
   await page.getByLabel('Mot de passe', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Ouvrir le cockpit', exact: true }).click(); await page.waitForURL(origin + '/'); await ready(page);
-  await expect(page.locator('.blg-demo-banner')).toBeVisible();
+  await expect(page.locator('.results-demo')).toBeVisible();
+  await page.getByRole('button', { name: /Résultats par campagne et par lien/ }).click();
   checkpoint = 'detail first page';
-  let pager = page.getByRole('navigation', { name: 'Pagination des points d’entrée' });
-  await expect(pager).toContainText('Lignes 1–50 sur 120');
+  let pager = page.getByRole('navigation', { name: 'Pagination des campagnes et liens' });
+  await expect(pager).toContainText('1–50 sur 120');
   await expect(pager.getByRole('button', { name: 'Précédent', exact: true })).toBeDisabled();
-  assert.equal(await page.locator('.blg-panel tbody tr').count(), 50);
-  const aggregate = await page.locator('.blg-metric > strong').innerText();
+  assert.equal(await page.locator('.results-table tbody tr').count(), 50);
+  const aggregate = await page.locator('.results-kpi .a-d-value').innerText();
   assert.equal(Number(aggregate.replace(/\D/g, '')), 1000000);
   pass('50 details displayed without replacing the independent million-lead aggregate');
 
   checkpoint = 'applied filters in detail request';
   await page.getByLabel('Du', { exact: true }).fill('2026-09-03'); await page.getByLabel('Au', { exact: true }).fill('2026-09-05');
+  await page.getByRole('button', { name: /^Filtres/ }).click();
   await page.getByLabel('Source', { exact: true }).selectOption('paid'); await page.getByLabel('Tunnel', { exact: true }).selectOption('quiz'); await page.getByLabel('Campagne, publicité ou créative', { exact: true }).selectOption('campagne-test');
   const filteredDashboard = page.waitForResponse(response => response.url().includes('/api/dashboard?') && new URL(response.url()).searchParams.get('from') === '2026-09-03');
   await page.getByRole('button', { name: 'Appliquer', exact: true }).click(); await filteredDashboard; await ready(page);
+  await page.getByRole('button', { name: /Résultats par campagne et par lien/ }).click();
   const beforePaging = dashboardReads;
-  await pager.getByRole('button', { name: 'Suivant', exact: true }).click(); await expect(pager).toContainText('Lignes 51–100 sur 120');
+  await pager.getByRole('button', { name: 'Suivant', exact: true }).click(); await expect(pager).toContainText('51–100 sur 120');
   assert.equal(detailsQueries.at(-1)?.get('from'), '2026-09-03'); assert.equal(detailsQueries.at(-1)?.get('to'), '2026-09-05'); assert.equal(detailsQueries.at(-1)?.get('source'), 'paid'); assert.equal(detailsQueries.at(-1)?.get('tunnel'), 'quiz'); assert.equal(detailsQueries.at(-1)?.get('campaign'), 'campagne-test'); assert.equal(detailsQueries.at(-1)?.get('page'), '1');
-  assert.equal(dashboardReads, beforePaging); assert.equal(await page.locator('.blg-metric > strong').innerText(), aggregate);
+  assert.equal(dashboardReads, beforePaging); assert.equal(await page.locator('.results-kpi .a-d-value').innerText(), aggregate);
   pass('detail page requests retain every applied filter and never reload or recalculate KPI');
 
   checkpoint = 'detail last page and previous';
-  await pager.getByRole('button', { name: 'Suivant', exact: true }).click(); await expect(pager).toContainText('Lignes 101–120 sur 120'); assert.equal(await page.locator('.blg-panel tbody tr').count(), 20);
+  await pager.getByRole('button', { name: 'Suivant', exact: true }).click(); await expect(pager).toContainText('101–120 sur 120'); assert.equal(await page.locator('.results-table tbody tr').count(), 20);
   await expect(pager.getByRole('button', { name: 'Suivant', exact: true })).toBeDisabled();
-  await pager.getByRole('button', { name: 'Précédent', exact: true }).click(); await expect(pager).toContainText('Lignes 51–100 sur 120');
+  await pager.getByRole('button', { name: 'Précédent', exact: true }).click(); await expect(pager).toContainText('51–100 sur 120');
   await pager.screenshot({ path: path.join(output, 'pagination-details.png') });
   pass('detail last partial page and page bounds are accurate');
 
@@ -115,7 +119,8 @@ try {
 
   checkpoint = 'legacy fixtures';
   legacy = true; await page.reload(); await ready(page);
-  assert.equal(await page.getByRole('navigation', { name: 'Pagination des points d’entrée' }).count(), 0); assert.equal(await page.locator('.blg-panel tbody tr').count(), 120);
+  await page.getByRole('button', { name: /Résultats par campagne et par lien/ }).click();
+  assert.equal(await page.getByRole('navigation', { name: 'Pagination des campagnes et liens' }).count(), 0); assert.equal(await page.locator('.results-table tbody tr').count(), 120);
   await navigate('Commercial'); assert.equal(await page.getByRole('navigation', { name: 'Pagination commerciale' }).count(), 0);
   await page.getByRole('textbox', { name: 'Rechercher un prospect' }).fill('Prospect synthétique 12'); await page.getByLabel('Statut commercial', { exact: true }).selectOption('Gagné'); await page.getByRole('button', { name: 'Rechercher', exact: true }).click(); await expect(page.getByRole('heading', { name: '6 prospects', exact: true })).toBeVisible();
   pass('legacy unpaginated fixtures retain their full list and local filter compatibility');
