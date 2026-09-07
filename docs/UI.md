@@ -68,3 +68,12 @@ La base locale de revue contient les seuls exemples prévus (trois lignes de dé
 Contrôles de cette correction : TypeScript, 78 tests unitaires, construction Next.js ; 27 contrôles de parcours sur le serveur QA séparé, 9 contrôles de pagination et 12 contrôles UX ciblés. Les captures restent privées dans `.local/ux/`. La réussite des contrôles ne constitue pas une validation UX par Mehdi.
 
 `npm run test:browser` et `npm run test:pagination-ui` utilisent par défaut le serveur QA local sur le port 3101. Il doit pointer vers une base synthétique distincte de la revue sur 3100. Le parcours qui crée des liens refuse le port de revue 3100. `npm run test:results-ui` vérifie la revue sans mutation métier ; seules les connexions privées de session sont utilisées. Le serveur QA et ses accès sont préparés localement, hors Git.
+
+
+## Périodes rapides de Résultats
+
+Le menu propose Aujourd’hui, Hier, 7 derniers jours, 30 derniers jours, Ce mois-ci, Mois dernier, Cette année, Année dernière, Trimestre en cours, Trimestre précédent, T1/T2/T3/T4 avec l’année courante et Dates personnalisées. Les périodes en cours s’arrêtent aujourd’hui ; les périodes précédentes et les trimestres nommés couvrent toute la période civile. Les jours glissants incluent aujourd’hui.
+
+Toutes les dates utilisent Europe/Paris, avec bornes inclusives. Les raccourcis remplissent les champs sans lire de nouvelles données ; le bouton Appliquer existant valide la sélection. Modifier manuellement l’une des dates bascule sur Dates personnalisées. Aucun calcul métier ni conversion backend n’est modifié.
+
+Vérifications : cinq tests de dates (minuit Paris, heure d’été/hiver, janvier, année bissextile, fin de trimestre et année) et quatre contrôles navigateur ciblés. Ligne unique sur ordinateur, huit cartes encore visibles à l’ouverture, absence de débordement à 1366/1440/390/320 px. Commande ciblée : `node --import tsx tests/results-periods-ui.integration.ts`.

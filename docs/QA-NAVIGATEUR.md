@@ -129,3 +129,10 @@ Le périmètre UX porte sur Résultats uniquement, après l’audit des cinq pag
 Les captures ont été inspectées en 1366/1440 px et 390/320 px. Les fichiers et résultats détaillés sont privés, sous `.local/ux/`. La base de revue reste à trois lignes de détail sans campagne QA ; les essais qui créent des liens ne l’utilisent plus. Aucun filtre de données réelles n’a été ajouté pour masquer les lignes de test.
 
 Statut : **prêt pour revue humaine de Résultats**, sans validation esthétique anticipée, sans connexion réelle ou déploiement nouveau. Arrêt avant la reconstruction de Parcours.
+
+
+## Complément : périodes rapides
+
+Cinq tests de dates réussis dans `tests/result-periods.test.ts` : bornes inclusives, minuit de Paris, changements d’heure, mois bissextile, passage janvier/décembre, année et trimestre précédents, T1–T4 de l’année affichée. Quatre contrôles navigateur réussis dans `tests/results-periods-ui.integration.ts` : 15 choix présents ; sélection sans requête avant Appliquer ; modification de chacune des dates vers Personnalisée ; une ligne desktop, huit cartes visibles et aucun débordement en 1366/1440/390/320 px. Zéro erreur JavaScript.
+
+Preuves privées : `.local/ux/periods-checks.json`, `.local/ux/periods-1366.png`, `.local/ux/periods-1440.png`, `.local/ux/periods-390.png` et `.local/ux/periods-320.png`. La source de données affichée reste la démonstration locale.

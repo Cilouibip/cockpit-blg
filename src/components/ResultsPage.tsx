@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { DashboardFilters, DashboardResponse, DetailRow, DetailsResponse, Metric } from '../lib/ui-contract';
+import { matchingPeriod, resultPeriods, type PeriodId } from './result-periods';
 import { filtersQuery, formatDate, formatNumber, validateDateRange } from './ui-format';
 
 // Atelier A: A.11.4 cards/curve, A.10.3 tables/filters, A.04.2 hierarchy and A.08 dialogs.
@@ -43,11 +44,18 @@ export function DemoIndicator() {
 
 export function ResultsFilters({ draft, applied, onChange, onApply, campaigns, busy, error }: { draft: DashboardFilters; applied: DashboardFilters; onChange: (value: DashboardFilters) => void; onApply: (event: FormEvent) => void; campaigns: DashboardResponse['campaigns']; busy: boolean; error: string }) {
   const [open, setOpen] = useState(false); const id = useId();
+  const [period, setPeriod] = useState<PeriodId>(() => matchingPeriod(draft.from, draft.to));
+  const periods = resultPeriods();
+  function choosePeriod(value: PeriodId) {
+    setPeriod(value);
+    const selected = periods.find(p => p.id === value);
+    if (selected) onChange({ ...draft, from: selected.from, to: selected.to });
+  }
   const count = Number(applied.source !== 'all') + Number(applied.tunnel !== 'all') + Number(!!applied.campaign);
   const changed = filtersQuery(draft) !== filtersQuery(applied);
   function submit(event: FormEvent) { onApply(event); if (!validateDateRange(draft.from, draft.to)) setOpen(false); }
   return <form className="results-filter-form" onSubmit={submit}>
-    <div className="results-toolbar"><div className="results-dates"><label className="a-f-field" data-emphasis="quiet"><span>Du</span><span className="a-field-shell"><input type="date" value={draft.from} onChange={e => onChange({ ...draft, from: e.target.value })} required /></span></label><label className="a-f-field" data-emphasis="quiet"><span>Au</span><span className="a-field-shell"><input type="date" value={draft.to} onChange={e => onChange({ ...draft, to: e.target.value })} required /></span></label></div>
+    <div className="results-toolbar"><label className="a-f-field results-period" data-emphasis="quiet"><span className="blg-sr-only">Période rapide</span><span className="a-field-shell"><select aria-label="Période rapide" value={period} onChange={e => choosePeriod(e.target.value as PeriodId)}>{periods.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}<option value="custom">Dates personnalisées</option></select></span></label><div className="results-dates"><label className="a-f-field" data-emphasis="quiet"><span>Du</span><span className="a-field-shell"><input type="date" value={draft.from} onChange={e => { setPeriod('custom'); onChange({ ...draft, from: e.target.value }); }} required /></span></label><label className="a-f-field" data-emphasis="quiet"><span>Au</span><span className="a-field-shell"><input type="date" value={draft.to} onChange={e => { setPeriod('custom'); onChange({ ...draft, to: e.target.value }); }} required /></span></label></div>
       <button type="button" className="a-button a-secondary results-filter-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>Filtres{count > 0 && <span className="results-count">{count}</span>}<Arrow down /></button>
       <label className="a-t-check results-compare"><input type="checkbox" checked={draft.compare} onChange={e => onChange({ ...draft, compare: e.target.checked })} />Comparer</label>
       <button className="a-button a-primary" disabled={busy}>Appliquer</button>

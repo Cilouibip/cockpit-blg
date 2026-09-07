@@ -142,3 +142,18 @@
 
 /* Keep chart labels readable when the plotting region narrows. */
 @media(max-width:650px) { #atelier-a .results-chart .a-d-plot { height:auto; min-height:140px; } #atelier-a .results-chart .a-d-axis { font-size:32px; } #atelier-a .results-toolbar > .a-primary { min-width:110px; } }
+
+/* Calendar shortcuts reuse quiet Atelier A fields without adding a toolbar row on desktop. */
+#atelier-a .results-period { width:204px; flex-shrink:0; margin:0; }
+#atelier-a .results-period .a-field-shell { display:block; }
+#atelier-a .results-toolbar { gap:10px; }
+#atelier-a .results-toolbar > .a-primary { min-width:110px; }
+#atelier-a .results-dates { gap:10px; }
+#atelier-a .results-dates .a-field-shell { width:148px; }
+#atelier-a .results-filter-toggle { min-width:90px; padding-inline:12px; }
+@media(max-width:1150px) { #atelier-a .results-period { width:204px; } }
+@media(max-width:650px) {
+  #atelier-a .results-period { width:100%; }
+  #atelier-a .results-dates .a-field-shell { width:100%; }
+  #atelier-a .results-period select { font-size:16px; }
+}
