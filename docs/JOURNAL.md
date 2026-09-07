@@ -58,3 +58,12 @@ Après autorisation explicite, les six documents de cadrage ont été publiés. 
 Wix fournit la synthèse des paiements et les montants quotidiens. Sa définition source reste explicite même si certains détails sont absents. PostHog est raccordé par requêtes agrégées avec hôtes de production, distincts sur la période et question technique ; aucun export de réponses ou profil client. Les agrégats sont persistés dans les tables existantes. La migration additive 006 ajoute uniquement PostHog à la liste des sources du journal ; relecture indépendante, tests SQL et application via MCP réussis, droits serveur conservés.
 
 Le cockpit réel est séparé des deux environnements de démonstration/QA. Le même accès privé est conservé. Les dates rapides et les trimestres sont testés ; les métriques commerciales non raccordées restent indisponibles. Aucun déploiement ni modification des pages sources.
+
+
+## 7 septembre 2026 — filtre annuel, vitesse et audit indépendant
+
+Après le signalement utilisateur, correction de la lecture Wix depuis les journées déjà importées, sans doublonner les rapports qui se chevauchent. Les totaux quotidiens doivent réconcilier le rapport source avant utilisation. Les jours non couverts restent absents. Le GET dashboard ne lance plus d'import Wix/PostHog ; current/comparison sont lus en parallèle. PostHog conserve les comptes distincts exacts de période et les agrégats par événement ; aucune somme de distincts. Le bouton Actualiser déclenche explicitement une lecture des sources. La comparaison des dépenses est rétablie.
+
+Le lecteur Wix demande une page plus grande, accepte les totaux présents seulement en première page et conserve les contrôles de doublons, bornes et réconciliation. Le rapport annuel réel a été relu complètement. Les tests ajoutés couvrent le chevauchement, une période non couverte, les remboursements négatifs, la pagination et l'absence d'appels source lors des filtres.
+
+Une nouvelle tâche indépendante vérifie données et liens. Elle a identifié l'import Notion limité à six champs, des champs commerciaux disponibles non importés et des raccords de liens non installés. Ces points restent ouverts ; connexion technique et exhaustivité métier sont désormais explicitement séparées dans l'état. Les preuves et chiffres réels sont conservés uniquement dans le dossier privé.

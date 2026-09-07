@@ -7,8 +7,8 @@ import { parisPeriod, inPeriod } from '../domain/dates';
 import { watchedSeconds, type WatchedInterval } from '../domain/video';
 import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
 import type {DetailsResponse} from './ui-contract';
-import { ensureWixPeriod, readWixReportedPeriod } from './sync-wix';
-import { postHogPeriod, applyPostHogQuiz } from './posthog-dashboard';
+import { readWixReportedPeriod } from './sync-wix';
+import { readPostHogPeriod, applyPostHogQuiz } from './posthog-dashboard';
 export function parseFilters(url:URL):DashboardFilters {
  const today=Temporal.Now.plainDateISO('Europe/Paris');
  const from=url.searchParams.get('from')||today.with({day:1}).toString(),to=url.searchParams.get('to')||today.toString();
@@ -147,7 +147,6 @@ export async function dashboardDetails(db:Database,filters:DashboardFilters,page
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
  async function view(selected:DashboardFilters,withLists:boolean){
   const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
-  if(mode==='live' && selected.source==='all' && selected.tunnel==='all' && !campaign) await ensureWixPeriod(selected.from,to);
   const [rollup,snapshot,lists]=await Promise.all([
    db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
    db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
@@ -164,17 +163,17 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
    }
   }
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
-  if(mode==='live'&&withLists&&selected.source==='all'&&!campaign&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await postHogPeriod(selected.from,to),selected);
+  if(mode==='live'&&withLists&&selected.source==='all'&&!campaign&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await readPostHogPeriod(db,selected.from,to),selected);
   return {response,run:snapshot.run};
  }
- const current=await view(filters,true);
- if(filters.compare){
-  const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;
-  const prior=await view({...filters,from:Temporal.PlainDate.from(filters.from).subtract({days}).toString(),to:Temporal.PlainDate.from(filters.from).subtract({days:1}).toString(),compare:false},false);
+ const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;
+ const previousFilters={...filters,from:Temporal.PlainDate.from(filters.from).subtract({days}).toString(),to:Temporal.PlainDate.from(filters.from).subtract({days:1}).toString(),compare:false};
+ const [current,prior]=await Promise.all([view(filters,true),filters.compare?view(previousFilters,false):Promise.resolve(null)]);
+ if(prior){
   current.response.comparisonLabel=`Période précédente : ${prior.response.period.from} au ${prior.response.period.to}`;
   const compatible=current.run&&prior.run&&['metric_definition_version','model','lookback_days','observation_horizon_days'].every(key=>current.run![key]===prior.run![key]);
   for(const metric of current.response.metrics){
-   metric.previous=mode==='demo'||(metric.value!==null&&(metric.id==='cash'||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?prior.response.metrics.find(m=>m.id===metric.id)?.value??null:null;
+   metric.previous=mode==='demo'||(metric.value!==null&&(['cash','spend','leads','appointments','contracted'].includes(metric.id)||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?prior.response.metrics.find(m=>m.id===metric.id)?.value??null:null;
   }
  }
  return current.response;

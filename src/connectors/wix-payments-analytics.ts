@@ -126,7 +126,7 @@ export async function syncWixPaymentsAnalytics(config: WixPaymentsAnalyticsConfi
   try {
     const from = Temporal.Instant.from(config.from), to = Temporal.Instant.from(config.to);
     const observedAt = Temporal.Instant.from(config.now?.() ?? new Date().toISOString()).toString();
-    const pageSize = config.pageSize ?? 100, maxPages = config.maxPages ?? 100;
+    const pageSize = config.pageSize ?? 1000, maxPages = config.maxPages ?? 100;
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(config.siteId) ||
       config.timezone !== 'Europe/Paris' || Temporal.Instant.compare(from, to) >= 0 || config.cursor ||
       !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isInteger(maxPages) || maxPages < 1 || maxPages > 1000 ||
@@ -157,12 +157,17 @@ export async function syncWixPaymentsAnalytics(config: WixPaymentsAnalyticsConfi
           sort: { fieldName: mapping.dimensions.day, order: 'ASC' }, paging: { limit: pageSize, offset }, formattingEnabled: false, totalsIncluded: true }) }, config));
       if (!Array.isArray(payload.results)) throw new ConnectorError('INVALID_RESPONSE');
       const metadata = object(payload.pagingMetadata);
-      if (metadata.count !== payload.results.length || metadata.offset !== offset || payload.results.length > pageSize) throw new ConnectorError('INVALID_PAGINATION');
+      // Wix may return more rows than requested. Consume every acknowledged row
+      // within the API ceiling, retain duplicate/offset/totals reconciliation.
+      if (metadata.count !== payload.results.length || metadata.offset !== offset || payload.results.length > 1000) throw new ConnectorError('INVALID_PAGINATION');
       // Empty response has no measured zero. Missing totals on an empty result is valid.
       if (!payload.results.length && !offset) {
         batch.status = 'empty'; batch.coverage = { from: config.from, to: config.to, complete: false, observedAt, reason: 'Aucune mesure Wix ; aucun zéro normalisé créé.' }; return batch;
       }
-      const totals = values(object(payload.totals).fields), currentFingerprint = fingerprint(totals);
+      // The source supplies whole-period totals on its first page only.
+      // If repeated later, they must still match; final row sums must reconcile.
+      const totals = payload.totals === undefined && offset > 0 && batch.sourceTotals ? batch.sourceTotals : values(object(payload.totals).fields);
+      const currentFingerprint = fingerprint(totals);
       if (totalsFingerprint !== null && totalsFingerprint !== currentFingerprint) throw new ConnectorError('WIX_TOTALS_CHANGED');
       totalsFingerprint = currentFingerprint; batch.sourceTotals = totals;
       const rows: WixPaymentAnalyticsSlice[] = [];

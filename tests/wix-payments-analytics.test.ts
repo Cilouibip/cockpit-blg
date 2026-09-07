@@ -105,3 +105,14 @@ test('Wix Analytics does not fabricate zero from an empty report or publish on p
   const cfg = config(queue([...prerequisites(), page()])); cfg.commitPage = async () => { throw new Error('FORBIDDEN_TRANSACTION_ERROR'); };
   const failed = await syncWixPaymentsAnalytics(cfg); assert.equal(failed.records.length, 0); assert.equal(failed.normalizedNetEligible, false); assert.deepEqual(failed.checkpoint, {});
 });
+
+
+test('Wix handles acknowledged overflow rows and totals supplied only on the first page',async()=>{
+ const third=payment({[mapping.dimensions.day]:{timestampValue:'2026-01-05T23:00:00Z'}});
+ const second=response({results:[refund(),third],pagingMetadata:{count:2,offset:1}});
+ const last=response({results:[],pagingMetadata:{count:0,offset:3}});
+ const offsets:number[]=[];
+ const result=await syncWixPaymentsAnalytics({...config(queue([...prerequisites(),page([payment()],0,moneyCells(400,-50,350,0,2)),second,last],(url,init)=>{if(url.pathname.endsWith('/query-data'))offsets.push(JSON.parse(String(init.body)).paging.offset);})),pageSize:1});
+ assert.equal(result.status,'complete');assert.equal(result.records.find(r=>r.metric==='wix_total_revenue')?.amount?.minor,35000);
+ assert.equal(result.counts.read,3);assert.deepEqual(offsets,[0,1,3]);
+});

@@ -23,5 +23,21 @@ test('agrégats partiels et filtres ne transforment pas un total global en valeu
  const result=await dashboard(db,{...filters,campaign:'meta:campaign-a'},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.value,null);assert.equal(result.metrics.find(m=>m.id==='leads')?.value,null);assert.equal(result.metrics.find(m=>m.id==='appointments')?.value,null);
 });
 test('comparaison relit la période précédente sans relire les listes',async()=>{
- const {db,calls}=stub();const result=await dashboard(db,{...filters,compare:true},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);assert.equal(calls.filter(c=>c.name==='cockpit_dashboard_lists').length,1);assert.ok(calls.some(c=>c.name==='cockpit_dashboard_rollup'&&c.args.p_from==='2026-08-25'&&c.args.p_to==='2026-09-01'));
+ const {db,calls}=stub();const result=await dashboard(db,{...filters,compare:true},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);assert.equal(result.metrics.find(m=>m.id==='spend')?.previous,1000);assert.equal(calls.filter(c=>c.name==='cockpit_dashboard_lists').length,1);assert.ok(calls.some(c=>c.name==='cockpit_dashboard_rollup'&&c.args.p_from==='2026-08-25'&&c.args.p_to==='2026-09-01'));
+});
+
+
+test('changing live filters never calls a source API or writes an import',async()=>{
+ const oldWix=process.env.WIX_SITE_ID,oldPostHog=process.env.POSTHOG_PROJECT_ID,oldFetch=globalThis.fetch;
+ process.env.WIX_SITE_ID='synthetic-site';process.env.POSTHOG_PROJECT_ID='synthetic-project';
+ globalThis.fetch=async()=>{assert.fail('filter must not query external APIs');};
+ try {
+  const {db}=stub();db.select=async()=>[];
+  const result=await dashboard(db,{...filters,compare:true},'live');
+  assert.equal(result.period.from,filters.from);assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
+ } finally {
+  globalThis.fetch=oldFetch;
+  if(oldWix===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=oldWix;
+  if(oldPostHog===undefined)delete process.env.POSTHOG_PROJECT_ID;else process.env.POSTHOG_PROJECT_ID=oldPostHog;
+ }
 });

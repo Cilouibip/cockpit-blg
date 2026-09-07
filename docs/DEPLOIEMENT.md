@@ -46,7 +46,7 @@ Meta et Notion disposent d'un bouton de synchronisation authentifié dans Connex
 
 Les routes `GET /api/jobs/meta` et `GET /api/jobs/notion` sont prêtes pour un ordonnanceur avec `Authorization: Bearer <CRON_SECRET>`. Aucun ordonnanceur n'a été installé. Choisir sa fréquence après contrôle du premier import et des limites de l'hébergement. Un import partiel ne devient pas une partition Meta publiée ; une relance reprend la partition bornée depuis le début. Une relance de la même partition clôt en échec une ancienne tentative restée `running` depuis plus de dix minutes ; une tentative plus récente conserve son verrou et refuse une synchronisation concurrente. Examiner les erreurs persistantes avant nouvelle relance.
 
-Wix et PostHog lisent des agrégats pour la période choisie dans le cockpit ; ils les conservent dans Supabase et réutilisent les lectures pendant 15 minutes. Wix fournit également le détail quotidien réellement retourné par la source. Une route `GET /api/jobs/wix` et un bouton privé permettent de relire le mois courant. Les lectures source restent sans modification des comptes. Les visiteurs PostHog ne sont jamais convertis en leads backend.
+Les filtres lisent les agrégats déjà stockés dans Supabase, sans appel à Wix ou PostHog. Un cache serveur de 30 secondes évite de relire les mêmes snapshots pendant la navigation ; les imports terminés l’invalident. Wix est recomposé depuis des rapports quotidiens réconciliés, avec une seule version par jour. PostHog conserve les distincts exacts de chaque période : une période non importée ne peut pas être obtenue en sommant ses journées. Le bouton Actualiser appelle `POST /api/sync/analytics` avec la période sélectionnée ; cette action explicite peut prendre plus de temps que les filtres. `GET /api/jobs/wix` relit le mois courant. Les sources restent en lecture seule, les écritures concernent Supabase. Aucun ordonnanceur de rafraîchissement régulier n’est encore activé.
 
 Pour une prévisualisation locale réelle, utiliser un processus distinct avec `COCKPIT_MODE=live`, les variables serveur privées et l’origine correspondant au port choisi. L’aperçu réel préparé est sur `http://127.0.0.1:3102/` ; le port 3100 conserve la démonstration et 3101 reste réservé à la QA. Ne jamais lancer le jeu de données de test sur le projet réel.
 
@@ -72,3 +72,8 @@ Le registre de liens et la préparation opérateur d'attribution conservent une 
 Extension 006 installée et vérifiée : PostHog est ajouté au journal d’import existant. Registre métier 1–6 ; aucune table, politique ou permission supplémentaire. Les cinq migrations initiales ne sont pas réappliquées.
 
 Le miroir Notion complet peut dépasser la durée d’une requête hébergée. Avant de planifier son exécution en production, utiliser un worker adapté ou des partitions reprises par curseur ; la route locale seule ne garantit pas ce fonctionnement sur Vercel.
+
+
+### Fréquence proposée (choix technique, non activée)
+
+Préparer des synchronisations séparées de la navigation : rafraîchissement fréquent des périodes récentes, reprise nocturne d'une fenêtre historique plus large, et contrôle périodique du reste de l'historique. Conserver le dernier import complet pendant un échec, publier atomiquement une version réconciliée, exposer sa date dans le détail. Les remboursements/rétrofacturations Wix et les événements tardifs PostHog justifient ces reprises ; ils ne justifient pas un appel source à chaque filtre. L'ordonnanceur doit être adapté à l'hébergement et aux limites d'exécution avant activation.

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyPostHogQuiz} from '../src/lib/posthog-dashboard';
+import {applyPostHogQuiz,readPostHogPeriod} from '../src/lib/posthog-dashboard';
 import {emptyDashboard} from '../src/lib/dashboard';
 import type {DashboardFilters} from '../src/lib/ui-contract';
 import type {PostHogAnalyticsReport} from '../src/connectors/posthog-analytics';
@@ -23,4 +23,21 @@ test('PostHog never fills a paid/campaign filter or a different period from glob
   const data=emptyDashboard(selected,'live');const before=structuredClone(data);assert.deepEqual(applyPostHogQuiz(data,report,selected),before);
  }
  const data=emptyDashboard(filters,'live');const before=structuredClone(data);assert.deepEqual(applyPostHogQuiz(data,{...report,status:'partial',coverage:{...report.coverage,queryComplete:false}},filters),before);
+});
+
+
+test('stored PostHog periods preserve global distincts and do not aggregate missing ranges',async()=>{
+ const old=process.env.POSTHOG_PROJECT_ID;process.env.POSTHOG_PROJECT_ID='synthetic';
+ try {
+  const profile='posthog-production-aggregates-v1';
+  const run={id:'r1',query_profile_key:profile,period_from:report.from,period_to:report.to,pagination_complete:true,finished_at:report.observedAt};
+  const rows=[
+   ['all',{},'events',50],['event:$pageview',{event:'$pageview'},'events',30],['event:$pageview',{event:'$pageview'},'sessions',12],
+   ['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'events',20],['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'visitors',10],['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'sessions',11],
+  ].map(([dimensions_key,dimensions,metric,value])=>({sync_run_id:'r1',period_from:report.from,period_to:report.to,report_profile_key:profile,unit:'count',timezone:'Europe/Paris',dimensions_key,dimensions,metric_key:'posthog_'+metric,value}));
+  const db:import('../src/lib/db').Database={select:async(t)=>t==='sync_runs'?[run]:rows,rpc:async<T>()=>{assert.fail('no source import');return null as T;},upsert:async()=>assert.fail('read only'),probe:async()=>{}};
+  const cached=await readPostHogPeriod(db,'2026-08-01','2026-09-01');
+  assert.equal(cached?.byEvent[0].sessions,12);assert.equal(cached?.byHostEvent[0].visitors,10);
+  assert.equal(await readPostHogPeriod(db,'2026-08-02','2026-09-01'),null);
+ } finally {if(old===undefined)delete process.env.POSTHOG_PROJECT_ID;else process.env.POSTHOG_PROJECT_ID=old;}
 });

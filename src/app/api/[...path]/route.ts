@@ -12,6 +12,7 @@ import { listProspects } from '@/lib/prospects';
 import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
 import { synchronize } from '@/lib/sync';
 import { synchronizeWix } from '@/lib/sync-wix';
+import { postHogPeriod } from '@/lib/posthog-dashboard';
 import { Temporal } from '@js-temporal/polyfill';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
 export const runtime='nodejs';
@@ -53,6 +54,13 @@ async function handle(request:Request){
    else if(method==='PATCH'){const input=linkMutationSchema.parse(await readBody(request));if(input.action==='revise')await saveLink(db,input.input,input.id,input.expectedVersion);else await db.rpc('archive_tracked_link',{p_link_id:input.id,p_archived:input.action==='archive',p_expected_version:input.expectedVersion});}
    else if(method!=='GET')throw new AppError('Méthode non autorisée.',405,'method_not_allowed');
    return json(await listLinks(db,config.mode));
+  }
+  if(route==='sync/analytics'&&method==='POST'){
+   if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+   const filters=parseFilters(url),to=Temporal.PlainDate.from(filters.to).add({days:1}).toString();
+   await rateLimit(config,'sync','analytics',2,60);
+   const results=await Promise.allSettled([synchronizeWix(filters.from,to),postHogPeriod(filters.from,to)]);
+   return json({sources:results.map((r,i)=>({source:i===0?'wix':'posthog',status:r.status==='fulfilled'?r.value?.status??'failed':'failed'}))});
   }
   if(route.startsWith('sync/')&&method==='POST'){const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await syncSource(source));}
   throw new AppError('Page introuvable.',404,'not_found');

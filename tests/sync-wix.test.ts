@@ -32,15 +32,20 @@ test('Wix partial reads and failed persistence never publish a complete run',asy
  const failed=fakeDb(true);await assert.rejects(()=>synchronizeWix('2026-08-01','2026-09-01',{db:failed.db,env,reader:async()=>report()}));
  assert.equal(failed.events.at(-1)!.args.p_status,'failed');assert.equal(failed.events.at(-1)!.args.p_complete,false);
 });
-test('Wix display selects a completed source report and preserves its definition and negative value',async()=>{
+test('Wix combines completed daily reports without counting overlaps twice',async()=>{
  const previous=process.env.WIX_SITE_ID;process.env.WIX_SITE_ID=namespace;
  try {
-  let complete=true;
-  const db:Database={probe:async()=>{},upsert:async()=>{},rpc:async<T>()=>null as T,select:async(table)=>table==='sync_runs'?[{
-   source:'wix',source_namespace:namespace,status:complete?'complete':'running',pagination_complete:complete,finished_at:'2026-09-07T12:00:00Z',
-  }]:[{currency:'EUR',currency_exponent:2,unit:'minor',tax_basis:'tax_inclusive',timezone:'Europe/Paris',value:-2300,sync_run_id:'run-1'}]};
-  const metric=await readWixReportedPeriod(db,'2026-08-01','2026-09-01');assert.equal(metric?.cash.value,-23);assert.match(metric!.cash.definition,/cartes cadeaux/);assert.match(metric!.cash.source,/Wix/);
-  complete=false;assert.equal(await readWixReportedPeriod(db,'2026-08-01','2026-09-01'),null);
+  const runs=[
+   {id:'old',period_from:'2026-07-31T22:00:00Z',period_to:'2026-08-02T22:00:00Z',finished_at:'2026-09-01T00:00:00Z'},
+   {id:'new',period_from:'2026-08-01T22:00:00Z',period_to:'2026-08-03T22:00:00Z',finished_at:'2026-09-02T00:00:00Z'},
+  ].map(r=>({...r,source:'wix',source_namespace:namespace,status:'complete',pagination_complete:true,query_profile_key:'wix-payments-analytics-v1'}));
+  const make=(run:typeof runs[number],metric:string,value:number,date?:string)=>({...run,sync_run_id:run.id,currency:'EUR',currency_exponent:2,unit:'minor',tax_basis:'tax_inclusive',timezone:'Europe/Paris',value,metric_key:metric,dimensions_key:date?'day:'+date:'all',dimensions:date?{date}:{},report_profile_key:'wix-payments-analytics-v1'});
+  const rows=[make(runs[0],'wix_total_revenue',30000),make(runs[0],'wix_daily_revenue',10000,'2026-08-01'),make(runs[0],'wix_daily_revenue',20000,'2026-08-02'),make(runs[1],'wix_total_revenue',-2300),make(runs[1],'wix_daily_revenue',-2300,'2026-08-02')];
+  const db:Database={probe:async()=>{},upsert:async()=>{assert.fail('read only');},rpc:async<T>()=>null as T,select:async(table)=>table==='sync_runs'?runs:rows};
+  const total=await readWixReportedPeriod(db,'2026-08-01','2026-08-04');
+  assert.equal(total?.cash.value,77);assert.deepEqual(total?.dailyRevenue,[{date:'2026-08-01',value:100},{date:'2026-08-02',value:-23},{date:'2026-08-03',value:0}]);
+  assert.equal((await readWixReportedPeriod(db,'2026-08-01','2026-08-05'))?.cash.value,null);
+  assert.equal((await readWixReportedPeriod(db,'2026-08-02','2026-08-03'))?.cash.value,-23);
  } finally {if(previous===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=previous;}
 });
 
@@ -48,3 +53,16 @@ test('Wix display selects a completed source report and preserves its definition
  const {db,events,stored}=fakeDb();await synchronizeWix('2026-08-01','2026-09-01',{db,env,reader:async()=>({...report(),status:'empty',records:[],coverage:{...report().coverage,complete:false}})});
  assert.equal(stored.length,0);assert.equal(events.at(-1)!.args.p_status,'empty');assert.equal(events.at(-1)!.args.p_complete,true);
  });
+
+
+test('an exact Wix total survives incomplete daily coverage',async()=>{
+ const old=process.env.WIX_SITE_ID;process.env.WIX_SITE_ID=namespace;
+ try {
+  const report={id:'exact',source:'wix',source_namespace:namespace,status:'complete',pagination_complete:true,query_profile_key:'wix-payments-analytics-v1',period_from:'2024-12-31T23:00:00Z',period_to:'2025-12-31T23:00:00Z',finished_at:'2026-09-07T12:00:00Z'};
+  const total={sync_run_id:'exact',currency:'EUR',currency_exponent:2,unit:'minor',tax_basis:'tax_inclusive',timezone:'Europe/Paris',value:10000,metric_key:'wix_total_revenue',dimensions_key:'all',dimensions:{},report_profile_key:'wix-payments-analytics-v1',period_from:report.period_from,period_to:report.period_to};
+  const db:Database={select:async(t)=>t==='sync_runs'?[report]:[total],upsert:async()=>{},rpc:async<T>()=>null as T,probe:async()=>{}};
+  const result=await readWixReportedPeriod(db,'2025-01-01','2026-01-01');
+  assert.equal(result?.cash.value,100);assert.equal(result?.dailyRevenue.length,0);assert.match(result!.cash.coverage,/partiel/);
+  assert.equal(await readWixReportedPeriod(db,'2025-02-01','2025-03-01'),null);
+ } finally {if(old===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=old;}
+});
