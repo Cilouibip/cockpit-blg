@@ -24,7 +24,7 @@ L’audit des cinq pages est livré dans [AUDIT-UX.html](AUDIT-UX.html). Résult
 
 | Source | Fait et preuve disponibles | Ce qui reste |
 |---|---|---|
-| Supabase | Coordinateur : MCP disponible, projet ACTIVE_HEALTHY ; schéma public et registre de migrations initialement vides | Application et vérification des cinq migrations inchangées prises en charge exclusivement par le coordinateur ; la tâche UX n’intervient pas dans cette opération. |
+| Supabase | Coordinateur : cinq migrations installées et vérifiées via MCP, registre métier 1–5 | Aucun import réel ou de démonstration distant. Le blocage SQL/MCP est levé ; ne pas réappliquer les migrations. |
 | Meta Ads | Lecture réelle du compte et Insights réussie par connecteur ; réponse vide conservée comme vide | Premier import persistant après installation de la base, contrôle de la couverture puis choix d'une fréquence. |
 | Notion | Schéma commercial autorisé lu avec succès ; adaptateur testé avec fixtures | Premier import des seules propriétés autorisées. Historique antérieur non reconstitué, aucune écriture Notion. |
 | Wix | Coordinateur : clé privée reçue ; lectures des modèles Analytics et d’une transaction APPROVED réussies HTTP 200 | Aucun import métier. Mapping des agrégats et paiements individuels à réconcilier ; aucune route Wix automatique activée. |
@@ -37,6 +37,9 @@ Les vues principales utilisent des agrégats SQL sur la période entière ; dét
 
 ## Livraison et suite
 
-Code et documentation publiés sur `codex/build`, [PR1 en brouillon](https://github.com/Cilouibip/cockpit-blg/pull/1). Le propriétaire déploie Vercel et coordonne les autres tâches. Aucune mise en ligne ni migration distante effectuée. Procédure : DEPLOIEMENT.md ; recette : RECONCILIATION.md ; revue du contrat : SCHEMA-REVU.md et REVUE-INDEPENDANTE.md.
+Code et documentation publiés sur `codex/build`, [PR1 en brouillon](https://github.com/Cilouibip/cockpit-blg/pull/1). Le propriétaire déploie Vercel et coordonne les autres tâches. Les cinq migrations distantes ont été installées et vérifiées par le coordinateur ; aucune mise en ligne applicative effectuée. Procédure : DEPLOIEMENT.md ; recette : RECONCILIATION.md ; revue du contrat : SCHEMA-REVU.md et REVUE-INDEPENDANTE.md.
 
-Prochaine action immédiate : revue humaine de Résultats. Les raccordements restent un chantier séparé : revue du code, installation SQL autorisée, puis validation des premiers imports. L'accès SQL et la vérification REST sont distincts ; ne pas demander de nouvelles clés déjà fournies.
+Prochaine action immédiate : revue humaine de Résultats. Les raccordements restent un chantier séparé : revue du code, puis validation des premiers imports dans le schéma installé. L’installation SQL est terminée ; ne pas redemander de connexion ou de clés déjà fournies.
+
+
+Installation Supabase confirmée par le coordinateur le 7 septembre 2026, avec les fichiers SQL inchangés depuis `a79f991`. Les preuves détaillées sont conservées dans le journal privé. Cette installation ne constitue pas un import métier.

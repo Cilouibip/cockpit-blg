@@ -42,3 +42,10 @@ Mehdi demande l’audit des cinq pages puis la reconstruction de Résultats seul
 Les familles Atelier A A.11.4, A.10.3, A.04.2 et A.08 sont portées dans un composant Résultats séparé. Huit cartes entre y209 et y541, filtres secondaires repliés, une seule indication Démo, volet de définition puis calcul/source repliables, courbe et piliers en accordéons. Les autres pages gardent leur composition. Une base locale neuve sert à la revue ; l’ancienne base synthétique est conservée pour les tests qui créent des données. Aucun filtre de masquage QA n’est ajouté au produit.
 
 TypeScript, build, 78 tests unitaires, 27 parcours navigateur, 9 contrôles de pagination et 12 contrôles UX passent. Les captures restent privées. Les docs Wix distinguent le droit Analytics documenté, les cases réellement transmises par Mehdi (Wix Données analytiques et Wix Cashier) et les limites des clés. Le coordinateur confirme ensuite la réception privée de la clé et du site ID, ainsi que deux lectures HTTP 200 (modèles Analytics et une transaction APPROVED), sans import métier. Ces opérations sont distinctes du chantier UX. Livraison pour revue humaine, arrêt avant la page suivante.
+
+
+## 7 septembre 2026 — installation Supabase prise en charge par le coordinateur
+
+Après livraison du commit UX, le coordinateur confirme avoir appliqué et vérifié les cinq migrations inchangées de `a79f991` via MCP. Versions métier 1–5 et contrôles de fonctionnement réussis. Les preuves détaillées d’installation sont conservées dans le journal privé. Aucun import métier ou jeu de démonstration distant.
+
+L’état, les connexions et la livraison retirent le blocage SQL/MCP et la demande d’installer ces migrations. Cette tâche n’a effectué aucune action distante. La revue locale de Résultats reste la prochaine étape UX.

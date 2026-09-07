@@ -4,7 +4,7 @@
 
 | Source | Disponible | À faire dans le produit |
 |---|---|---|
-| Supabase | URL et clés applicatives privées | Migration revue puis installation avec une connexion PostgreSQL autorisée ou dans SQL Editor ; les clés REST ne suffisent pas au DDL |
+| Supabase | Cinq migrations installées et vérifiées via MCP par le coordinateur ; registre 1–5, tables privées avec RLS | Contrôle des premiers imports métier ; aucune réinstallation SQL à faire |
 | Meta | Compte autorisé, jeton, lecture du compte et Insights HTTP 200 | Adaptateur paginé, reprises, profils de reporting, stockage et couverture ; une réponse vide de test n'est pas un montant zéro validé |
 | Notion | Jeton et accès au schéma de la base Prospects | Miroir des champs commerciaux autorisés, correspondances de statuts et historique des observations, en lecture seule |
 | PostHog | Hôte, ID du projet et clé privée de lecture | Adaptation des événements existants, collecte des événements manquants ou destination officielle appropriée ; ne pas utiliser Query comme export brut périodique massif |
@@ -27,9 +27,9 @@ Les appels REST du site portent l'en-tête d'autorisation côté serveur et `wix
 
 ## Supabase
 
-Installation autonome : chaîne PostgreSQL du bouton **Connect** avec le mot de passe du projet. Pour les migrations, connexion directe ou Session pooler selon la connectivité ; ne pas utiliser un pool transactionnel comme une session persistante. Alternative sans nouveau secret : le propriétaire exécute le fichier SQL revu dans **SQL Editor**. Aucun jeton global de gestion n'est nécessaire par défaut. [Documentation des connexions](https://supabase.com/docs/guides/database/connecting-to-postgres).
+L’installation du projet est terminée : le coordinateur a appliqué les cinq fichiers SQL inchangés depuis `a79f991` via MCP et vérifié les versions 1–5. Les preuves détaillées restent dans le journal privé.
 
-Avant application : vérifier le projet exact, exécuter les migrations sur PostgreSQL de test, examiner les droits et ne lancer aucune réinitialisation destructive. L'application utilise ensuite sa clé serveur ; le navigateur ne reçoit pas de clé secrète.
+Aucun import réel ni démonstration distante n’a été chargé. Ne pas réappliquer les cinq migrations ni demander une nouvelle connexion pour cette installation. L’application utilisera sa clé serveur ; la prochaine étape de données concerne les premiers imports contrôlés.
 
 ## PostHog et pages
 

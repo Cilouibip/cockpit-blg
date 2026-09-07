@@ -1,22 +1,14 @@
 # Installation et exploitation
 
-État au 7 septembre 2026 : application et cinq migrations testées localement ; aucune installation SQL distante, aucun déploiement et aucun snippet ajouté à une page réelle. Lire les décisions dans `../DECISIONS-ACTEES.md` avant toute reprise.
+État au 7 septembre 2026 : application et cinq migrations testées localement ; cinq migrations distantes installées et vérifiées via MCP par le coordinateur, aucun déploiement applicatif ni snippet ajouté à une page réelle. Lire les décisions dans `../DECISIONS-ACTEES.md` avant toute reprise.
 
 ## 1. Base du cockpit
 
-Le projet doit être le projet Supabase neuf explicitement choisi par le propriétaire. Les clés REST n'installent pas le schéma : une connexion PostgreSQL autorisée ou l'éditeur SQL du projet reste nécessaire. Vérifier l'identité du projet avant toute application, sauvegarder si la base n'est plus neuve et relire les migrations. Ne pas utiliser de reset.
+L’installation sur le projet Supabase choisi est **terminée**. Le coordinateur a appliqué les cinq fichiers SQL exactement dans leur état `a79f991`, puis vérifié le schéma. Ne pas les réappliquer.
 
-Appliquer une fois, dans l'ordre, les fichiers entiers :
+Les fichiers `001_cockpit.sql` à `005_paginated_reads.sql` sont enregistrés comme versions 1–5 dans `cockpit_migrations`. Le coordinateur a vérifié le schéma et les lectures serveur ; les droits directs du navigateur restent retirés. Les preuves détaillées d’installation sont conservées dans le journal privé.
 
-1. `supabase/migrations/001_cockpit.sql` : 19 tables métier et 2 tables techniques, droits, vues, contraintes et fonctions.
-2. `supabase/migrations/002_integrity_hardening.sql` : immutabilité et cohérence des paiements/corrections.
-3. `supabase/migrations/003_attribution_publication.sql` : publication atomique des calculs d'attribution.
-4. `supabase/migrations/004_dashboard_rollups.sql` : agrégats SQL des vues principales, filtrés par période, avec index de dates.
-5. `supabase/migrations/005_paginated_reads.sql` : détails et prospects paginés, snapshots ciblés et état compact des connexions.
-
-Chaque fichier porte sa transaction et son numéro dans `cockpit_migrations`. Ne pas réappliquer un fichier dont le numéro est enregistré. Les rôles Supabase `anon`, `authenticated`, `service_role` sont attendus. Les deux premiers ne reçoivent aucun droit métier ; seul le serveur accède aux données. Les vues respectent les droits du rôle appelant. Aucune table existante n'est supprimée.
-
-Après installation, vérifier les versions 1–5, les 21 tables et leur RLS, puis l'accès privé et l'interdiction des accès directs navigateur. Les tests locaux ne prouvent pas l'état du projet distant.
+Aucun import métier réel ni donnée de démonstration distante. Le schéma est prêt pour les premiers imports contrôlés. Pour une future évolution, vérifier l’identité du projet, relire l’historique, produire une nouvelle migration additive et sauvegarder les données concernées ; ne pas utiliser de reset. La démonstration locale reste indépendante.
 
 ## 2. Accès privé et variables serveur
 
@@ -54,7 +46,7 @@ Meta et Notion disposent d'un bouton de synchronisation authentifié dans Connex
 
 Les routes `GET /api/jobs/meta` et `GET /api/jobs/notion` sont prêtes pour un ordonnanceur avec `Authorization: Bearer <CRON_SECRET>`. Aucun ordonnanceur n'a été installé. Choisir sa fréquence après contrôle du premier import et des limites de l'hébergement. Un import partiel ne devient pas une partition Meta publiée ; une relance reprend la partition bornée depuis le début. Une relance de la même partition clôt en échec une ancienne tentative restée `running` depuis plus de dix minutes ; une tentative plus récente conserve son verrou et refuse une synchronisation concurrente. Examiner les erreurs persistantes avant nouvelle relance.
 
-Wix fournit un adaptateur d'agrégats sous mapping relu, sans route automatique activée ni transactions inventées. La clé Wix serveur et le raccord aux paiements par personne manquent. PostHog fournit un contrôle de projet ; aucun export Query massif ni alimentation automatique du cockpit n'est activé. Le raccord first-party prévu suffit à recevoir les observations nécessaires sans abonnement supplémentaire.
+Wix fournit un adaptateur d'agrégats sous mapping relu, sans route automatique activée ni transactions inventées. La clé Wix serveur est reçue ; le coordinateur a lu les modèles Analytics et une transaction APPROVED avec succès. Le raccord métier aux paiements par personne reste à réaliser. PostHog fournit un contrôle de projet ; aucun export Query massif ni alimentation automatique du cockpit n'est activé. Le raccord first-party prévu suffit à recevoir les observations nécessaires sans abonnement supplémentaire.
 
 ## 5. Installation coordonnée du tracking
 
