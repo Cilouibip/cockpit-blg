@@ -4,7 +4,7 @@ Mis à jour le 7 septembre 2026. Ceci décrit des réalisations, pas seulement d
 
 - Dépôt GitHub créé par le propriétaire, vide au démarrage ; accès de lecture/écriture vérifié. Visibilité publique.
 - KPI principaux, secondaires et tertiaires validés ; LTV facultative.
-- Schéma Supabase : revue indépendante reçue, contrat corrigé à 19 tables dans SCHEMA-REVU.md ; contre-lecture documentaire finale et tests SQL à réaliser. Aucune table distante créée.
+- Schéma Supabase : revue indépendante reçue, contrat corrigé à 19 tables dans SCHEMA-REVU.md ; contre-lecture documentaire finale terminée, prêt pour écrire la migration locale ; tests SQL à réaliser. Aucune table distante créée.
 - Prototype local antérieur disponible comme référence de kit et comportements ; il n'est pas une application financière connectée.
 - Supabase : clés applicatives disponibles dans le fichier env privé du coordinateur. Connexion PostgreSQL/installation SQL non disponible à ce stade.
 - Notion : connexion de lecture valide et schéma Prospects accessible ; import commercial non installé.

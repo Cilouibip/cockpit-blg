@@ -42,3 +42,7 @@ Ces paramètres sont modifiables dans le code/configuration versionnée, sans no
 Les corrections B1–B8 sont incorporées dans ce contrat par les règles ci-dessus et le référentiel détaillé. Une contre-lecture finale doit confirmer cette incorporation documentaire. Le CTO peut ensuite écrire la migration locale et tester les scénarios du §13 sur PostgreSQL. Le résultat SQL réel, les droits et les preuves navigateur restent à produire.
 
 La validation de ce contrat n'est pas une preuve d'installation. Supabase requiert encore une connexion SQL autorisée ; Wix autonome requiert sa propre clé. Le CTO continue l'interface, les connecteurs, validateurs et tests indépendants pendant ces attentes. Le déploiement et les snippets live restent gérés par le propriétaire.
+
+## Contre-lecture documentaire terminée
+
+Le 7 septembre 2026, le relecteur indépendant confirme que B1–B8 et les 19 tables sont incorporés, que l’accès privé simple est compatible avec la V1, et qu’aucun blocage documentaire matériel ne reste. **Prêt pour écrire la migration locale.** Cette confirmation ne valide pas le SQL, la sécurité implémentée, les données ou une installation distante.
