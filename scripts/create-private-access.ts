@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import {randomBytes} from 'node:crypto';
+import {passwordHash} from '../src/lib/auth';
+fs.mkdirSync('.local',{recursive:true,mode:0o700});
+const output='.local/server-access.env',access='.local/access-production.txt';
+if(fs.existsSync(output)||fs.existsSync(access))throw new Error('EXISTING_ACCESS_PRESERVED');
+const password=randomBytes(24).toString('base64url');
+const values=[`COCKPIT_MODE=live`,`COCKPIT_PASSWORD_HASH=${passwordHash(password)}`,...['COCKPIT_SESSION_SECRET','IDENTITY_HMAC_SECRET','INGEST_HMAC_SECRET','CRON_SECRET'].map(key=>`${key}=${randomBytes(32).toString('hex')}`)];
+fs.writeFileSync(output,values.join('\n')+'\n',{mode:0o600,flag:'wx'});
+fs.writeFileSync(access,`Mot de passe privé du cockpit : ${password}\n\nConserver dans le gestionnaire de mots de passe ; ne pas publier ce fichier.\n`,{mode:0o600,flag:'wx'});
+console.log('Accès distincts préparés dans .local/server-access.env et .local/access-production.txt. Aucun déploiement effectué.');
