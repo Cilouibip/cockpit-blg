@@ -4,7 +4,13 @@ const passwordSchema = z.string().regex(/^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/);
 export function getConfig(env: Record<string,string|undefined> = process.env) {
   const demo = env.COCKPIT_MODE === 'demo';
   if (demo && env.VERCEL) throw new AppError('Le mode test local ne peut pas être déployé.',503,'invalid_mode');
-  const origin = env.APP_ORIGIN || 'http://127.0.0.1:3100';
+  const vercelHost = env.VERCEL_ENV === 'production'
+    ? env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL
+    : env.VERCEL_URL;
+  const origin = env.APP_ORIGIN || (env.VERCEL && vercelHost ? `https://${vercelHost}` : 'http://127.0.0.1:3100');
+  if (env.VERCEL && !env.APP_ORIGIN && !vercelHost) {
+    throw new AppError('Active les variables système Vercel ou renseigne APP_ORIGIN.',503,'invalid_origin');
+  }
   const parsedOrigin = new URL(origin);
   const local = ['127.0.0.1','localhost','[::1]'].includes(parsedOrigin.hostname);
   if (!local && parsedOrigin.protocol !== 'https:') throw new AppError('Une adresse HTTPS est requise.',503,'invalid_origin');

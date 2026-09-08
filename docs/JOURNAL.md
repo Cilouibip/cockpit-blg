@@ -67,3 +67,8 @@ Après le signalement utilisateur, correction de la lecture Wix depuis les journ
 Le lecteur Wix demande une page plus grande, accepte les totaux présents seulement en première page et conserve les contrôles de doublons, bornes et réconciliation. Le rapport annuel réel a été relu complètement. Les tests ajoutés couvrent le chevauchement, une période non couverte, les remboursements négatifs, la pagination et l'absence d'appels source lors des filtres.
 
 Une nouvelle tâche indépendante vérifie données et liens. Elle a identifié l'import Notion limité à six champs, des champs commerciaux disponibles non importés et des raccords de liens non installés. Ces points restent ouverts ; connexion technique et exhaustivité métier sont désormais explicitement séparées dans l'état. Les preuves et chiffres réels sont conservés uniquement dans le dossier privé.
+
+
+## 8 septembre 2026 — premier déploiement Vercel
+
+L’origine du cockpit est détectée depuis les variables système Vercel lorsque APP_ORIGIN est absente. Cela permet de préparer les variables avant de connaître l’adresse du premier déploiement. La production utilise son domaine stable, les aperçus leur URL propre ; l’origine explicite reste prioritaire. Sans adresse disponible sur Vercel, la configuration échoue au lieu de prendre localhost. Les contrôles d’origine et le cookie sécurisé sont conservés. Les fichiers d’accès réels restent privés et hors du dépôt. Aucun déploiement effectué par cette tâche.

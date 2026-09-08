@@ -21,7 +21,7 @@ Variables obligatoires :
 | Variable | Usage |
 |---|---|
 | `COCKPIT_MODE=live` | Mode réel ; le mode demo est bloqué sur Vercel |
-| `APP_ORIGIN` | Origine HTTPS exacte du cockpit, sans chemin |
+| `APP_ORIGIN` | Facultative sur Vercel avec variables système activées ; ailleurs, origine HTTPS exacte du cockpit, sans chemin |
 | `COCKPIT_PASSWORD_HASH` | Hash scrypt du mot de passe dédié |
 | `COCKPIT_SESSION_SECRET` | Secret aléatoire de session, au moins 32 caractères |
 | `SUPABASE_URL` et `SUPABASE_SECRET_KEY` | Accès serveur aux tables privées |
@@ -36,7 +36,7 @@ Une clé d'identité est durable : sa rotation nécessite une nouvelle version e
 
 ## 3. Mise en ligne par le propriétaire
 
-Importer le dépôt dans Vercel, framework Next.js, Node.js22, installer les variables serveur du projet cible puis lancer le build. Utiliser l'URL HTTPS finale pour `APP_ORIGIN`. Les aperçus doivent recevoir leur origine propre et des variables distinctes ou rester non configurés. Le code ne crée aucun abonnement, domaine ni tâche planifiée.
+Importer le dépôt dans Vercel, framework Next.js, Node.js22, installer les variables serveur du projet cible puis lancer le build. Au premier déploiement Vercel, laisser `APP_ORIGIN` absente et activer l’accès aux variables système. Le domaine de production est lu dans `VERCEL_PROJECT_PRODUCTION_URL`, avec repli sur `VERCEL_URL`. En aperçu, seule l’URL propre du déploiement est utilisée. Une valeur explicite de `APP_ORIGIN` reste prioritaire pour imposer un domaine. Les aperçus doivent recevoir leur origine propre et des variables distinctes ou rester non configurés. Le code ne crée aucun abonnement, domaine ni tâche planifiée.
 
 Recette minimale : déconnexion→API privée401 ; connexion valide→résultats ; écriture depuis une autre origine refusée ; création de lien/rechargement/version/archivage conservés. Vérifier que la page Connexions décrit l'état réel et ne présente aucune donnée synthétique. Contrôler la limite persistante de connexion après migration.
 
