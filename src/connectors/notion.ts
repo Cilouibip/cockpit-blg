@@ -1,23 +1,27 @@
 import type { AppointmentStatus, Evidence } from '../domain/models';
 import { ConnectorError, object, readJson, safeConnectorError, text } from './http';
 import { newBatch, type SyncOptions } from './types';
+import { NOTION_BUSINESS_FIELDS, normalizeNotionBusiness, type BusinessField, type NotionBusiness } from './notion-business';
 
-export type CommercialField = 'name' | 'status' | 'responsible' | 'closer' | 'appointmentAt' | 'nextFollowUpAt';
+export type CommercialField = 'name' | 'status' | 'responsible' | 'closer' | 'appointmentAt' | 'nextFollowUpAt' | BusinessField;
 /** Schema-only GET verified 2026-09-07. No prospect rows or personal fields were needed. */
 export const BLG_NOTION_FIELDS: Record<CommercialField, string> = {
   name: 'Nom complet', status: 'Etat', responsible: 'Animateur RDV', closer: 'Closer',
   appointmentAt: 'Date du RDV', nextFollowUpAt: 'À relancer le',
+  ...NOTION_BUSINESS_FIELDS,
 };
 export interface NotionProspect extends Evidence {
   source: 'notion'; personId: null; name: string | null; status: string | null; responsible: string[]; closer: string[];
   appointmentAt: string | null; nextFollowUpAt: string | null; appointmentStatus: AppointmentStatus;
   archived: boolean; notionUrl: string; mappingVersion: string;
+  business?: NotionBusiness;
 }
 export interface NotionConfig extends SyncOptions<NotionProspect> {
   token?: string; dataSourceId?: string;
   /** Fixed reviewed schema property names or IDs. There is deliberately no arbitrary properties passthrough. */
   fields: Partial<Record<CommercialField, string>>; mappingVersion: string;
   statusMapping?: Record<string, AppointmentStatus>;
+  identitySecret?: string; timezone?: string; queryTimestamp?: 'created_time'|'last_edited_time';
 }
 
 function richText(value: unknown): string | null {
@@ -59,15 +63,16 @@ export async function syncNotion(config: NotionConfig) {
   try {
     if (!/^[a-fA-F0-9-]{32,36}$/.test(accountId) || !config.mappingVersion || !config.fields.name || !config.fields.status) throw new ConnectorError('NOTION_FIELD_MAPPING_REQUIRED');
     if (!Number.isFinite(Date.parse(config.from)) || !Number.isFinite(Date.parse(config.to)) || Date.parse(config.from) >= Date.parse(config.to)) throw new ConnectorError('INVALID_CONFIGURATION');
-    const allowedFields: CommercialField[] = ['name', 'status', 'responsible', 'closer', 'appointmentAt', 'nextFollowUpAt'];
+    const allowedFields: CommercialField[] = ['name', 'status', 'responsible', 'closer', 'appointmentAt', 'nextFollowUpAt', ...Object.keys(NOTION_BUSINESS_FIELDS) as BusinessField[]];
     if (Object.keys(config.fields).some(key => !allowedFields.includes(key as CommercialField))) throw new ConnectorError('UNSAFE_FIELD_MAPPING');
     for (let page = 0; page < Math.min(config.maxPages ?? 20, 100); page++) {
       const url = new URL(`https://api.notion.com/v1/data_sources/${accountId}/query`);
       for (const property of Object.values(config.fields)) if (property) url.searchParams.append('filter_properties[]', property);
       if (cursor) { if (cursors.has(cursor)) throw new ConnectorError('PAGINATION_LOOP'); cursors.add(cursor); }
+      const timestamp=config.queryTimestamp??'last_edited_time';
       const body = { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}),
-        filter: { and: [{ timestamp: 'last_edited_time', last_edited_time: { on_or_after: config.from } }, { timestamp: 'last_edited_time', last_edited_time: { before: config.to } }] },
-        sorts: [{ timestamp: 'last_edited_time', direction: 'ascending' }] };
+        filter: { and: [{ timestamp, [timestamp]: { on_or_after: config.from } }, { timestamp, [timestamp]: { before: config.to } }] },
+        sorts: [{ timestamp, direction: 'ascending' }] };
       // This POST queries data. No write endpoint, page blocks or unreviewed free-form fields are used.
       const payload = object(await readJson(url, { method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, config));
       if (!Array.isArray(payload.results) || typeof payload.has_more !== 'boolean') throw new ConnectorError('INVALID_RESPONSE');
@@ -84,7 +89,8 @@ export async function syncNotion(config: NotionConfig) {
             appointmentAt: date(field(properties, config.fields.appointmentAt)), nextFollowUpAt: date(field(properties, config.fields.nextFollowUpAt)),
             // A current CRM status alone cannot prove attendance; preserve an explicit mapping as a proposal.
             appointmentStatus: status === 'attended' ? 'unknown' : status ?? 'unknown', archived: pageRow.archived === true || pageRow.in_trash === true,
-            notionUrl: `https://www.notion.so/${id.replace(/-/g, '')}`, mappingVersion: config.mappingVersion };
+            notionUrl: `https://www.notion.so/${id.replace(/-/g, '')}`, mappingVersion: config.mappingVersion,
+            business:normalizeNotionBusiness(properties,{fields:config.fields,identitySecret:config.identitySecret,createdAt:text(pageRow.created_time),appointmentAt:date(field(properties,config.fields.appointmentAt)),status:sourceStatus,timezone:config.timezone}) };
           records.push(record);
         } catch { batch.counts.rejected++; }
       }

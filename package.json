@@ -10,7 +10,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "setup:local": "node --import tsx scripts/setup-local.ts",
-    "test:db": "node --import tsx scripts/prepare-test-db.ts && node --import tsx --test tests/postgres.integration.ts tests/dashboard-sql.integration.ts tests/pagination.integration.ts",
+    "test:db": "node --import tsx scripts/prepare-test-db.ts && node --import tsx --test tests/postgres.integration.ts tests/dashboard-sql.integration.ts tests/pagination.integration.ts tests/source-window.integration.ts",
     "migrate:local": "node --import tsx scripts/migrate-local.ts",
     "seed:local": "node --import tsx scripts/seed-demo.ts",
     "test:http": "node --import tsx --test tests/http.integration.ts",

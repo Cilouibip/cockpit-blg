@@ -4,10 +4,14 @@ export type SourceFilter = 'all' | 'paid' | 'organic' | 'unknown';
 export type TunnelFilter = 'all' | 'quiz' | 'masterclass';
 /** from and to are inclusive local dates in Europe/Paris. */
 export type DashboardFilters = { from: string; to: string; source: SourceFilter; tunnel: TunnelFilter; campaign: string; compare: boolean };
+export type SourceAttempt = {status:string;startedAt:string|null;finishedAt:string|null};
 export type Metric = {
   id: string; label: string; value: number | null; unit: 'eur' | 'count' | 'percent' | 'ratio' | 'seconds';
   previous?: number | null; source: string; definition: string; coverage: string; updatedAt: string | null;
   numerator?: number | null; denominator?: number | null; unavailableReason?: string;
+  /** A partial value is a known subtotal, never the exhaustive selected total. */
+  completeness?: 'complete' | 'partial';
+  missingDays?: string[]; provisionalDays?: string[]; latestAttempt?: SourceAttempt | null;
 };
 export type DetailRow = { id: string; label: string; source: string; leads: number | null; appointments: number | null; clients: number | null; spend: number | null; coverage: string };
 export type Pagination = { page: number; pageSize: number; total: number };

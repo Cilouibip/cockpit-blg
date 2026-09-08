@@ -26,3 +26,6 @@ Source : validation directe de l'utilisateur le 7 septembre 2026, après discuss
 ## Choix encore techniques, à documenter
 
 Le choix précis des tables, la bibliothèque serveur, le mode d'authentification simple, les règles d'attribution, la fenêtre d'observation, les bases HT/TTC et la définition exacte de nouveau client ne sont pas des phrases de l'utilisateur. Le responsable technique doit proposer des valeurs explicites, isoler les paramètres et laisser indisponible un indicateur dont la définition ou la source manque.
+# Complément confirmé le 8 septembre 2026
+
+L'utilisateur demande le **nombre de transactions parmi les huit KPI principaux**, distinct du nombre de nouveaux clients. Une même personne peut effectuer plusieurs transactions. Cette demande ne supprime pas Nouveaux clients et n'autorise pas implicitement une neuvième carte. L'organisation des huit et la définition précise du compteur sont à proposer. Le CA contracté doit être audité et raccordé à une source de montant engagé et de date de signature/closing, sans substitution par le CA encaissé.

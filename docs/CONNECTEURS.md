@@ -81,3 +81,14 @@ Documentation primaire lue via outils de documentation Wix : [recette Query Site
 La V1 livre le collecteur first-party et les contrats décrits dans `DATA-CONTRACT.md`. Le propriétaire des pages choisit son raccord et conserve la mesure existante. Un export historique régulier devra utiliser une destination officielle et un mapping minimal avec coût vérifié ; aucune option n'est activée silencieusement.
 
 Documentation primaire : [API PostHog, clés et limites](https://posthog.com/docs/api), [batch exports](https://posthog.com/docs/cdp/batch-exports), [destination Postgres](https://posthog.com/docs/cdp/batch-exports/postgres).
+
+## Reprise courte et séparation des lectures
+
+`begin_sync_stream` isole compte Meta, annonces, reçus Wix, synthèse Wix et scopes PostHog. Le connecteur Notion reprend ses bornes/cursors stables en trois pages par invocation et subdivise une partition saturée ; seul un terminal contrôlé publie le miroir. Échec ou interruption conservent le checkpoint et la dernière publication. La résolution email partage la normalisation et le secret déjà utilisés par le backend signé.
+
+Le bouton Actualiser exécute des requêtes serveur séparées : Notion par chunks enchaînés jusqu’à publication (40 au plus par clic, checkpoint conservé), Meta compte par plages de 93 jours au plus, Wix synthèse une fois, reçus séparément, puis quiz et/ou masterclass selon les filtres. `/api/sync/analytics` ne relance pas Wix. Les profils quiz sont isolés par source/campagne ; la masterclass reste un rapport d’observations explicites. Chaque statut complet/partiel/vide/échec est exposé.
+
+`GET /api/jobs/tick` exige le secret existant, ne choisit qu’une source due et ne crée aucun planificateur. Sélection limitée aux derniers runs du bon namespace/stream/profil ; relecture Wix/reçus/PH du mois précédent jusqu’à aujourd’hui, reprise Notion, compte Meta récent et annonces quotidiennes. La rotation historique et l’activation du cron restent des opérations distinctes non exécutées.
+
+
+`cockpit_source_window` fournit une lecture de base cohérente bornée par source, namespace, stream, profil, dates, fuseau, devise/exposant et grain. Les métriques quotidiennes sont sélectionnées en lots du même run ; PostHog garde un seul rapport exact et ses groupes ; Wix réconcilie le rapport entier avant de ne transmettre que les jours utiles. `empty` sans mesure Wix ne crée pas de zéro. La dernière tentative est rendue séparément de la publication utilisée. Cache30secondes/128entrées, expirées purgées, promesses en vol conservées ; aucun scan des100000premières mesures.

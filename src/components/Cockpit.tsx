@@ -1,4 +1,5 @@
 'use client';
+import {metaRefreshPeriods,refreshNotionToCompletion} from '../lib/refresh-plan';
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { ApiError, Connection, ConnectionsResponse, DashboardFilters, DashboardResponse, DataMode, DetailsResponse, Pagination, ProspectsQuery, LinkInput, LinkMutation, LinkPlacement, LinksResponse, Metric, Prospect, ProspectsResponse, TrackedLink } from '../lib/ui-contract';
@@ -189,7 +190,7 @@ function Connections({ data, refresh, announce }: { data: ConnectionsResponse; r
   const status: Record<Connection['status'], string> = { connected: 'Accès disponible', partial: 'Partiellement raccordé', missing: 'À raccorder', error: 'Lecture interrompue', demo: 'Démonstration' };
   async function sync(connection: Connection) {
     setBusy(connection.id); setError('');
-    try { await request<unknown>(`/api/sync/${connection.id}`, { method: 'POST', body: '{}' }); announce(`Lecture ${connection.name} terminée. Consulte la couverture actualisée.`); refresh(); }
+    try { const result=connection.id==='notion'?await refreshNotionToCompletion(()=>request(`/api/sync/notion`,{method:'POST',body:'{}'}),read=>announce(`Notion : ${read} fiches lues, lecture en cours…`)):await request<{status:string}>(`/api/sync/${connection.id}`, { method: 'POST', body: '{}' }); announce(result.status==='partial'?`Lecture ${connection.name} en cours ou partielle. Les données déjà publiées restent disponibles.`:`Lecture ${connection.name} terminée. Consulte la couverture actualisée.`); refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : 'La lecture n’a pas abouti.'); }
     finally { setBusy(''); }
   }
@@ -212,10 +213,22 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
     if(mode==='demo'||!['results','journey'].includes(view)){refresh();return;}
     setSyncing(true);
     try {
-      const response=await fetch(`/api/sync/analytics?${filtersQuery(filters)}`,{method:'POST',credentials:'same-origin'});
-      if(!response.ok)throw new Error();
-      const result=await response.json();
-      setNotice(result.sources.some((s:{status:string})=>['failed','partial'].includes(s.status))?'Actualisation partielle. Les derniers imports complets sont conservés.':'Les données Wix et PostHog ont été actualisées.');
+      const invoke=async(path:string)=>{const response=await fetch(path,{method:'POST',credentials:'same-origin'});const result=await response.json();if(!response.ok&&response.status!==207)throw new Error();return result;};
+      const query=filtersQuery(filters);
+      const jobs:{source:string;work:Promise<{status:string;coverage?:{reason?:string}}> }[]=[
+        {source:'wix',work:invoke(`/api/sync/wix?${query}`)},
+        {source:'notion',work:refreshNotionToCompletion(()=>invoke('/api/sync/notion'),read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`))},
+        {source:'receipts',work:invoke(`/api/sync/receipts?${query}`)},
+        {source:'meta',work:(async()=>{for(const period of metaRefreshPeriods(filters.from,filters.to)){const result=await invoke(`/api/sync/meta?${filtersQuery({...filters,...period})}`);if(result.status!=='complete')return result;}return {status:'complete'};})()},
+      ];
+      const quizSupported=!filters.campaign||/^meta:\d+$/.test(filters.campaign);
+      if(filters.tunnel!=='masterclass'&&quizSupported)jobs.push({source:'quiz',work:invoke(`/api/sync/analytics?${query}&type=quiz`)});
+      if(filters.tunnel!=='quiz'&&filters.source==='all'&&!filters.campaign)jobs.push({source:'masterclass',work:invoke(`/api/sync/analytics?${query}&type=masterclass`)});
+      const tasks=await Promise.allSettled(jobs.map(job=>job.work));
+      const sources=tasks.map((r,i)=>({source:jobs[i].source,status:r.status==='rejected'?'failed':r.value.status,detail:r.status==='rejected'&&jobs[i].source==='notion'?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
+      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',empty:'aucune mesure retournée',failed:'échec'};
+      const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Transactions',meta:'Meta'};
+      setNotice(sources.map((s:{source:string;status:string;detail?:string})=>`${names[s.source]??s.source} : ${labels[s.status]??'échec'}${s.detail?` — ${s.detail}`:''}`).join(' · '));
       refresh();
     } catch {setNotice('Actualisation interrompue. Les données déjà enregistrées restent disponibles.');}
     finally {setSyncing(false);}

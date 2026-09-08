@@ -72,3 +72,34 @@ Une nouvelle tâche indépendante vérifie données et liens. Elle a identifié 
 ## 8 septembre 2026 — premier déploiement Vercel
 
 L’origine du cockpit est détectée depuis les variables système Vercel lorsque APP_ORIGIN est absente. Cela permet de préparer les variables avant de connaître l’adresse du premier déploiement. La production utilise son domaine stable, les aperçus leur URL propre ; l’origine explicite reste prioritaire. Sans adresse disponible sur Vercel, la configuration échoue au lieu de prendre localhost. Les contrôles d’origine et le cookie sécurisé sont conservés. Les fichiers d’accès réels restent privés et hors du dépôt. Aucun déploiement effectué par cette tâche.
+# 8 septembre 2026 — audit de fiabilité et correctifs locaux
+
+Le défaut de passage au lendemain est reproduit sur le serveur réel, sans import. La lecture Wix conserve désormais le sous-total connu avec couverture partielle et signale les jours relevés avant leur fin. Les comparaisons partielles sont neutralisées. L'actualisation analytique expose les résultats des deux sources et leurs échecs ; le cache de quinze minutes qui empêchait une nouvelle tentative PostHog est supprimé. Le GET dashboard reste une lecture Supabase.
+
+Tests ajoutés : jour suivant sans nouvel import, relevé intrajournalier provisoire, échec puis relance PostHog immédiate, résultats mixtes et échecs HTTP, pagination Wix au-delà de mille lignes. Typecheck, 131 tests unitaires et build réussis ; contrôle du rendu réel sur 3102. Les tests synthétiques ne constituent pas une validation de la couverture des KPI.
+
+Compte Vercel inspecté en lecture seule : domaine sur ancien main sans application, framework Other, variables présentes, aucun Cron configuré. Configuration de correction fournie au propriétaire. Les rapprochements de sources, transactions et engagements, limites commerciales et plan de synchronisation sont archivés uniquement dans l'audit privé. Aucun push, déploiement, import métier ou migration distante.
+
+## 8 septembre 2026 — reprise métier, lot central
+
+Audit source métier suivi d’un raccord local Notion descriptif, transactions Wix et huit cartes. Identité commune avec le backend, dates métier conservées, créations seules et statuts inconnus distincts. Compte Meta raccordé avec couverture et ratios observés ; profils PostHog filtrés et observations masterclass séparés. Tick borné préparé, aucun cron activé.
+
+Migration 007 appliquée seule après contre-revue : staging privé, reprise avec lease, publication collective atomique, archivage sans perte des acquisitions historiques et registre 1–7. Aucun ancien import rejoué. Les contrôles de droits et comptages avant/après passent. La charge synthétique a révélé puis permis de corriger l’accumulation de verrous, la requête d’omission et les timestamps de publications dans une même transaction.
+
+Tests unitaires et SQL, typecheck et build local exécutés. Les imports réels, la recette API/écran et les rapprochements financiers historiques restent des opérations distinctes ; aucune valeur métier réelle ou identité n’est inscrite dans ce dépôt.
+
+
+## 8 septembre 2026 — imports contrôlés et parcours Actualiser
+
+Après revue de chaque runner et contrôle de cible, publication complète du miroir Notion, puis imports séparés du compte Meta, des reçus Wix, de la synthèse Wix et des rapports PostHog quiz/masterclass. Les contrôles indépendants rapprochent les membres et les journées aux sources ; les écarts de bornes entre année civile et année jusqu’au jour du relevé sont explicités. Les données financières historiques non rapprochées restent ouvertes.
+
+La recette du vrai handler a révélé un endpoint reçus absent, des bornes Meta ignorées et un quota incompatible avec quatre partitions annuelles. Ces trois défauts sont corrigés et testés. Wix et les deux familles PostHog ont des requêtes séparées. Notion enchaîne les chunks bornés jusqu’à publication, avec progression et reprise après interruption. Tests : 159 unitaires, 32 SQL, typecheck et build réussis. Serveur de lecture local 3102 redémarré pour la contre-recette API/écran ; aucun push, déploiement, source modifiée ni cron activé. ETAT réécrit en état courant unique.
+
+
+## 8 septembre 2026 — lecture bornée des observations publiées
+
+008 ajoute deux index et une RPC de lecture STABLE/INVOKER, limitée au serveur. Les lots de métriques quotidiens restent homogènes ; les inconnus Meta restent inconnus, les reçus exigent deux mesures numériques, un rapport PostHog vide remplace les anciens groupes et Wix valide le rapport entier avant sa découpe quotidienne. Sélection par date de relevé puis début du run, sans faire gagner un ancien relevé terminé tard. Dernière tentative et dernière publication utile restent distinctes.
+
+Application unique après revue indépendante et contrôle de cible ; registre métier 1–8, droits vérifiés et comptages inchangés. Les requêtes arbitraires de tables/agrégats historiques sont remplacées par une seule lecture cohérente par fenêtre. Cache borné à 128 entrées, nettoyage des expirées, échecs non mémorisés et mutualisation des lectures en cours.162 tests unitaires, 37 SQL et build ; contre-revues SQL/lecteurs/cache et comparaison cloud sans écart. Les intervalles multiannuels restent un coût supérieur explicite, sans relever le timeout.
+
+Le clic réel du lot précédent a été contre-vérifié : publication Notion complète, une seule lecture Wix, reçus distincts, périodes Meta exactes et deux familles PostHog séparées. Aucun second clic, import, cron ou déploiement dans le lot008. Contre-recette finale sur le build `VooIRl5UAmBkQw5Y-Lnz0` : 82 contrôles API, 17 d’interface et 129 rapprochements passent. Contrôle du diff public sans secret connu ni preuve métier réelle ; les changements préexistants sont conservés. Le lot validé fait l’objet d’une sauvegarde locale sur `codex/build`, avec manifeste et patch complets dans le journal privé. Aucun push, merge, cron ni déploiement.

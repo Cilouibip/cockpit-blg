@@ -77,3 +77,18 @@ Le miroir Notion complet peut dépasser la durée d’une requête hébergée. A
 ### Fréquence proposée (choix technique, non activée)
 
 Préparer des synchronisations séparées de la navigation : rafraîchissement fréquent des périodes récentes, reprise nocturne d'une fenêtre historique plus large, et contrôle périodique du reste de l'historique. Conserver le dernier import complet pendant un échec, publier atomiquement une version réconciliée, exposer sa date dans le détail. Les remboursements/rétrofacturations Wix et les événements tardifs PostHog justifient ces reprises ; ils ne justifient pas un appel source à chaque filtre. L'ordonnanceur doit être adapté à l'hébergement et aux limites d'exécution avant activation.
+# Correction du déploiement observé le 8 septembre 2026
+
+Le domaine de production pointe vers un déploiement Ready de l'ancien `main`, commit `07de82a`, sans application. L'application se trouve sur `codex/build`, à partir de `c743d67`. Framework observé : Other ; racine vide ; Node 24 ; variables présentes dans Production et Preview ; accès aux variables système activé. Aucun réglage modifié pendant l'audit.
+
+À exécuter par le propriétaire dans Vercel :
+
+1. Settings → Environments → Production → Branch Tracking : `codex/build`.
+2. Settings → Build and Deployment : framework **Next.js**, Root Directory vide (racine du dépôt produit), Build Command `npm run build`, sortie et installation par défaut Next.js. Node **22.x** correspond au runtime local testé ; Node 24 n'a pas fait l'objet de cette recette.
+3. Conserver les variables Production préparées et l'accès aux variables système. `APP_ORIGIN` peut rester absente : l'application utilise `VERCEL_PROJECT_PRODUCTION_URL` en production. Ne pas révéler ou recopier les valeurs dans un journal public.
+4. Créer un nouveau déploiement depuis la référence `codex/build`. Redéployer l'ancien déploiement de main ne change pas son code source. Contrôler le commit affiché. Les correctifs d'audit locaux doivent être publiés séparément avant de pouvoir les inclure.
+5. Après Ready : `/login` doit répondre 200 ; `/` doit demander l'accès privé si non connecté ; l'API dashboard doit refuser une session absente puis répondre 200 après connexion. Le domaine final doit appartenir au nouveau déploiement. Tester montant connu, date de fraîcheur et couverture sur une période fixe, puis sur aujourd'hui.
+
+Références : [déploiements Git](https://vercel.com/docs/git), [NOT_FOUND](https://vercel.com/docs/errors/not_found), [variables système](https://vercel.com/docs/environment-variables/system-environment-variables).
+
+La section Cron Jobs présente l'écran de démarrage, aucune tâche configurée. Les routes existantes ne constituent pas une planification. Sur Hobby, la fréquence Cron est au plus quotidienne et sa précision est horaire : [limites](https://vercel.com/docs/cron-jobs/usage-and-pricing). Ne pas configurer un job horaire incompatible ni activer l'import Notion complet dans la route actuelle à 60 secondes. Préparer d'abord un traitement borné avec reprise durable ; le plan et les critères de recette sont dans l'audit privé. Aucun abonnement supplémentaire n'est présumé autorisé.

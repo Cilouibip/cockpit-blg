@@ -6,7 +6,7 @@ import { AppError } from './errors';
 export const TABLES = ['tracked_links','link_revisions','people','person_identities','events','lead_registrations','prospects','appointments','commercial_history','deals','payments','ads','ad_daily','meta_conversions_daily','sync_runs','source_mappings','source_aggregates','attribution_runs','attribution_results','v_ad_daily','v_events_canonical','v_meta_conversions_daily','v_attribution_published'] as const;
 export type TableName = typeof TABLES[number];
 export type Row = Record<string, unknown>;
-export type SelectOptions = { order?:string; from?:number; limit?:number; eq?:Record<string,string>; };
+export type SelectOptions = { order?:string; descending?:boolean; from?:number; limit?:number; eq?:Record<string,string>; };
 export interface Database {
   select(table:TableName,options?:SelectOptions):Promise<Row[]>;
   upsert(table:TableName,rows:Row[],conflict?:string):Promise<void>;
@@ -15,10 +15,11 @@ export interface Database {
 }
 const validIdentifier=(s:string)=>/^[a-z_][a-z0-9_]*$/.test(s);
 function checkIdentifier(s:string) { if(!validIdentifier(s)) throw new AppError('Champ interne invalide.',500); return '"'+s+'"'; }
-const allowedRPC = new Set(['save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution','cockpit_dashboard_rollup','cockpit_dashboard_lists','cockpit_prospects_page','cockpit_attribution_snapshot','cockpit_attribution_detail','cockpit_connection_status']);
+const allowedRPC = new Set(['cockpit_source_window','begin_sync_stream','cockpit_claim_notion','cockpit_stage_notion','cockpit_release_notion','cockpit_publish_notion','cockpit_business_rollup','save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution','cockpit_dashboard_rollup','cockpit_dashboard_lists','cockpit_prospects_page','cockpit_attribution_snapshot','cockpit_attribution_detail','cockpit_connection_status']);
 function dbError(code:unknown):never {
+  if(code==='55P03') throw new AppError('Une actualisation de cette source est déjà en cours.',409,'source_busy');
   if(code==='40001') throw new AppError('Le lien a changé. Recharge sa dernière version.',409,'version_conflict');
-  if(code==='55000') throw new AppError('Restaure le lien avant de créer une version.',409,'link_archived');
+  if(code==='55000') throw new AppError('L’état de cette opération a changé. Recharge puis réessaie.',409,'state_changed');
   if(code==='P0002') throw new AppError('Élément introuvable.',404,'not_found');
   if(['42P01','42883','PGRST202','PGRST205'].includes(String(code))) throw new AppError('Les tables du cockpit doivent être installées.',503,'schema_missing');
   if(code==='23505') throw new AppError('Cet enregistrement existe déjà.',409,'duplicate');
@@ -33,7 +34,7 @@ export function postgresDatabase(url:string):Database {
       const params:unknown[]=[];
       const where=Object.entries(options.eq||{}).map(([key,value])=>{params.push(value);return `${checkIdentifier(key)}=$${params.length}`;});
       params.push(Math.min(options.limit||1000,1000),options.from||0);
-      const order=(options.order||'id').split(',').map(checkIdentifier).join(',');
+      const order=(options.order||'id').split(',').map(k=>checkIdentifier(k)+(options.descending?' DESC':' ASC')).join(',');
       return (await query(`SELECT * FROM public.${checkIdentifier(table)} ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY ${order} LIMIT $${params.length-1} OFFSET $${params.length}`,params)).rows;
     },
     async upsert(table,rows,conflict='id') {
@@ -70,7 +71,7 @@ export function supabaseDatabase(config:Config,fetcher:typeof fetch=fetch):Datab
     const text=await response.text();return text?JSON.parse(text):null;
   }
   return {
-    async select(table,o={}){const params=new URLSearchParams({select:'*',order:o.order||'id',limit:String(Math.min(o.limit||1000,1000)),offset:String(o.from||0)});for(const [k,v] of Object.entries(o.eq||{})){checkIdentifier(k);params.set(k,'eq.'+v);}return call(table+'?'+params);},
+    async select(table,o={}){const params=new URLSearchParams({select:'*',order:(o.order||'id').split(',').map(k=>{checkIdentifier(k);return k+(o.descending?'.desc':'.asc');}).join(','),limit:String(Math.min(o.limit||1000,1000)),offset:String(o.from||0)});for(const [k,v] of Object.entries(o.eq||{})){checkIdentifier(k);params.set(k,'eq.'+v);}return call(table+'?'+params);},
     async upsert(table,rows,conflict='id'){if(rows.length)await call(table+'?on_conflict='+encodeURIComponent(conflict),'POST',rows,{Prefer:'resolution=merge-duplicates,return=minimal'});},
     async rpc<T>(name:string,args:Row){if(!allowedRPC.has(name))throw new AppError('Opération interne inconnue.',500);return call('rpc/'+name,'POST',args) as Promise<T>;},
     async probe(){await call('tracked_links?select=id&limit=1');}

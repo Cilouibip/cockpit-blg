@@ -12,17 +12,21 @@ import { listProspects } from '@/lib/prospects';
 import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
 import { synchronize } from '@/lib/sync';
 import { synchronizeWix } from '@/lib/sync-wix';
-import { postHogPeriod } from '@/lib/posthog-dashboard';
+import { postHogPeriod,postHogMasterclassPeriod,postHogScopeFromFilters } from '@/lib/posthog-dashboard';
+import { synchronizeWixTransactionCounts } from '@/lib/wix-transaction-counts';
+import { tickSyncJobs } from '@/lib/sync-jobs';
 import { Temporal } from '@js-temporal/polyfill';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
-async function syncSource(source:'meta'|'notion'|'wix') {
- if(source!=='wix')return synchronize(source);
+async function syncSource(source:'meta'|'notion'|'wix'|'receipts',from?:string,to?:string) {
+ if(source==='meta'||source==='notion')return synchronize(source,from,to);
  const today=Temporal.Now.plainDateISO('Europe/Paris');
- return synchronizeWix(today.with({day:1}).toString(),today.add({days:1}).toString());
+ const start=from??today.with({day:1}).toString(),end=to??today.add({days:1}).toString();
+ return source==='receipts'?synchronizeWixTransactionCounts(start,end):synchronizeWix(start,end);
 }
+const syncHttpStatus=(status:string|undefined)=>status==='complete'||status==='empty'?200:status==='failed'?502:207;
 async function handle(request:Request){
  try{
   const config=getConfig(),url=new URL(request.url),route=url.pathname.replace(/^\/api\//,''),method=request.method;
@@ -36,7 +40,8 @@ async function handle(request:Request){
   if(route.startsWith('jobs/')&&method==='GET'){
    const supplied=request.headers.get('authorization')||'',expected='Bearer '+config.cronSecret;
    if(config.cronSecret.length<32||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError('Accès refusé.',401,'unauthorized');
-   const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await syncSource(source));
+   if(route==='jobs/tick'){const result=await tickSyncJobs();return json(result,syncHttpStatus(result.status));}
+   const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);const result=await syncSource(source);return json(result,syncHttpStatus(result.status));
   }
   requireUser(request,config);
   if(!['GET','HEAD'].includes(method))requireOrigin(request,config);
@@ -58,11 +63,22 @@ async function handle(request:Request){
   if(route==='sync/analytics'&&method==='POST'){
    if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
    const filters=parseFilters(url),to=Temporal.PlainDate.from(filters.to).add({days:1}).toString();
-   await rateLimit(config,'sync','analytics',2,60);
-   const results=await Promise.allSettled([synchronizeWix(filters.from,to),postHogPeriod(filters.from,to)]);
-   return json({sources:results.map((r,i)=>({source:i===0?'wix':'posthog',status:r.status==='fulfilled'?r.value?.status??'failed':'failed'}))});
+   await rateLimit(config,'sync','analytics',12,60);
+   const type=z.enum(['quiz','masterclass']).parse(url.searchParams.get('type')??(filters.tunnel==='masterclass'?'masterclass':'quiz'));
+   const scope=postHogScopeFromFilters(filters);
+   if(!scope||(type==='masterclass'&&(scope.source!=='all'||scope.campaignId)))throw new AppError('Ce filtre n’est pas raccordé à ce parcours.',422,'unsupported_scope');
+   const result=type==='masterclass'?await postHogMasterclassPeriod(filters.from,to):await postHogPeriod(filters.from,to,{scope});
+   const status=result?.status??'failed';
+   return json({status,sources:[{source:type,status}]},syncHttpStatus(status));
   }
-  if(route.startsWith('sync/')&&method==='POST'){const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);return json(await syncSource(source));}
+  if(route.startsWith('sync/')&&method==='POST'){
+   const source=z.enum(['meta','notion','wix','receipts']).parse(route.slice(5));
+   await rateLimit(config,'sync',source,source==='notion'?60:12,60);
+   const selected=url.searchParams.has('from')?parseFilters(url):null;
+   const to=selected?Temporal.PlainDate.from(selected.to).add({days:1}).toString():undefined;
+   const result=await syncSource(source,selected?.from,to);
+   return json(result,syncHttpStatus(result.status));
+  }
   throw new AppError('Page introuvable.',404,'not_found');
  }catch(e){return errorResponse(e);}
 }

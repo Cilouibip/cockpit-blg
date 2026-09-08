@@ -17,7 +17,7 @@ before(async () => {
   await admin.query("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $$");
   await admin.query(`CREATE DATABASE ${name}`);
   db = new Client({ connectionString: target.href }); await db.connect();
-  for (const file of fs.readdirSync('supabase/migrations').filter(f => /^00[1-4]_.*\.sql$/.test(f)).sort()) {
+  for (const file of fs.readdirSync('supabase/migrations').filter(f => /^\d{3}_.*\.sql$/.test(f)).sort()) {
     await db.query(fs.readFileSync('supabase/migrations/' + file, 'utf8'));
   }
 });

@@ -22,8 +22,8 @@ const meta=(account='test-meta')=>({source:'meta',accountId:account,adId:'90001'
 const finish=(run:string,status='complete')=>db.query('SELECT finish_sync($1,$2,1,0,true,NULL)',[run,status]);
 async function payment(kind='receipt',amount=60000,original:string|null=null,currency='EUR'){return (await db.query("INSERT INTO payments(source,source_namespace,external_id,kind,status,effective_at,gross_minor,currency,currency_exponent,tax_basis,source_locator,reconciliation_state,original_payment_id,connector_version) VALUES('wix','test-payments',$1,$2,'settled','2026-09-02T10:00Z',$3,$4,2,'tax_inclusive','synthetic','reconciled',$5,'test') RETURNING *",[randomUUID(),kind,amount,currency,original])).rows[0];}
 
-test('migration PostgreSQL17 complète, 21 tables RLS, droits client refusés tables/vues/RPC',async()=>{
- const rows=(await db.query("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r'")).rows;assert.equal(rows.length,21);assert.ok(rows.every(r=>r.relrowsecurity));
+test('migration PostgreSQL17 complète, 22 tables RLS, droits client refusés tables/vues/RPC',async()=>{
+ const rows=(await db.query("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r'")).rows;assert.equal(rows.length,22);assert.ok(rows.every(r=>r.relrowsecurity));
  for(const role of ['anon','authenticated']){await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query('SELECT * FROM people');},'42501');await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query('SELECT * FROM v_cash_movements');},'42501');await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query("SELECT consume_rate_limit($1,1,60)",['b'.repeat(64)]);},'42501');}
  await db.query('SET LOCAL ROLE service_role');assert.equal((await db.query('SELECT count(*) FROM people')).rows[0].count,'0');
 });
@@ -112,4 +112,19 @@ test('PostHog aggregate source uses the existing private import journal and reje
  const row=(await db.query('SELECT source,stream_key,status FROM sync_runs WHERE id=$1',[run])).rows[0];
  assert.deepEqual(row,{source:'posthog',stream_key:'aggregates',status:'complete'});
  await fails(()=>begin('unsupported','synthetic-project'), '23514');
+});
+
+test('business staging shares backend identity, remains unpublished and restores archived source rows',async()=>{
+ const claim=async()=>(await db.query("SELECT cockpit_claim_notion('synthetic-notion','business-v1') AS x")).rows[0].x;
+ const row={source:'notion',accountId:'synthetic-notion',externalId:'contact-a',name:'Synthetic',status:'RDV Terminé',responsible:[],closer:[],appointmentAt:'2026-08-10',nextFollowUpAt:null,archived:false,sourceUpdatedAt:'2026-09-01T00:00:00Z',observedAt:'2026-09-08T10:00:00Z',connectorVersion:'test',mappingVersion:'test',business:{identityKey:'c'.repeat(64),acquisitionDay:'2026-08-01',createdAt:'2026-08-01T00:00:00Z',scheduledDay:'2026-08-10',attendance:'show_up',explicitFinished:true}};
+ const stage=async(c:{runId:string;lease:string},rows:unknown[],checkpoint:unknown={intervals:[]})=>db.query('SELECT cockpit_stage_notion($1,$2,$3,$4,$5)',[c.runId,c.lease,JSON.stringify(rows),JSON.stringify(checkpoint),rows.length]);
+ const publish=async(c:{runId:string;lease:string})=>db.query('SELECT cockpit_publish_notion($1,$2)',[c.runId,c.lease]);
+ const roll=async()=>(await db.query("SELECT cockpit_business_rollup('synthetic-notion','2026-01-01','2027-01-01') AS x")).rows[0].x;
+ const a=await claim();await stage(a,[row]);assert.equal((await roll()).available,false);assert.equal((await db.query('SELECT count(*) FROM people')).rows[0].count,'1');assert.equal((await db.query('SELECT count(*) FROM lead_registrations')).rows[0].count,'0');
+ await register(lead('first_party','synthetic-backend',randomUUID(),'c'.repeat(64)));assert.equal((await db.query('SELECT count(*) FROM people')).rows[0].count,'1');
+ await publish(a);assert.equal((await roll()).leads.known,1);
+ const b=await claim();await stage(b,[]);await publish(b);assert.equal((await roll()).sourceRows,0);assert.equal((await roll()).leads.known,1);assert.equal((await roll()).leads.archivedRows,1);
+ const c=await claim();await stage(c,[row]);await publish(c);assert.equal((await roll()).sourceRows,1);assert.equal((await roll()).leads.archivedRows,0);
+ const malformed=await claim();await fails(()=>stage(malformed,[],{}),'23514');assert.equal((await roll()).sourceRows,1);
+ assert.equal((await db.query("SELECT cockpit_claim_notion('synthetic-notion','other-profile') AS x")).rows[0].x.busy,true);
 });

@@ -40,3 +40,9 @@ Les principaux résultats distinguent activité à la date effective et cohorte 
 Le CA, le ROAS et le coût par nouveau client sont comparables entre périodes si chaque période possède les preuves requises. Les comparaisons d'observations partielles (leads, RDV, diffusion) restent suspendues en mode réel en attendant une couverture comparable. L'interface signale la période précédente et n'invente pas un pourcentage à partir d'une valeur manquante.
 
 Le CPL attribué, les nouveaux clients globaux, le closing par cohorte et le CAC complet restent indisponibles tant que les dépendances correspondantes ne sont pas raccordées. Les conversions rapportées par Meta, créatives et appareils ne sont pas automatiquement déduits des clics. Instagram natif est reporté et la LTV est facultative. Aucun diagnostic automatique n'est produit.
+
+## Contrôles métier de la reprise
+
+Chaque total Notion doit conserver sa balance fiches datées = identifiées + sans identité + copies d’identité, et créations seules à part. Les RDV sont balancés entre présences selon groupe, absences, annulations et autres ; seuls présence + absence forment le taux de présence. Les dates contradictoires ne produisent pas de conversion. La complétude d’un scan courant ne certifie pas l’historique exhaustif des créneaux.
+
+Les reçus Wix sont balancés entre positifs inclus et autres parents exclus, avec remboursements séparés. Rapprocher les IDs fournisseur avec les paiements historiques avant tout cumul intersource. Une période entièrement importée dans Wix ne démontre pas le CA global ; la carte conserve sa valeur connue avec périmètre partiel. Un titre de paiement répété n’est pas une preuve de copie.

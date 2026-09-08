@@ -12,7 +12,7 @@ const rollup:DashboardRollup={
  aggregate:null,deals:{count:0,compatible:false,contractedMinor:0,observedAt:null},
  meta:{rows:15000,compatible:true,spendMinor:100000,impressions:1000000,outboundClicks:10000,observedAt:null,daily:[{date:'2026-09-01',spendMinor:100000}]},
 };
-function stub(data=rollup){const calls:{name:string;args:Row}[]=[];const db:Database={async select(){assert.fail('Dashboard must not load raw rows');},async upsert(){assert.fail();},async probe(){assert.fail();},async rpc<T>(name:string,args:Row){calls.push({name,args});if(name==='cockpit_dashboard_rollup')return structuredClone(data) as T;if(name==='cockpit_attribution_snapshot')return {run:null,results:[]} as T;if(name==='cockpit_dashboard_lists')return {details:[],pagination:{page:0,pageSize:50,total:15005},campaigns:[]} as T;throw Error(name);}};return {db,calls};}
+function stub(data=rollup){const calls:{name:string;args:Row}[]=[];const db:Database={async select(){assert.fail('Dashboard must not load raw rows');},async upsert(){assert.fail();},async probe(){assert.fail();},async rpc<T>(name:string,args:Row){calls.push({name,args});if(name==='cockpit_source_window')return {runs:[],aggregates:[],selections:[],validations:{},exactRunId:null,latestAttempt:null} as T;if(name==='cockpit_dashboard_rollup')return structuredClone(data) as T;if(name==='cockpit_attribution_snapshot')return {run:null,results:[]} as T;if(name==='cockpit_dashboard_lists')return {details:[],pagination:{page:0,pageSize:50,total:15005},campaigns:[]} as T;throw Error(name);}};return {db,calls};}
 test('vues principales lisent des agrégats exacts au-delà de10000 sans charger les lignes métier',async()=>{
  const {db,calls}=stub();const result=await dashboard(db,filters,'live');
  assert.equal(result.metrics.find(m=>m.id==='leads')?.value,12001);assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);assert.equal(result.pillars[0].metrics[0].value,15005);assert.equal(result.journeys.find(j=>j.id==='quiz')?.steps[0].value,15005);assert.equal(result.detailsPagination?.total,15005);assert.equal(result.details.length,0);
@@ -23,7 +23,7 @@ test('agrégats partiels et filtres ne transforment pas un total global en valeu
  const result=await dashboard(db,{...filters,campaign:'meta:campaign-a'},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.value,null);assert.equal(result.metrics.find(m=>m.id==='leads')?.value,null);assert.equal(result.metrics.find(m=>m.id==='appointments')?.value,null);
 });
 test('comparaison relit la période précédente sans relire les listes',async()=>{
- const {db,calls}=stub();const result=await dashboard(db,{...filters,compare:true},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);assert.equal(result.metrics.find(m=>m.id==='spend')?.previous,1000);assert.equal(calls.filter(c=>c.name==='cockpit_dashboard_lists').length,1);assert.ok(calls.some(c=>c.name==='cockpit_dashboard_rollup'&&c.args.p_from==='2026-08-25'&&c.args.p_to==='2026-09-01'));
+ const {db,calls}=stub();const result=await dashboard(db,{...filters,compare:true},'live');assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);assert.equal(result.metrics.find(m=>m.id==='spend')?.previous,null);assert.equal(calls.filter(c=>c.name==='cockpit_dashboard_lists').length,1);assert.ok(calls.some(c=>c.name==='cockpit_dashboard_rollup'&&c.args.p_from==='2026-08-25'&&c.args.p_to==='2026-09-01'));
 });
 
 

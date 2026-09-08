@@ -1,3 +1,4 @@
+import {windowFixture} from './helpers/source-window';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {applyPostHogQuiz,readPostHogPeriod} from '../src/lib/posthog-dashboard';
@@ -35,7 +36,7 @@ test('stored PostHog periods preserve global distincts and do not aggregate miss
    ['all',{},'events',50],['event:$pageview',{event:'$pageview'},'events',30],['event:$pageview',{event:'$pageview'},'sessions',12],
    ['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'events',20],['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'visitors',10],['quizz.blg-studio.fr:$pageview',{host:'quizz.blg-studio.fr',event:'$pageview'},'sessions',11],
   ].map(([dimensions_key,dimensions,metric,value])=>({sync_run_id:'r1',period_from:report.from,period_to:report.to,report_profile_key:profile,unit:'count',timezone:'Europe/Paris',dimensions_key,dimensions,metric_key:'posthog_'+metric,value}));
-  const db:import('../src/lib/db').Database={select:async(t)=>t==='sync_runs'?[run]:rows,rpc:async<T>()=>{assert.fail('no source import');return null as T;},upsert:async()=>assert.fail('read only'),probe:async()=>{}};
+  const db:import('../src/lib/db').Database={select:async(t)=>t==='sync_runs'?[run]:rows,rpc:async<T>(name:string,args:import('../src/lib/db').Row)=>{assert.equal(name,'cockpit_source_window');return windowFixture([run],rows,args) as T;},upsert:async()=>assert.fail('read only'),probe:async()=>{}};
   const cached=await readPostHogPeriod(db,'2026-08-01','2026-09-01');
   assert.equal(cached?.byEvent[0].sessions,12);assert.equal(cached?.byHostEvent[0].visitors,10);
   assert.equal(await readPostHogPeriod(db,'2026-08-02','2026-09-01'),null);

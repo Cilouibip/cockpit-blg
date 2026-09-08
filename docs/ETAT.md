@@ -1,33 +1,35 @@
-# État du cockpit — 7 septembre 2026
+# État du cockpit — 8 septembre 2026
 
-Référence de reprise : `../DECISIONS-ACTEES.md`. Les preuves, exports et montants métiers restent dans le journal privé.
+Lire `DECISIONS-ACTEES.md` à chaque reprise. Le chantier actif est `codex/build`. Les corrections sont locales et les sources restent en lecture seule ; aucun push, déploiement ou cron activé dans ce lot. L’historique des travaux est dans `JOURNAL.md`.
 
-## Disponible
+## Données raccordées
 
-- Six migrations Supabase installées et vérifiées ; pas de réinstallation nécessaire.
-- Historique quotidien Meta importé, rapproché de l’export source sans double comptage. Les partitions interrompues restent hors publication jusqu’à leur reprise complète.
-- Miroir des propriétés commerciales Notion importé ; le découpage des requêtes permet de dépasser le plafond source de 10 000 résultats. Lecture seule côté Notion.
-- Encaissements Wix TTC issus de la synthèse des paiements : remboursements, cartes cadeaux utilisées et rétrofacturations selon la définition Wix, avant frais de paiement. Totaux et courbe quotidienne ; les mois sans mesure restent distincts d’un zéro.
-- Quiz PostHog : agrégats de visiteurs et sessions par événement et hôte de production, sur la période entière ; questions techniques sans réponses personnelles. Les domaines de test identifiables sont exclus.
-- Résultats reconstruits avec Atelier A : KPI en haut, filtres secondaires repliés, détails à la demande, piliers en accordéons. Raccourcis de dates, années et trimestres disponibles.
-- Générateur de liens et registre persistant ; URL et emplacement explicités.
+Huit migrations Supabase sont installées. La migration additive 007 a été appliquée une seule fois après revue indépendante, sans rejouer les six précédentes. Elle apporte le staging privé Notion, la reprise au checkpoint et la publication atomique. Les identités utilisent le même domaine et le même HMAC que le backend existant ; aucune inscription ou conversion n’est inventée lors de l’import CRM.
 
-## En attente
+Le miroir commercial Notion enrichi est publié. Les acquisitions connues utilisent le mapping versionné date réelle > historique > Wix. Les dates de création seules, les identités absentes et les copies sont comptées séparément. Présences, absences, annulations, réservations et closings décrivent le suivi courant Notion, avec provenance et couverture toujours partielle ; les créneaux remplacés ne deviennent pas des occurrences reconstituées. Les acquisitions publiées sont conservées après archivage.
 
-Les inscriptions serveur, les présences effectives, les ventes et leurs correspondances d’identité ne sont pas encore raccordées de bout en bout. Les événements navigateur PostHog ne sont pas transformés en inscriptions backend ou en personnes CRM. Les dates courantes Notion restent des dates courantes, pas un historique de rendez-vous distincts. ROAS attribué, CAC complet et LTV attendent les données nécessaires.
+Les totaux Meta du compte sont importés depuis début 2024 jusqu’au jour du relevé. Totaux et mesures quotidiennes ont été rapprochés de la source indépendamment. Les détails annonces/campagnes restent partiels, notamment avant le 23 octobre 2024 ; les créatives ne sont pas encore raccordées. Les ratios observés sont possibles sur une même plage continue, même provisoire, avec bornes explicites et comparaison désactivée lorsque la couverture est partielle.
 
-Le propriétaire coordonne le déploiement Vercel et l’installation des snippets par les responsables du quiz et de la masterclass. La fréquence des synchronisations Meta/Notion après hébergement reste à configurer ; un ordinateur fermé ne maintient pas l’application locale en ligne. Les changements de filtre lisent désormais uniquement Supabase. Les rapports Wix quotidiens sont recomposés sans doublons ; les visiteurs PostHog utilisent un rapport exact de période déjà importé. Les périodes PostHog non importées nécessitent le bouton Actualiser ; aucune somme de visiteurs quotidiens. Le bouton relit Wix/PostHog séparément de la navigation. La planification périodique après hébergement reste à activer.
+Wix synthèse et reçus ont été importés sur les périodes autorisées. Les transactions comptent des reçus positifs distincts, échéances et reçus remboursés inclus, par date de création Wix ; les remboursements restent séparés. Cette date ne devient pas une date effective de règlement. Le cash connu conserve le périmètre Wix et une couverture partielle tant que le rapprochement financier Notion/Wix n’est pas terminé. Une période absente de Wix reste inconnue, y compris si son historique existe dans Notion.
 
-La revue humaine de Résultats reste attendue avant la reconstruction UX des autres pages. [Demande de revue en brouillon](https://github.com/Cilouibip/cockpit-blg/pull/1).
+PostHog possède des rapports exacts pour les fenêtres de recette : août, année en cours, période personnalisée et jour du relevé ; les témoins source/campagne ont leurs propres profils. Les distincts ne sont jamais additionnés entre journées. Quiz et observations du kit masterclass sont séparés ; ces dernières ne prouvent ni visite de production, ni inscription, ni durée vidéo.
 
+## Application et actualisation
 
-Extension 006 installée et vérifiée : PostHog est ajouté au journal d’import existant. Registre métier 1–6 ; aucune table, politique ou permission supplémentaire. Les cinq migrations initiales ne sont pas réappliquées.
+Huit cartes : encaissé, contracté, transactions, dépenses, leads, RDV, nouveaux clients et ROAS. Disposition réversible choisie par le coordinateur ; le coût publicitaire par nouveau client reste dans Acquisition. Les détails reprennent les définitions et limites retournées par l’API. Les filtres incompatibles donnent leur propre motif d’indisponibilité.
 
+Le GET dashboard lit uniquement la base. Actualiser lance une seule lecture Wix, une lecture de reçus, les périodes Meta de 93 jours au plus et les types PostHog compatibles séparément. Notion poursuit automatiquement les requêtes courtes jusqu’à publication (40 requêtes au plus par clic), affiche sa progression et conserve le checkpoint en cas d’interruption. Le succès n’est annoncé qu’après publication complète ; une relance reprend le travail restant.
 
-## Audit des données — correction du 7 septembre
+Le tick préparé choisit une seule source due et ne lit que les derniers runs du bon namespace/stream/profil. Wix/reçus/PostHog relisent le mois précédent et le mois courant. Aucun planificateur n’est actif. La migration additive 008 borne désormais la lecture des observations à la période et au profil demandés : lots quotidiens, rapport exact PostHog ou rapport Wix entier validé avant découpe. Historique conservé, dernière tentative séparée du dernier bon relevé. Cache 30 secondes, 128 entrées maximum, expirées supprimées et promesses en cours mutualisées. Restent la rotation des anciennes périodes et la planification revue, non activées.
 
-Le contrôle initial couvrait août et début septembre, pas toutes les périodes ni tous les KPI. Le filtre annuel a révélé une pagination Wix incompatible avec les hypothèses du lecteur, et la page attendait des requêtes Wix/PostHog. Ces appels ont été retirés du GET dashboard. Une page Wix plus grande a permis de relire le rapport annuel complet et réconcilié ; les erreurs de pagination, doublons et désaccords de totaux restent bloquants. Les comparaisons disponibles, dont les dépenses, sont de nouveau transmises.
+## Validation et prochaine action
 
-L'audit indépendant confirme que le miroir Notion omet encore des champs disponibles : acquisition, réservation, closing, canal et entrée du tunnel. Leur import et leur branchement aux KPI restent à terminer. Les états courants et les dates de closing/rendez-vous doivent être présentés avec leurs définitions propres ; une ligne CRM ne suffit pas à qualifier un nouveau client global. Le suivi par campagne manque aussi de raccords d'identité et plusieurs colonnes sont encore laissées vides dans le code.
+Typecheck, 162 tests unitaires, 37 tests SQL et build passent. La contre-revue indépendante a testé la publication sur plus de dix mille fiches synthétiques sous la limite locale de huit secondes ; l’import réel est ensuite parvenu au terminal sans rejet. Contre-recette source→base : Notion, compte Meta et Wix rapprochés par membres et mesures quotidiennes, avec bornes explicites. Les preuves et valeurs métiers restent uniquement dans le journal privé.
 
-Le suivi des liens n'est pas installé de bout en bout. Le registre existe, mais le collecteur et le raccord serveur aux inscriptions doivent être intégrés dans les pages par leurs responsables. L'alignement des noms de paramètres avec le projet masterclass a été demandé à sa tâche responsable. Ne pas annoncer un ROAS ou un résultat commercial par publicité comme disponible.
+La version locale de référence est servie sur le port 3102, build `VooIRl5UAmBkQw5Y-Lnz0`. Sa contre-recette finale passe : 82 contrôles API, 17 contrôles d’interface et 129 rapprochements indépendants. Le parcours Actualiser réel a réussi auparavant en un clic jusqu’à publication, sans changement des comptes ni rejet ; les membres et valeurs avant/après ont été rapprochés indépendamment. Aucun second clic n’a été nécessaire pour valider le lecteur borné. Le manifeste et la preuve de sauvegarde privés fixent les fichiers relus et leur version locale ; les changements antérieurs sont conservés.
+
+Prochaine action métier : expliquer la différence Notion/Wix par identifiants fournisseur exacts, puis raccorder l’historique des paiements absent de Wix. Ce rapprochement doit précéder le calcul des nouveaux clients au premier paiement prouvé. Le CA contracté nécessite encore le lien entre vente, date et montant ; l’attribution nécessite les liens et événements de bout en bout.
+
+Restants exploitation : importer les détails Meta anciens après revue et enrichir les créatives sans remplacer les mesures ; définir la rotation historique et faire relire la planification avant activation. Le déploiement Vercel appartient au propriétaire et reste une opération séparée. Aucun total connu n’est supprimé en attendant ces raccords.
+
+La lecture bornée a passé une contre-revue indépendante de sélection, droits, concurrence, nulls et rapports vides, puis des mesures cloud en lecture seule sans différence des valeurs. Les fenêtres annuelles respectent la limite UI de 367 jours ; les appels internes multiannuels sont plus coûteux et ne doivent pas être présentés comme ayant un coût constant. Aucun timeout global n’a été augmenté.

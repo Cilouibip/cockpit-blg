@@ -1,27 +1,21 @@
-import type { Database, Row, TableName } from './db';
+import type { Database, Row } from './db';
 import { AppError } from './errors';
-
-export interface SourceSnapshot { runs: Row[]; aggregates: Row[] }
-const cache = new WeakMap<Database, Map<string, { expires: number; value: Promise<SourceSnapshot> }>>();
-async function pages(db: Database, table: TableName, eq: Record<string,string>) {
- const rows: Row[]=[];
- for(let from=0;from<100000;from+=1000){
-  const page=await db.select(table,{eq,from,limit:1000});rows.push(...page);
-  if(page.length<1000)return rows;
- }
- throw new AppError('Historique trop volumineux pour cette lecture.',422,'read_limit');
-}
-/** Only stored aggregates, never source APIs or CRM records. A short server cache
- * shares the same completed snapshots across current/comparison filter reads. */
-export function readSourceSnapshot(db:Database,source:string,namespace:string):Promise<SourceSnapshot>{
+export interface SourceWindow {stream:string;profile:string;from:string;to:string;timezone:string;currency:string|null;currencyExponent:number|null;kind:'daily_bundle'|'exact_report'|'wix_report_daily'}
+export interface SourceSnapshot { runs:Row[];aggregates:Row[];selections:{day:string;runId:string}[];validations:Record<string,{valid:boolean;totalMinor:number;hasBreakdown:boolean;wholeReportRowCount:number}>;exactRunId:string|null;latestAttempt:Row|null }
+const cache=new WeakMap<Database,Map<string,{expires:number;value:Promise<SourceSnapshot>;settled:boolean}>>();
+/** One database snapshot, bounded to the requested grain and period; no source API calls. */
+export function readSourceSnapshot(db:Database,source:string,namespace:string,window:SourceWindow):Promise<SourceSnapshot>{
  let entries=cache.get(db);if(!entries){entries=new Map();cache.set(db,entries);}
- const key=`${source}:${namespace}`,hit=entries.get(key);if(hit&&hit.expires>Date.now())return hit.value;
- const value=Promise.all([
-  pages(db,'sync_runs',{source,source_namespace:namespace,status:'complete'}),
-  pages(db,'source_aggregates',{source,source_namespace:namespace,coverage_state:'complete'}),
- ]).then(([runs,aggregates])=>({runs:runs.filter(r=>r.pagination_complete===true),aggregates}));
- entries.set(key,{expires:Date.now()+30000,value});
- value.catch(()=>{if(entries!.get(key)?.value===value)entries!.delete(key);});
- return value;
+ const now=Date.now();for(const [key,entry]of entries)if(entry.settled&&entry.expires<=now)entries.delete(key);
+ const args={p_source:source,p_namespace:namespace,p_stream:window.stream,p_profile:window.profile,p_from:window.from,p_to:window.to,p_timezone:window.timezone,p_currency:window.currency,p_currency_exponent:window.currencyExponent,p_kind:window.kind};
+ const key=JSON.stringify(args),hit=entries.get(key);if(hit&&(!hit.settled||hit.expires>now))return hit.value;
+ while(entries.size>=128){const oldest=[...entries].find(([,entry])=>entry.settled);if(!oldest)throw new AppError('Trop de lectures simultanées. Réessaie dans un instant.',503,'source_window_busy');entries.delete(oldest[0]);}
+ const value=db.rpc<SourceSnapshot>('cockpit_source_window',args).then(result=>{if(!result||!Array.isArray(result.runs)||!Array.isArray(result.aggregates)||!Array.isArray(result.selections)||!result.validations)throw new AppError('Lecture des observations indisponible.',503,'invalid_source_window');return result;});
+ const entry={expires:now+30000,value,settled:false};entries.set(key,entry);value.then(()=>{entry.settled=true;},()=>{if(entries!.get(key)?.value===value)entries!.delete(key);});return value;
 }
 export function invalidateSourceSnapshots(db:Database){cache.delete(db);}
+
+export function sourceAttempt(snapshot:SourceSnapshot):import('./ui-contract').SourceAttempt|null{
+ const row=snapshot.latestAttempt;if(!row)return null;
+ return {status:String(row.status),startedAt:row.started_at?String(row.started_at):null,finishedAt:row.finished_at?String(row.finished_at):null};
+}

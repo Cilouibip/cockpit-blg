@@ -24,6 +24,14 @@ function queue(responses: Response[], inspect?: (url: URL, init: RequestInit) =>
 const config = (fetcher: typeof fetch): WixPaymentsAnalyticsConfig => ({ siteId: '44444444-4444-4444-8444-444444444444', apiKey: 'synthetic-key', timezone: 'Europe/Paris',
   from: '2025-12-31T23:00:00Z', to: '2026-01-31T23:00:00Z', now: () => '2026-02-02T12:00:00Z', fetcher, sleep: async () => {} });
 
+test('Wix Analytics reads beyond the default 1000 rows and reconciles every page',async()=>{
+ const rows=Array.from({length:1001},(_,i)=>payment({[mapping.dimensions.provider]:{stringValue:`synthetic-${i}`}}));
+ const totals=moneyCells(200200,0,200200,0,1001);const offsets:number[]=[];
+ const result=await syncWixPaymentsAnalytics(config(queue([...prerequisites(),page(rows.slice(0,1000),0,totals),page(rows.slice(1000),1000,totals)],(url,init)=>{if(url.pathname.endsWith('/query-data'))offsets.push(JSON.parse(String(init.body)).paging.offset);} )));
+ assert.equal(result.status,'complete');assert.equal(result.counts.read,1001);
+ assert.equal(result.sourceTotals?.revenue,20020000);assert.deepEqual(offsets,[0,1000]);
+});
+
 test('Wix Analytics produces reconciled TTC cash, retains manual methods, and adds signed refunds once', async () => {
   let committed = 0;
   const cfg = config(queue([...prerequisites(), page()], (url, init) => {

@@ -10,9 +10,14 @@ try{
  // These local roles mirror Supabase. No login and no credentials are created.
  await db.query("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $$");
  for(const file of fs.readdirSync('supabase/migrations').filter(f=>/^\d+_.+\.sql$/.test(f)).sort()){
+  // This repository has one INTEGER registry. Reject raw CLI timestamps before SQL execution.
+  if(!/^\d{3}_/.test(file))throw new Error('NORMALIZE_CLI_SCAFFOLD_TO_SEQUENTIAL_MIGRATION_BEFORE_APPLICATION');
   const version=Number(file.split('_')[0]);
+  const sql=fs.readFileSync('supabase/migrations/'+file,'utf8');
+  const declared=sql.match(/INSERT INTO (?:public\.)?cockpit_migrations\s*\(version\)\s*VALUES\s*\((\d+)\)/i);
+  if(!declared||Number(declared[1])!==version)throw new Error('MIGRATION_FILENAME_REGISTRY_MISMATCH');
   const exists=(await db.query("SELECT to_regclass('public.cockpit_migrations') AS value")).rows[0].value;
   if(exists&&(await db.query('SELECT 1 FROM cockpit_migrations WHERE version=$1',[version])).rowCount){console.log(`Migration ${version} déjà appliquée.`);continue;}
-  await db.query(fs.readFileSync('supabase/migrations/'+file,'utf8'));console.log(`Migration ${version} appliquée localement.`);
+  await db.query(sql);console.log(`Migration ${version} appliquée localement.`);
  }
 }finally{await db.end();}

@@ -8,7 +8,8 @@ import { watchedSeconds, type WatchedInterval } from '../domain/video';
 import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
 import type {DetailsResponse} from './ui-contract';
 import { readWixReportedPeriod } from './sync-wix';
-import { readPostHogPeriod, applyPostHogQuiz } from './posthog-dashboard';
+import { applyStoredBusiness } from './business-dashboard';
+import { readPostHogPeriod, applyPostHogQuiz, postHogScopeFromFilters, readPostHogMasterclassPeriod, applyPostHogMasterclass } from './posthog-dashboard';
 export function parseFilters(url:URL):DashboardFilters {
  const today=Temporal.Now.plainDateISO('Europe/Paris');
  const from=url.searchParams.get('from')||today.with({day:1}).toString(),to=url.searchParams.get('to')||today.toString();
@@ -131,6 +132,9 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
  }
  const campaigns=[...new Map(data.revisions.map(r=>[`link:${r.campaign}`,{id:`link:${r.campaign}`,label:`Liens · ${r.campaign}`}])).values(),...new Map(data.ads.filter(r=>r.campaign_id).map(r=>[`meta:${r.campaign_id}`,{id:`meta:${r.campaign_id}`,label:`Meta · ${r.campaign_name||r.campaign_id}`}])).values(),...(data.adCatalog||[]).map(r=>({id:`meta-ad:${r.external_id}`,label:`Publicité · ${r.ad_name||r.external_id}`})),...new Map((data.adCatalog||[]).filter(r=>r.creative_id).map(r=>[`meta-creative:${r.creative_id}`,{id:`meta-creative:${r.creative_id}`,label:`Créative · ${r.creative_id}`}])).values()];
  const series=[];for(let day=Temporal.PlainDate.from(filters.from);Temporal.PlainDate.compare(day,Temporal.PlainDate.from(filters.to))<=0;day=day.add({days:1})){const d=day.toString();const dailyAds=ads.filter(r=>String(r.date).slice(0,10)===d);const cash=payments.filter(r=>parisDay(r.effective_at)===d);series.push({date:d,revenue:usingTransactions&&cash.length?cash.reduce((n,r)=>n+Number(r.gross_minor)*(r.kind==='refund'?-1:r.kind==='receipt'?1:Number(r.reversal_direction)),0)/100:null,spend:adReady&&dailyAds.length?sum(dailyAds,'spend_minor')/100:null});}
+ const cost=metrics.find(m=>m.id==='ad_customer_cost')!;pillars.find(p=>p.id==='acquisition')!.metrics.push(cost);metrics.splice(metrics.indexOf(cost),1);
+ metrics.push(metric('transactions','Transactions',usingTransactions?payments.filter(r=>r.kind==='receipt'&&Number(r.gross_minor)>0).length:null,'count','Reçus positifs','Paiements positifs distincts, échéances incluses. Remboursements séparés.','Observations transactionnelles à raccorder.',observedAt,'Le compteur des reçus positifs n’a pas encore été importé.'));
+ const mainOrder=['cash','contracted','transactions','spend','leads','appointments','new_clients','roas'];metrics.sort((a,b)=>mainOrder.indexOf(a.id)-mainOrder.indexOf(b.id));
  const response:DashboardResponse={mode,generatedAt:new Date().toISOString(),period:{from:filters.from,to:filters.to,timezone:'Europe/Paris'},metrics,pillars,journeys,details,series,campaigns,notices:[mode==='demo'?'Données synthétiques de test. Aucun chiffre de cette vue ne décrit BLG.':'Les valeurs absentes restent indisponibles ; un accès technique ne prouve pas une alimentation automatique.','Activité : dates effectives / prévues à Paris. Attribution : cohorte de contacts, 30 jours / 90 jours.',...(hasCampaign&&metaScoped?['Périmètre Meta : inscriptions sans raccord au compte publicitaire indisponibles.']:[])]};
  if(filters.compare){const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;const previous=buildDashboard(data,{...filters,from:Temporal.PlainDate.from(filters.from).subtract({days}).toString(),to:Temporal.PlainDate.from(filters.from).subtract({days:1}).toString(),compare:false},mode);response.comparisonLabel=`Période précédente : ${previous.period.from} au ${previous.period.to}`;for(const m of response.metrics)m.previous=mode==='demo'||(['cash','roas','ad_customer_cost'].includes(m.id)&&m.value!==null)?previous.metrics.find(p=>p.id===m.id)?.value??null:null;
   if(mode!=='demo'&&published){
@@ -162,8 +166,13 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
     response.series=response.series.map(row=>({...row,revenue:daily.get(row.date)??null}));
    }
   }
+  if(mode==='live')await applyStoredBusiness(response,db,selected,to);
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
-  if(mode==='live'&&withLists&&selected.source==='all'&&!campaign&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await readPostHogPeriod(db,selected.from,to),selected);
+  if(mode==='live'&&withLists){
+   const scope=postHogScopeFromFilters(selected);
+   if(scope&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await readPostHogPeriod(db,selected.from,to,{scope}),selected);
+   if(selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign)applyPostHogMasterclass(response,await readPostHogMasterclassPeriod(db,selected.from,to),selected);
+  }
   return {response,run:snapshot.run};
  }
  const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;
@@ -172,8 +181,11 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
  if(prior){
   current.response.comparisonLabel=`Période précédente : ${prior.response.period.from} au ${prior.response.period.to}`;
   const compatible=current.run&&prior.run&&['metric_definition_version','model','lookback_days','observation_horizon_days'].every(key=>current.run![key]===prior.run![key]);
-  for(const metric of current.response.metrics){
-   metric.previous=mode==='demo'||(metric.value!==null&&(['cash','spend','leads','appointments','contracted'].includes(metric.id)||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?prior.response.metrics.find(m=>m.id===metric.id)?.value??null:null;
+  const currentMetrics=[...current.response.metrics,...current.response.pillars.flatMap(p=>p.metrics)],priorMetrics=[...prior.response.metrics,...prior.response.pillars.flatMap(p=>p.metrics)];
+  for(const metric of currentMetrics){
+   const priorMetric=priorMetrics.find(m=>m.id===metric.id);
+   if(metric.completeness==='partial'||priorMetric?.completeness==='partial'){metric.previous=null;continue;}
+   metric.previous=mode==='demo'||(metric.value!==null&&(['cash','spend','leads','appointments','contracted','transactions'].includes(metric.id)||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?priorMetric?.value??null:null;
   }
  }
  return current.response;

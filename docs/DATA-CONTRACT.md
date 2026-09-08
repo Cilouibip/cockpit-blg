@@ -92,3 +92,11 @@ Le collecteur expire la session après 30 minutes d'inactivité. Les tentatives 
 Le serveur `publishScopedAttribution` lit les preuves persistées du compte, les transmet au préparateur pur, puis publie dans la même fonction atomique que le global. Les périmètres `meta:campagne`, `meta-ad:publicité` et `meta-creative:créative` exigent un coût explicite chaque jour, une couverture de compte complète et un profil cohérent. La somme compte doit correspondre au global ; aucun coût n'est sélectionné seulement parce qu'il a une conversion. Une créative exige les métadonnées complètes du compte. Le filtre tunnel attend un mapping versionné disponible.
 
 Le choix du dernier contact est effectué sur le global avant de retenir les personnes du périmètre. Les contacts candidats, l'ancre, les échéances et remboursements conservent leur filiation. Les publicités, coûts et synchronisations utilisés sont figés dans le manifeste. Le publisher direct refuse un scope filtré non passé par ce préparateur.
+
+## Extension métier 007
+
+`prospects.business` conserve une allowlist commerciale versionnée : dates brutes et date retenue, classification courante Notion, identité HMAC commune au backend (`emailIdentity`, namespace `blg-email-v1`), relations nécessaires. Une création seule ne date pas une acquisition. Les catégories inconnues restent inconnues et ne créent aucun événement de présence. Les contacts connus sont affichés à côté de la couverture non rapprochée ; le suivi reste descriptif et partiel.
+
+`notion_import_rows` est une préparation privée, page de cent au plus. Les identités peuvent être résolues dès la lecture sans émettre lead ou conversion. Les prospects et leur historique deviennent visibles dans une publication terminale atomique ; une omission archive le miroir sans supprimer les acquisitions connues. Les versions source antérieures échouent explicitement.
+
+Transactions Wix : métrique `wix_receipts_created`, profil `wix-positive-receipts-created-v1`, grain jour Paris et ID de reçu distinct ; remboursements séparés dans `wix_refunds_requested`. `createdAt` reste une création source, pas `effective_at`. Aucun import de `payments` n’est effectué par ce compteur. Le net Wix reste une définition source distincte du CA contracté et du cash global réconcilié.
