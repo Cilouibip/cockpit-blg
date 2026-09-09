@@ -1,0 +1,44 @@
+{
+  "name": "cockpit-blg",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3100",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 3100",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "setup:local": "node --import tsx scripts/setup-local.ts",
+    "test:db": "node --import tsx scripts/prepare-test-db.ts && node --import tsx --test tests/postgres.integration.ts tests/dashboard-sql.integration.ts tests/pagination.integration.ts tests/source-window.integration.ts",
+    "migrate:local": "node --import tsx scripts/migrate-local.ts",
+    "seed:local": "node --import tsx scripts/seed-demo.ts",
+    "test:http": "node --import tsx --test tests/http.integration.ts",
+    "test:browser": "node --import tsx scripts/browser-check.ts",
+    "access:prepare": "node --import tsx scripts/create-private-access.ts",
+    "test:pagination-ui": "node --import tsx tests/ui-pagination.integration.ts",
+    "test:results-ui": "node --import tsx tests/results-ui.integration.ts"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
+    "next": "^16.3.4",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "server-only": "^0.0.1",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.5.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  },
+  "type": "module"
+}

@@ -1,0 +1,20 @@
+{
+  "source": "Atelier A \u2014 application-direction-a",
+  "copiedOn": "2026-09-07",
+  "families": [
+    "A.11.4",
+    "A.10.3",
+    "A.04.2",
+    "A.08"
+  ],
+  "files": {
+    "atelier.css": "060b91ecec67d98142b924df576b34bcfbb7d9d50a6eec1c648087d52d4bdc1a",
+    "dashboards.css": "9393ed586d2e6cf955c2d127997d2b54ad9ce3abcde3b9a14d6771fc30363940",
+    "tableaux.css": "089edcabf255455269dffdcf0221e988b876cc28505d8e6c1beabeab7dadf6a9",
+    "hierarchie.css": "c45ade984035b25bf99cdfb13f14f06ac35dfe9da673f288b5e611b41472d66d",
+    "retours.css": "4f303d59efb68a03f1e1de7d739713e68ecd8d115bbbfef961064d07cade13c2",
+    "formulaires.css": "ada745b753aec1ee24418ce1da0333798632620100866d99de82312689491e56",
+    "navigation.css": "bd409867ee8c123737fbbdd2d3cf055c0a9fd1213fe94a6c33a682549c2fa8ec",
+    "lumiere.css": "711911649f142752e0ce00cff057d08a0a2d0978dbcf85353f501dea0380abce"
+  }
+}

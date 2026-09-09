@@ -17,3 +17,8 @@ playwright-report/
 *.pem
 *.key
 *.log
+
+*.tsbuildinfo
+
+supabase/.temp/
+supabase/.branches/
