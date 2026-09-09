@@ -22,8 +22,8 @@ const meta=(account='test-meta')=>({source:'meta',accountId:account,adId:'90001'
 const finish=(run:string,status='complete')=>db.query('SELECT finish_sync($1,$2,1,0,true,NULL)',[run,status]);
 async function payment(kind='receipt',amount=60000,original:string|null=null,currency='EUR'){return (await db.query("INSERT INTO payments(source,source_namespace,external_id,kind,status,effective_at,gross_minor,currency,currency_exponent,tax_basis,source_locator,reconciliation_state,original_payment_id,connector_version) VALUES('wix','test-payments',$1,$2,'settled','2026-09-02T10:00Z',$3,$4,2,'tax_inclusive','synthetic','reconciled',$5,'test') RETURNING *",[randomUUID(),kind,amount,currency,original])).rows[0];}
 
-test('migration PostgreSQL17 complète, 22 tables RLS, droits client refusés tables/vues/RPC',async()=>{
- const rows=(await db.query("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r'")).rows;assert.equal(rows.length,22);assert.ok(rows.every(r=>r.relrowsecurity));
+test('migration PostgreSQL17 complète, 23 tables RLS, droits client refusés tables/vues/RPC',async()=>{
+ const rows=(await db.query("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r'")).rows;assert.equal(rows.length,23);assert.ok(rows.every(r=>r.relrowsecurity));
  for(const role of ['anon','authenticated']){await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query('SELECT * FROM people');},'42501');await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query('SELECT * FROM v_cash_movements');},'42501');await fails(async()=>{await db.query('SET LOCAL ROLE '+role);await db.query("SELECT consume_rate_limit($1,1,60)",['b'.repeat(64)]);},'42501');}
  await db.query('SET LOCAL ROLE service_role');assert.equal((await db.query('SELECT count(*) FROM people')).rows[0].count,'0');
 });
