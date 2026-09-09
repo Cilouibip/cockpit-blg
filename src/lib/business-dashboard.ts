@@ -3,6 +3,8 @@ import {AppError} from './errors';
 import type {DashboardResponse,DashboardFilters,Metric} from './ui-contract';
 import {readWixTransactionCount} from './wix-transaction-counts';
 import {readMetaAccountPeriod} from './meta-account-dashboard';
+import {readNotionCommerceReport} from './notion-commerce-storage';
+import {readLeadDefinitions} from './lead-entry-dashboard';
 export interface BusinessRollup {
  available:boolean;observedAt:string|null;sourceRows:number;
  leads:{rows:number;known:number;unresolved:number;creationOnly:number;archivedRows?:number};
@@ -35,6 +37,21 @@ export async function applyStoredBusiness(response:DashboardResponse,db:Database
  let notion=missing;
  if(namespace)try{notion=await db.rpc<BusinessRollup>('cockpit_business_rollup',{p_namespace:namespace,p_from:filters.from,p_to:to});}catch(e){if(!(e instanceof AppError&&e.code==='schema_missing'))throw e;}
  if(namespace)applyNotionBusiness(response,notion,filters);
+  const leadDefinitions=await readLeadDefinitions(db,filters,to);
+ if(leadDefinitions){
+  response.leadDefinitions=leadDefinitions;
+  const leadMetric=response.metrics.find(metric=>metric.id==='leads'),value=all&&leadDefinitions.available?leadDefinitions.firstKnownAcquisitions:null;
+  if(leadMetric)Object.assign(leadMetric,{value,source:'Wix + Notion · premiers contacts',updatedAt:leadDefinitions.observedAt,definition:'Personnes dont le premier contact connu avec BLG tombe dans la période. Les demandes répétées sont conservées mais ne créent pas un nouveau lead.',coverage:leadDefinitions.available?`${leadDefinitions.requestCount} demandes source · ${leadDefinitions.peopleWithRequests} personnes avec demande · ${leadDefinitions.knownBeforePeriod} déjà connues avant la période · ${leadDefinitions.unresolvedDatedRequests} demandes datées sans identité résolue.`:leadDefinitions.reason,completeness:leadDefinitions.available?'partial':undefined,unavailableReason:value===null?leadDefinitions.reason:undefined});
+ }
+ const commerce=await readNotionCommerceReport(db,filters);
+ if(commerce){
+  response.commerce=commerce;
+  const clientMetric=response.metrics.find(metric=>metric.id==='new_clients');
+  if(clientMetric){
+   const value=commerce.available&&all?commerce.counts!.firstAccompanimentsStarted:null;
+   Object.assign(clientMetric,{value,source:'Notion · démarrages Client',updatedAt:commerce.observedAt,definition:'Personnes qui commencent leur premier accompagnement à leur Démarrage Client effectif. Les binômes sont inclus.',coverage:commerce.available?`${commerce.counts!.firstAccompanimentsStarted} démarrages · ${commerce.coverage!.undatedClientStarts} sans date · ${commerce.coverage!.futureClientStarts} à venir non comptés.`:commerce.reason,completeness:commerce.available?'partial':undefined,unavailableReason:value===null?commerce.reason:undefined});
+  }
+ }
  const transactionIndex=response.metrics.findIndex(m=>m.id==='transactions');
  if(transactionIndex>=0){
   if(all)response.metrics[transactionIndex]=await readWixTransactionCount(db,filters.from,to);

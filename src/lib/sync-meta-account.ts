@@ -10,14 +10,14 @@ export function metaAccountEnvironment(env:MetaEnvironment=process.env) {
 }
 export function metaDayStart(day:string,timezone:string){return Temporal.PlainDate.from(day).toZonedDateTime({timeZone:timezone,plainTime:'00:00'}).toInstant().toString();}
 
-export async function syncMetaAccountPeriod(from:string,to:string,options:{db?:Database;env?:MetaEnvironment;reader?:typeof readMetaAccountAnalytics}={}) {
+export async function syncMetaAccountPeriod(from:string,to:string,options:{db?:Database;env?:MetaEnvironment;reader?:typeof readMetaAccountAnalytics;fetcher?:typeof fetch}={}) {
   const env=options.env??process.env,config=metaAccountEnvironment(env),db=options.db??database();
   metaAccountDays(from,to);
   if(env.COCKPIT_MODE==='demo')return {status:'not_configured',runId:null,counts:{read:0,accepted:0,rejected:0,pages:0},coverage:{complete:false,reason:'Mode démonstration.'}};
   if(!config.accountId||!config.accessToken)return {status:'not_configured',runId:null,counts:{read:0,accepted:0,rejected:0,pages:0},coverage:{complete:false,reason:'Connexion Meta non configurée.'}};
   const runId=await db.rpc<string>('begin_sync_stream',{p_source:'meta',p_namespace:config.accountId,p_from:metaDayStart(from,config.timezone),p_to:metaDayStart(to,config.timezone),p_profile:META_ACCOUNT_PROFILE,p_coverage_kind:'aggregate_period',p_stream:META_ACCOUNT_STREAM,p_date_from:from,p_date_to:to});
   try {
-    const report=await(options.reader??readMetaAccountAnalytics)({...config,from,to});
+    const report=await(options.reader??readMetaAccountAnalytics)({...config,from,to,fetcher:options.fetcher});
     if(report.coverage.complete&&report.status==='complete'){
       const rows:Row[]=[];
       for(const day of report.days){

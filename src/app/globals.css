@@ -7,6 +7,7 @@
 @import url('../../public/kit/hierarchie.css') layer(kit);
 @import url('../../public/kit/dashboards.css') layer(kit);
 @import url('../components/results.css');
+@import url('../components/commercial.css');
 
 * { box-sizing: border-box; }
 html { scroll-behavior: auto; }

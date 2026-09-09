@@ -73,7 +73,7 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
   metric('spend','Dépenses publicitaires',spend,'eur','Meta Ads · publicité / jour','Somme des dépenses des annonces du périmètre, sans addition des profils de conversions.',adReady?observed:'Aucune partition Meta publiée et compatible.',latestSource('meta'),spendScope?'Aucune mesure reçue ; une réponse vide ne signifie pas zéro.':'Les dépenses ne sont pas répartissables selon ce filtre.'),
   metric('leads','Leads uniques',leadValue,'count','Inscriptions serveur vérifiées','Personnes rapprochées ayant une inscription réussie dans la période. Quiz et masterclass ne s’additionnent pas.',`${leads.length} inscriptions · ${unresolved} non rapprochées. ${observed}`,leads.map(r=>time(r.observed_at||r.registered_at)).sort().at(-1)||null,!leadAssignable?'Rattachement des inscriptions à cette campagne Meta non établi.':unresolved?'Des inscriptions restent sans identité résolue.':'Aucune inscription serveur reçue.'),
   metric('appointments','RDV réalisés',apptValue,'count','Occurrences commerciales prouvées','Rendez-vous distincts avec preuve de présence ; activité classée ici par date prévue.',`${attended.length} réalisés · ${noShow.length} absents · ${appointments.filter(r=>['unknown','scheduled'].includes(String(r.status))).length} issues inconnues. Les emplacements Notion courants sont séparés.`,latestSource('notion'),financialFilter?'Rattachement à la source ou campagne non établi.':'Aucune présence prouvée dans une occurrence distincte.'),
-  metric('new_clients','Nouveaux clients',null,'count','Premier encaissement prouvé','Première acquisition avec historique antérieur exhaustif ou preuve source équivalente.','Historique antérieur et identité nécessaires.',observedAt,'Le premier paiement importé ne prouve pas un nouveau client.'),
+  metric('new_clients','Nouveaux clients',null,'count','Premier accompagnement déclaré','Personnes qui commencent leur premier accompagnement ; les binômes sont inclus. Un renouvellement ne crée pas un nouveau client.','Rapport commercial à publier.',null,'Les premiers accompagnements ne sont pas encore publiés.'),
   metric('roas','ROAS attribué',null,'ratio','Cohorte d’acquisition · dernier contact non direct','Dernier contact non direct à 30 jours ; revenu à 90 jours depuis le contact, corrigé des remboursements connus.','Aucun calcul d’attribution publié pour ce périmètre.',null,'Paiements, première acquisition, identité, dépenses et couverture à réconcilier.'),
   metric('ad_customer_cost','Coût pub. / nouveau client',null,'eur','Cohorte d’acquisition','Toute la dépense de la cohorte / nouveaux clients prouvés. Distinct du CAC complet.','Acquisitions et coûts non rapprochés.',null,'Nouveaux clients de la cohorte non prouvés.'),
  ];
@@ -168,7 +168,7 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
   }
   if(mode==='live')await applyStoredBusiness(response,db,selected,to);
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
-  if(mode==='live'&&withLists){
+  if(mode==='live'){
    const scope=postHogScopeFromFilters(selected);
    if(scope&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await readPostHogPeriod(db,selected.from,to,{scope}),selected);
    if(selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign)applyPostHogMasterclass(response,await readPostHogMasterclassPeriod(db,selected.from,to),selected);
@@ -185,7 +185,8 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
   for(const metric of currentMetrics){
    const priorMetric=priorMetrics.find(m=>m.id===metric.id);
    if(metric.completeness==='partial'||priorMetric?.completeness==='partial'){metric.previous=null;continue;}
-   metric.previous=mode==='demo'||(metric.value!==null&&(['cash','spend','leads','appointments','contracted','transactions'].includes(metric.id)||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?priorMetric?.value??null:null;
+   const posthogComparable=metric.id==='arrivals'&&metric.source.startsWith('PostHog')&&priorMetric?.source===metric.source&&metric.completeness==='complete'&&priorMetric.completeness==='complete';
+   metric.previous=mode==='demo'||(metric.value!==null&&(posthogComparable||['cash','spend','leads','appointments','contracted','transactions'].includes(metric.id)||(['roas','ad_customer_cost'].includes(metric.id)&&compatible)))?priorMetric?.value??null:null;
   }
  }
  return current.response;

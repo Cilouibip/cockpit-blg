@@ -9,7 +9,7 @@ interface Interval {from:string;to:string;read:number;cursor?:string;depth?:numb
 interface Claim {busy:boolean;runId:string;lease?:string;checkpoint?:{intervals:Interval[]};from?:string;to?:string;rowsRead?:number}
 /** One short worker invocation. Stable bounds + page staging survive interruption;
  * only the terminal database transaction replaces the published business mirror. */
-export async function synchronizeNotionChunk(options:{db?:Database;env?:Record<string,string|undefined>;reader?:(config:NotionConfig)=>ReturnType<typeof syncNotion>;maxPages?:number}={}) {
+export async function synchronizeNotionChunk(options:{db?:Database;env?:Record<string,string|undefined>;reader?:(config:NotionConfig)=>ReturnType<typeof syncNotion>;maxPages?:number;fetcher?:typeof fetch}={}) {
  const env=options.env??process.env,db=options.db??database();
  if(env.COCKPIT_MODE==='demo')throw new AppError('La synchronisation réelle est désactivée en démonstration.',409,'demo_mode');
  if(!env.NOTION_TOKEN||!env.NOTION_DATA_SOURCE_ID)throw new AppError('La connexion Notion doit être renseignée.',503,'source_missing');
@@ -21,7 +21,7 @@ export async function synchronizeNotionChunk(options:{db?:Database;env?:Record<s
  try {
   for(;pages<Math.min(options.maxPages??3,5)&&intervals.length;pages++){
    const interval=intervals[0];
-   const result=await (options.reader??syncNotion)({token:env.NOTION_TOKEN,dataSourceId:env.NOTION_DATA_SOURCE_ID,fields:BLG_NOTION_FIELDS,mappingVersion:NOTION_BUSINESS_VERSION,identitySecret:env.IDENTITY_HMAC_SECRET,timezone:'Europe/Paris',queryTimestamp:'created_time',from:interval.from,to:interval.to,cursor:interval.cursor,maxPages:1});
+   const result=await (options.reader??syncNotion)({token:env.NOTION_TOKEN,dataSourceId:env.NOTION_DATA_SOURCE_ID,fields:BLG_NOTION_FIELDS,mappingVersion:NOTION_BUSINESS_VERSION,identitySecret:env.IDENTITY_HMAC_SECRET,timezone:'Europe/Paris',queryTimestamp:'created_time',from:interval.from,to:interval.to,cursor:interval.cursor,maxPages:1,fetcher:options.fetcher});
    if(result.counts.rejected||result.safeError&&result.safeError!=='PAGE_LIMIT_REACHED'||!result.counts.pages)throw new AppError('La lecture Notion reprendra à la dernière page enregistrée.',502,result.safeError??'notion_page_failed');
    read+=result.counts.read;interval.read+=result.counts.read;
    if(result.checkpoint.cursor)interval.cursor=result.checkpoint.cursor;

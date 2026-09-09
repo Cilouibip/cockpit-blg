@@ -33,11 +33,12 @@ try {
   pass('one discreet demo indication opens its explanation and returns focus');
   const cash = page.getByRole('button',{name:'Voir le détail : CA encaissé',exact:true}); await cash.focus(); await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog'); await expect(dialog).toBeVisible(); assert.equal(await dialog.locator('details[open]').count(),0); await expect(dialog).toContainText('remboursements déduits');
-  await dialog.locator('summary').filter({hasText:'Détails du calcul'}).click(); await expect(dialog).toContainText('3600.00'); await expect(dialog).toContainText('150.00');
-  await dialog.locator('summary').filter({hasText:'Source et mise à jour'}).click(); await expect(dialog).toContainText('Dernière mise à jour');
+  assert.equal(await dialog.locator('details').count(),0);
+  await expect(dialog.locator('.a-d-value')).toHaveText(await page.locator('[data-metric="cash"] .a-d-value').innerText());
+  await expect(dialog.locator('.results-source')).toBeVisible();
   await shot('results-cash-detail');
   for(let i=0;i<10;i++){await page.keyboard.press(i%2?'Tab':'Shift+Tab'); assert.equal(await dialog.evaluate(node=>node.contains(document.activeElement)),true);}
-  await page.keyboard.press('Escape'); await expect(cash).toBeFocused(); pass('KPI drawer keeps cash/refund definition, progressive calculation/source, focus trap and Escape');
+  await page.keyboard.press('Escape'); await expect(cash).toBeFocused(); pass('KPI drawer preserves its displayed value, concise source, focus trap and Escape without hidden audit sections');
   await page.getByRole('button',{name:/^Filtres/}).click(); await expect(page.getByLabel('Source',{exact:true})).toBeVisible(); await page.getByLabel('Source',{exact:true}).selectOption('paid'); await page.getByLabel('Tunnel',{exact:true}).selectOption('quiz');
   const request = page.waitForResponse(r=>r.url().includes('/api/dashboard?')&&r.url().includes('source=paid')&&r.url().includes('tunnel=quiz'));
   await page.getByRole('button',{name:'Appliquer',exact:true}).click(); assert.equal((await request).status(),200); await ready(); await expect(page.getByRole('button',{name:/^Filtres/})).toHaveAttribute('aria-expanded','false'); await expect(page.locator('.results-count')).toHaveText('2');
@@ -48,8 +49,8 @@ try {
   await page.locator('.a-d-chart-point').first().focus(); await expect(page.locator('.results-chart-readout')).toContainText('€'); await page.getByRole('button',{name:'Dépenses publicitaires',exact:true}).click(); await expect(page.getByRole('button',{name:'Dépenses publicitaires',exact:true})).toHaveAttribute('aria-pressed','true');
   await page.locator('.a-d-values summary').click(); assert.equal(await page.locator('.a-d-data-table tbody tr').count(),7); await page.locator('.a-d-values summary').click(); pass('curve keyboard readout, series switch and daily values work');
   const conversion = page.getByRole('button',{name:/^03 Conversion/}); await conversion.focus(); await page.keyboard.press('Enter'); await expect(conversion).toHaveAttribute('aria-expanded','true');
-  await page.getByRole('button',{name:/Taux de présence aux rendez-vous/}).click(); await page.getByRole('dialog').locator('summary').filter({hasText:'Détails du calcul'}).click(); await expect(page.getByRole('dialog')).toContainText('RDV réalisés + absences'); await expect(page.getByRole('dialog')).toContainText('66,7'); await shot('results-attendance-detail'); await page.keyboard.press('Escape');
-  await page.getByRole('button',{name:/Résultats par campagne et par lien/}).click(); await expect(page.locator('.results-table')).toBeVisible(); await page.locator('.results-table .a-t-name').first().click(); await expect(page.getByRole('dialog').locator('details')).not.toHaveAttribute('open',''); await page.keyboard.press('Escape'); await shot('results-expanded',true); pass('pillar keyboard accordion, explicit attendance denominator and campaign detail');
+  await page.getByRole('button',{name:/Taux de présence aux rendez-vous/}).click(); assert.equal(await page.getByRole('dialog').locator('details').count(),0); await expect(page.getByRole('dialog')).toContainText('66,7'); await shot('results-attendance-detail'); await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:/Résultats par campagne et par lien/}).click(); await expect(page.locator('.results-table')).toBeVisible(); await page.locator('.results-table .a-t-name').first().click(); assert.equal(await page.getByRole('dialog').locator('details').count(),0); await page.keyboard.press('Escape'); await shot('results-expanded',true); pass('pillar keyboard accordion, unchanged attendance rate and campaign detail without audit sections');
   for(const width of [390,320]) {
     await page.setViewportSize({width,height:844}); await page.evaluate(()=>scrollTo(0,0)); await overflow(); await shot(`results-mobile-${width}`,true); await cash.click(); await expect(dialog).toBeVisible(); await overflow(); await page.keyboard.press('Escape');
     await expect(page.locator('.results-mobile-list')).toBeVisible();

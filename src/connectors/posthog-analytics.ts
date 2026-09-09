@@ -9,7 +9,7 @@ import type { PostHogConfig } from './posthog';
  * https://posthog.com/docs/sql/aggregations
  * Reviewed technical quiz property: numero = question index + 1, not an answer.
  */
-export const POSTHOG_ANALYTICS_VERSION = 'posthog-production-aggregates-v1';
+export const POSTHOG_ANALYTICS_VERSION = 'posthog-production-aggregates-v2';
 export const POSTHOG_PRODUCTION_HOSTS = ['quizz.blg-studio.fr', 'www.blg-studio.fr'] as const;
 export const POSTHOG_JOURNEY_EVENTS = ['$pageview', 'quiz_demarre', 'question_repondue', 'ecran_coordonnees', 'resultat_affiche', 'coordonnees_envoyees', 'calendrier_affiche', 'enregistrement_ok', 'clic_vers_quiz', 'video_lancee', 'rendezvous_confirme'] as const;
 type EventName = typeof POSTHOG_JOURNEY_EVENTS[number];
@@ -73,6 +73,25 @@ const session = "coalesce(toString(properties.$session_id), '')";
 const question = "if(match(coalesce(toString(properties.numero), ''), '^([1-9][0-9]?|100)$'), toIntOrZero(toString(properties.numero)), 0)";
 const countColumns = ['events', 'visitors', 'sessions', 'events_with_visitor_id', 'events_with_session_id'];
 
+/** Match the link generator's explicit media and IDs. A named UTM campaign is
+ * not a Meta ID; numeric UTM IDs remain readable for historical links.
+ * Conflicting valid IDs remain unassigned; unresolved macros are not IDs. */
+export function postHogAttributionExpressions() {
+  const property = (key:string) => `coalesce(toString(properties.${key}), '')`;
+  // SDK page events can retain the URL without copying arbitrary URL keys to
+  // custom properties. Read only these allowed dimensions from that URL.
+  const urlParameter = (key:string) => `decodeURLComponent(extractURLParameter(${url}, '${key}'))`;
+  const dimension = (key:string) => `coalesce(nullIf(${property(key)}, ''), ${urlParameter(key)}, '')`;
+  const medium = `lower(${dimension('utm_medium')})`;
+  const candidates = (keys:string[]) => keys.flatMap(key => [property(key), urlParameter(key)]);
+  const ids = (keys:string[]) => `arrayDistinct(arrayFilter(id -> match(id, '^[0-9]{1,30}$'), [${candidates(keys).join(', ')}]))`;
+  const explicit = ids(['meta_campaign_id','campaign_id']), legacy = ids(['utm_campaign']);
+  return {
+    sourceClass: `multiIf(${medium} IN ('paid','cpc','ppc','paid_social','paid-search'),'paid',${medium} IN ('organic','social','email','referral','organic_social','organic_video'),'organic','unknown')`,
+    campaignId: `multiIf(length(${explicit}) > 1, '', length(${explicit}) = 1, arrayElement(${explicit}, 1), length(${legacy}) = 1, arrayElement(${legacy}, 1), '')`,
+  };
+}
+
 function aggregateSql(sessionAvailable: boolean, condition = '1 = 1') {
   const sessionCondition = sessionAvailable ? `(${condition} AND ${session} != '')` : '1 = 0';
   return `countIf(${condition}) AS events,
@@ -91,9 +110,8 @@ export function postHogAggregateQueries(from: string, to: string, schema: PostHo
   if(!client.productionHosts.length||client.productionHosts.some(x=>!/^([a-z0-9-]+\.)+[a-z0-9-]+$/.test(x)))throw new ConnectorError('INVALID_POSTHOG_CLIENT');
   const production=`(${host} IN (${client.productionHosts.map(literal).join(', ')}) AND NOT ${hostConflict})`;
   const eligible=`(${production} AND NOT ${testTraffic})`;
-  const medium="lower(coalesce(toString(properties.utm_medium), ''))";
-  const sourceClass=`multiIf(${medium} IN ('paid','cpc','ppc','paid_social','paid-search'),'paid',${medium} IN ('organic','social','email','referral'),'organic','unknown')`;
-  const scopeFilter=(scope.source==='all'?'':` AND ${sourceClass} = ${literal(scope.source)}`)+(scope.campaignId?` AND coalesce(toString(properties.utm_campaign),'') = ${literal(scope.campaignId)}`:'');
+  const {sourceClass,campaignId}=postHogAttributionExpressions();
+  const scopeFilter=(scope.source==='all'?'':` AND ${sourceClass} = ${literal(scope.source)}`)+(scope.campaignId?` AND ${campaignId} = ${literal(scope.campaignId)}`:'');
   const interval = `timestamp >= fromUnixTimestamp64Milli(${first.epochMilliseconds}) AND timestamp < fromUnixTimestamp64Milli(${last.epochMilliseconds}) AND event IN (${eventList})${scopeFilter}`;
   const where = `FROM events WHERE ${interval} AND ${eligible}`;
   return {

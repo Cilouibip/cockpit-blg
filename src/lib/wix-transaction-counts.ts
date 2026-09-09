@@ -23,7 +23,7 @@ export function countPositiveWixReceipts(batch:WixTransactionsBatch){
  }
  return {days,firstDay,included,excluded};
 }
-export async function synchronizeWixTransactionCounts(from:string,to:string,options:{db?:Database;env?:NodeJS.ProcessEnv;reader?:typeof syncWixTransactions}={}){
+export async function synchronizeWixTransactionCounts(from:string,to:string,options:{db?:Database;env?:NodeJS.ProcessEnv;reader?:typeof syncWixTransactions;fetcher?:typeof fetch}={}){
  const env=options.env??process.env,db=options.db??database(),namespace=env.WIX_SITE_ID;
  if(env.COCKPIT_MODE==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
  if(!namespace||!env.WIX_API_KEY)throw new AppError('La connexion Wix doit être renseignée.',503,'source_missing');
@@ -34,7 +34,7 @@ export async function synchronizeWixTransactionCounts(from:string,to:string,opti
  let done=false;
  try{
   // Full parent traversal establishes the first observed Wix day and includes old receipts' refunds.
-  const result=await(options.reader??syncWixTransactions)({apiKey:env.WIX_API_KEY,siteId:namespace,from:'1970-01-01T00:00:00Z',to:end,currencyExponents:{EUR:2},pageSize:1000,maxPages:20});
+  const result=await(options.reader??syncWixTransactions)({apiKey:env.WIX_API_KEY,siteId:namespace,from:'1970-01-01T00:00:00Z',to:end,currencyExponents:{EUR:2},pageSize:1000,maxPages:20,fetcher:options.fetcher});
   const complete=result.status==='complete'&&result.snapshot.paginationComplete&&result.snapshot.fromBeginning;
   if(complete){
    const counts=countPositiveWixReceipts(result),rows:Row[]=[];

@@ -20,7 +20,7 @@
     "test:results-ui": "node --import tsx tests/results-ui.integration.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
   },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1",

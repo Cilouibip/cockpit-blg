@@ -61,9 +61,6 @@
 #atelier-a .results-table .a-t-name { white-space:normal; overflow-wrap:anywhere; min-height:44px; }
 #atelier-a .results-mobile-list { display:none; }
 #atelier-a .results-table-scroll { max-width:100%; overflow:auto; }
-#atelier-a .results-page-notes { color:var(--a-muted); font-size:13px; }
-#atelier-a .results-page-notes summary { cursor:pointer; min-height:44px; padding:12px 0; }
-#atelier-a .results-page-notes p { max-width:850px; margin:12px 0; }
 #atelier-a .results-empty { padding:24px 0; color:var(--a-muted); }
 #atelier-a .results-drawer { position:fixed; inset:16px 16px 16px auto; margin:0; width:min(520px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); height:calc(100dvh - 32px); font-size:14px; line-height:1.7; }
 #atelier-a .results-drawer .a-r-dialog-head { position:sticky; top:0; z-index:1; background:#fff; }
@@ -73,11 +70,9 @@
 #atelier-a .results-drawer p { margin:12px 0 20px; }
 #atelier-a .results-drawer .results-close { flex-shrink:0; font-size:23px; min-width:44px; padding:0; }
 #atelier-a .results-reason { padding-left:12px; border-left:2px solid #cbd0d9; color:var(--a-muted); }
-#atelier-a .results-detail-section { border-top:1px solid var(--a-line); margin-top:20px; }
-#atelier-a .results-detail-section summary { display:flex; align-items:center; justify-content:space-between; list-style:none; cursor:pointer; padding:16px 0; min-height:52px; font-weight:550; gap:12px; }
-#atelier-a .results-detail-section summary::-webkit-details-marker { display:none; }
-#atelier-a .results-detail-section[open] summary svg { transform:rotate(180deg); }
-#atelier-a .results-detail-section .a-d-detail-facts { margin-top:0; }
+#atelier-a .results-drawer .results-drawer-period { margin:0 0 20px; color:var(--a-muted); font-size:12px; }
+#atelier-a .results-drawer .results-drawer-description { color:var(--a-ink); font-size:16px; line-height:1.6; }
+#atelier-a .results-drawer .results-source { display:flex; flex-wrap:wrap; gap:4px 12px; border-top:1px solid var(--a-line); padding-top:20px; margin-top:28px; color:var(--a-muted); font-size:12px; }
 @media(max-width:1150px) {
   .blg-app[data-view='results'] .blg-main { padding:24px; }
   #atelier-a .results-kpis .a-d-card { padding-inline:18px; }

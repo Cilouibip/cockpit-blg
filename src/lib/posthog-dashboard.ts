@@ -13,7 +13,7 @@ export function postHogScopeFromFilters(filters:Pick<DashboardFilters,'source'|'
 }
 
 const pending=new Map<string,Promise<PostHogAnalyticsReport|null>>();
-export async function postHogPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogAnalytics;scope?:PostHogDimensionScope;client?:PostHogClientProfile}={}):Promise<PostHogAnalyticsReport|null> {
+export async function postHogPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogAnalytics;scope?:PostHogDimensionScope;client?:PostHogClientProfile;fetcher?:typeof fetch}={}):Promise<PostHogAnalyticsReport|null> {
  if(!process.env.POSTHOG_PERSONAL_API_KEY||!process.env.POSTHOG_HOST||!process.env.POSTHOG_PROJECT_ID)return null;
  // Explicit refresh must query the source again, including after a failure.
  // Concurrent requests in one instance still share their in-flight work.
@@ -25,7 +25,7 @@ export async function postHogPeriod(from:string,to:string,options:{db?:Database;
   let runId:string|undefined;
   try {
    runId=await db.rpc<string>('begin_sync_stream',{p_stream:'quiz_observations',p_source:'posthog',p_namespace:namespace,p_from:start,p_to:end,p_profile:profile,p_coverage_kind:'aggregate_period',p_date_from:from,p_date_to:to});
-   const report=await (options.reader??readPostHogAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,scope,client});
+   const report=await (options.reader??readPostHogAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,scope,client,fetcher:options.fetcher});
    if(report.coverage.queryComplete){
     const rows:Row[]=[];
     const add=(key:string,dimensions:Row,counts:{events:number;visitors:number|null;sessions:number|null})=>{
@@ -93,9 +93,10 @@ export function applyPostHogQuiz(data:DashboardResponse,report:DashboardPostHogR
  if(Date.parse(report.from)!==Date.parse(startOfParisDay(filters.from))||Date.parse(report.to)!==Date.parse(startOfParisDay(Temporal.PlainDate.from(filters.to).add({days:1}).toString())))return data;
  const quizHost=(report.client??postHogClientProfile()).quizHost;
  const events=report.byHostEvent.filter(row=>row.host===quizHost);
- if(!events.length)return data;
+ const measuredEmpty=report.status==='empty'&&report.byHostEvent.length===0&&report.byEvent.length===0;
+ if(!events.length&&!measuredEmpty)return data;
  const get=(event:string)=>events.find(row=>row.event===event);
- const step=(id:string,label:string,event:string):JourneyStep=>({id,label,value:get(event)?.visitors??null,source:'PostHog',coverage:'Visiteurs identifiés distincts sur la période'});
+ const step=(id:string,label:string,event:string):JourneyStep=>({id,label,value:measuredEmpty?0:get(event)?.visitors??null,source:'PostHog',coverage:measuredEmpty?'Rapport complet : aucun événement mesuré dans ce périmètre.':'Visiteurs identifiés distincts sur la période'});
  const quiz={id:'quiz',title:'Quiz',description:'Visiteurs identifiés distincts à chaque étape du quiz ; sélection appliquée aux propriétés UTM observées.',steps:[
   step('arrival','Page du quiz vue','$pageview'),step('start','Quiz commencé','quiz_demarre'),
   step('contacts','Écran coordonnées vu','ecran_coordonnees'),step('sent','Coordonnées envoyées','coordonnees_envoyees'),
@@ -104,16 +105,17 @@ export function applyPostHogQuiz(data:DashboardResponse,report:DashboardPostHogR
  ]};
  const questionsOnlyOnQuiz=!report.byHostEvent.some(row=>row.event==='question_repondue'&&row.host!==quizHost&&row.events>0);
  data.journeys=data.journeys.map(j=>j.id==='quiz'?quiz:j.id==='questions'&&questionsOnlyOnQuiz?{...j,description:'Visiteurs ayant répondu, par question.',steps:report.questions.filter(q=>q.questionNumber!==null).map(q=>({id:`q${q.questionNumber}`,label:`Question ${q.questionNumber}`,value:q.visitors,source:'PostHog',coverage:'Visiteurs distincts ayant répondu'}))}:j);
- const pages=filters.tunnel==='quiz'?get('$pageview'):report.byEvent.find(row=>row.event==='$pageview');
+ const pages=measuredEmpty?{sessions:0}:filters.tunnel==='quiz'?get('$pageview'):report.byEvent.find(row=>row.event==='$pageview');
  if(pages?.sessions!==null&&pages?.sessions!==undefined){
-  data.pillars=data.pillars.map(p=>p.id!=='content'?p:{...p,metrics:p.metrics.map(m=>m.id!=='arrivals'?m:{...m,value:pages.sessions,source:filters.tunnel==='quiz'?'PostHog · quiz':'PostHog · sites de production',definition:'Sessions PostHog ayant vu une page du périmètre sur la période.',coverage:'Hôtes de production ; tests identifiables exclus ; source et campagne issues des UTM observées. Les sessions sans identifiant SDK restent hors du compte.',updatedAt:report.observedAt,latestAttempt:report.latestAttempt,unavailableReason:undefined})});
+  const closed=filters.to<Temporal.Now.plainDateISO('Europe/Paris').toString()&&Date.parse(report.observedAt??'')>=Date.parse(report.to);
+  data.pillars=data.pillars.map(p=>p.id!=='content'?p:{...p,metrics:p.metrics.map(m=>m.id!=='arrivals'?m:{...m,value:pages.sessions,source:filters.tunnel==='quiz'?'PostHog · quiz':'PostHog · sites de production',definition:'Sessions PostHog ayant vu une page du périmètre sur la période.',coverage:measuredEmpty?'Rapport complet : aucun événement mesuré sur les pages configurées et ce filtre.':'Hôtes de production ; tests identifiables exclus ; source et campagne issues des UTM observées. Les sessions sans identifiant SDK restent hors du compte.',completeness:closed?'complete':'partial',updatedAt:report.observedAt,latestAttempt:report.latestAttempt,unavailableReason:undefined})});
  }
  return data;
 }
 
 const masterclassPending=new Map<string,Promise<PostHogMasterclassReport|null>>();
 /** Separate bounded import: never chained into the quiz refresh's time budget. */
-export async function postHogMasterclassPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogMasterclassAnalytics;client?:PostHogClientProfile}={}):Promise<PostHogMasterclassReport|null>{
+export async function postHogMasterclassPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogMasterclassAnalytics;client?:PostHogClientProfile;fetcher?:typeof fetch}={}):Promise<PostHogMasterclassReport|null>{
  const namespace=process.env.POSTHOG_PROJECT_ID;if(!namespace||!process.env.POSTHOG_HOST||!process.env.POSTHOG_PERSONAL_API_KEY)return null;
  const client=options.client??postHogClientProfile(),profile=postHogMasterclassProfile(client),start=startOfParisDay(from),end=startOfParisDay(to),key=`${namespace}:${profile}:${from}:${to}`;
  if(masterclassPending.has(key))return masterclassPending.get(key)!;
@@ -121,7 +123,7 @@ export async function postHogMasterclassPeriod(from:string,to:string,options:{db
   const db=options.db??database();let runId:string|undefined;
   try{
    runId=await db.rpc<string>('begin_sync_stream',{p_source:'posthog',p_namespace:namespace,p_from:start,p_to:end,p_profile:profile,p_coverage_kind:'aggregate_period',p_stream:'masterclass_observations',p_date_from:from,p_date_to:to});
-   const report=await(options.reader??readPostHogMasterclassAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,client});
+   const report=await(options.reader??readPostHogMasterclassAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,client,fetcher:options.fetcher});
    const complete=report.coverage.queryComplete&&['complete','empty'].includes(report.status);
    if(complete){
     const base={source:'posthog',source_namespace:namespace,metric_key:'posthog_mc_events',period_from:start,period_to:end,report_profile_key:profile,sync_run_id:runId,timezone:'Europe/Paris',coverage_state:'complete',unit:'count',currency:null,currency_exponent:null,tax_basis:'unknown',definition_version:profile};

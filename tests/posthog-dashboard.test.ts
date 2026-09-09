@@ -5,6 +5,7 @@ import {applyPostHogQuiz,readPostHogPeriod} from '../src/lib/posthog-dashboard';
 import {emptyDashboard} from '../src/lib/dashboard';
 import type {DashboardFilters} from '../src/lib/ui-contract';
 import type {PostHogAnalyticsReport} from '../src/connectors/posthog-analytics';
+import {POSTHOG_ANALYTICS_VERSION} from '../src/connectors/posthog-analytics';
 const filters:DashboardFilters={from:'2026-08-01',to:'2026-08-31',source:'all',tunnel:'quiz',campaign:'',compare:false};
 const counts={events:30,visitors:10,sessions:12,eventsWithVisitorId:30,eventsWithSessionId:30};
 const report:PostHogAnalyticsReport={source:'posthog',projectId:'synthetic',connectorVersion:'test',from:'2026-07-31T22:00:00Z',to:'2026-08-31T22:00:00Z',timezone:'Europe/Paris',observedAt:'2026-09-07T12:00:00Z',status:'complete',overview:counts,daily:[],byEvent:[{event:'$pageview',...counts}],
@@ -30,7 +31,7 @@ test('PostHog never fills a paid/campaign filter or a different period from glob
 test('stored PostHog periods preserve global distincts and do not aggregate missing ranges',async()=>{
  const old=process.env.POSTHOG_PROJECT_ID;process.env.POSTHOG_PROJECT_ID='synthetic';
  try {
-  const profile='posthog-production-aggregates-v1';
+  const profile=POSTHOG_ANALYTICS_VERSION;
   const run={id:'r1',query_profile_key:profile,period_from:report.from,period_to:report.to,pagination_complete:true,finished_at:report.observedAt};
   const rows=[
    ['all',{},'events',50],['event:$pageview',{event:'$pageview'},'events',30],['event:$pageview',{event:'$pageview'},'sessions',12],

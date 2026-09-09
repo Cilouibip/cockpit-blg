@@ -3,14 +3,20 @@ import {metaRefreshPeriods,refreshNotionToCompletion} from '../lib/refresh-plan'
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { ApiError, Connection, ConnectionsResponse, DashboardFilters, DashboardResponse, DataMode, DetailsResponse, Pagination, ProspectsQuery, LinkInput, LinkMutation, LinkPlacement, LinksResponse, Metric, Prospect, ProspectsResponse, TrackedLink } from '../lib/ui-contract';
-import ResultsPage, { DemoIndicator, ResultsFilters } from './ResultsPage';
+import CommercialPage from './CommercialPage';
+import type { CommercialDashboard } from '../lib/commercial-contract';
+import type { LinkWriteResult } from '../lib/link-write-result';
+import { request } from '../lib/cockpit-request';
+import ResultsPage, { DemoIndicator, ResultsFilters, ReportStatus } from './ResultsPage';
+import {usePostHogReports} from './use-posthog-reports';
+import type {PostHogClientState} from '../lib/posthog-report-client';
 import { defaultFilters, filtersQuery, formatDate, formatNumber, validateDateRange, variation } from './ui-format';
 
 type View = 'results' | 'journey' | 'sales' | 'links' | 'connections';
 const views: { id: View; label: string; title: string; description: string; icon: string }[] = [
   { id: 'results', label: 'Résultats', title: 'La vue d’ensemble.', description: 'Les résultats de ton activité, avec leurs sources et leurs limites.', icon: 'chart' },
   { id: 'journey', label: 'Parcours', title: 'Du contenu au client.', description: 'Observe chaque étape, puis descends dans le détail.', icon: 'route' },
-  { id: 'sales', label: 'Commercial', title: 'Le suivi commercial.', description: 'Prospects, rendez-vous et relances issus de Notion.', icon: 'people' },
+  { id: 'sales', label: 'Commercial', title: 'Le suivi commercial.', description: 'Les rendez-vous de la journée, leur origine et la situation de chaque personne.', icon: 'people' },
   { id: 'links', label: 'Liens', title: 'Un lien. Un emplacement.', description: 'Crée les liens à partager et retrouve chaque version.', icon: 'link' },
   { id: 'connections', label: 'Connexions', title: 'D’où viennent les chiffres ?', description: 'Les accès, les dernières lectures et ce qui reste à raccorder.', icon: 'plug' },
 ];
@@ -45,17 +51,6 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] ?? paths.info}</svg>;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } });
-  if (!response.ok) {
-    if (response.status === 401) throw new Error('Ta session a expiré. Reconnecte-toi pour continuer.');
-    if (response.status === 409) throw new Error('Ce lien a changé entre-temps. Actualise le registre avant de réessayer ; ta saisie est conservée.');
-    const body = await response.json().catch(() => null) as ApiError | null;
-    throw new Error(body?.error ?? 'La lecture n’a pas abouti. Réessaie dans un instant.');
-  }
-  return await response.json() as T;
-}
-
 function useRemote<T>(path: string | null, revision: number, keepPrevious = false) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
@@ -67,8 +62,8 @@ function useRemote<T>(path: string | null, revision: number, keepPrevious = fals
     setLoading(true); setError('');
     if (previousPath.current !== path && !keepPrevious) setData(null);
     previousPath.current = path;
-    request<T>(path, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) setData(result); }).catch(() => {
-      if (!controller.signal.aborted) setError('Les données ne sont pas disponibles. Vérifie ta session ou réessaie la lecture.');
+    request<T>(path, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) setData(result); }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'La lecture a été interrompue. Réessaie.');
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [path, revision, keepPrevious]);
@@ -140,11 +135,11 @@ function DetailsTable({ data, initialPagination, filters }: { data: DashboardRes
   return <section className="blg-panel" aria-busy={busy}><div className="blg-panel-heading"><div><span className="blg-eyebrow">NIVEAU 03 · DÉTAIL</span><h2>Les points d’entrée</h2></div><span className="blg-muted">{formatNumber(pagination?.total ?? rows.length)} relevé{(pagination?.total ?? rows.length) !== 1 ? 's' : ''}</span></div>{error && <p className="blg-inline-error" role="alert">{error} Les lignes de la dernière lecture restent affichées.</p>}{busy && <p className="blg-panel-intro" role="status">Lecture de la page demandée…</p>}{!rows.length ? <Empty title="Aucun détail disponible">Les liens, campagnes et créatives apparaîtront quand leurs identifiants seront reliés aux événements observés.</Empty> : <div className="blg-table-scroll"><table><thead><tr><th>Campagne / lien / créative</th><th>Leads</th><th>RDV réalisés</th><th>Clients</th><th>Dépenses</th><th>Couverture</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td><strong>{row.label}</strong><small>{sourceName(row.source)}</small></td><td>{formatNumber(row.leads)}</td><td>{formatNumber(row.appointments)}</td><td>{formatNumber(row.clients)}</td><td>{formatNumber(row.spend, 'eur')}</td><td className="blg-cell-note">{row.coverage}</td></tr>)}</tbody></table></div>}{pagination && <PaginationControls pagination={pagination} count={rows.length} busy={busy} onPage={loadPage} name="Pagination des points d’entrée" />}</section>;
 }
 
-function Journey({ data, compare, onMetric, filters }: { data: DashboardResponse; filters: DashboardFilters; compare: boolean; onMetric: (metric: Metric) => void }) {
-  const [journey, setJourney] = useState('');
-  const selected = data.journeys.find(item => item.id === journey) ?? data.journeys[0];
+function Journey({ data, compare, onMetric, filters,journey,setJourney,posthog,retryPosthog }: { data: DashboardResponse; filters: DashboardFilters; compare: boolean; onMetric: (metric: Metric) => void;journey:string;setJourney:(value:string)=>void;posthog:PostHogClientState;retryPosthog:()=>void }) {
+  const journeys=filters.tunnel==='all'?data.journeys:data.journeys.filter(item=>item.id===filters.tunnel||(filters.tunnel==='quiz'&&item.id==='questions'));
+  const selected = journeys.find(item => item.id === journey) ?? journeys[0];
   return <><div className="blg-section-heading"><span className="blg-eyebrow">NIVEAU 02 · LES TROIS PILIERS</span><span className="blg-muted">Volumes et taux observés</span></div><div className="blg-pillars">{data.pillars.map((pillar, index) => <section className="blg-panel blg-pillar" key={pillar.id}><div className="blg-pillar-title"><span className="blg-number">0{index + 1}</span><h2>{pillar.title}</h2></div><p>{pillar.description}</p><div className="blg-pillar-metrics">{pillar.metrics.map(metric => <MetricCard key={metric.id} metric={metric} compare={compare} onOpen={onMetric} />)}</div></section>)}</div>
-    <section className="blg-panel"><div className="blg-panel-heading"><div><span className="blg-eyebrow">ÉTAPES OBSERVÉES</span><h2>À l’intérieur des tunnels</h2></div><div className="blg-switch" aria-label="Choisir le tunnel">{data.journeys.map(item => <button key={item.id} aria-pressed={selected?.id === item.id} onClick={() => setJourney(item.id)}>{item.title}</button>)}</div></div>{selected ? <><p className="blg-panel-intro">{selected.description}</p><div className="blg-journey">{selected.steps.map((step, index) => <div className="blg-journey-step" key={step.id}><div className="blg-step-number">{String(index + 1).padStart(2, '0')}</div><div><h3>{step.label}</h3><small>{step.source}</small></div><strong>{formatNumber(step.value)}</strong><span>{step.denominator != null ? `${formatNumber(step.value)} / ${formatNumber(step.denominator)} · ${step.denominator > 0 && step.value !== null ? formatNumber(step.value / step.denominator * 100, 'percent') : 'Taux indisponible'}` : 'Volume observé'}</span><p>{step.coverage}</p></div>)}</div></> : <Empty title="Le parcours attend ses événements">Les étapes seront visibles après réception de mesures datées et dédoublonnées.</Empty>}</section><DetailsTable data={data.details} initialPagination={data.detailsPagination} filters={filters} /></>;
+    <section className="blg-panel"><div className="blg-panel-heading"><div><span className="blg-eyebrow">ÉTAPES OBSERVÉES</span><h2>À l’intérieur des tunnels</h2></div><div className="blg-switch" aria-label="Choisir le tunnel">{journeys.map(item => <button key={item.id} aria-pressed={selected?.id === item.id} onClick={() => setJourney(item.id)}>{item.title}</button>)}</div></div>{selected ? <><ReportStatus reports={posthog} retry={retryPosthog} /><p className="blg-panel-intro">{selected.description}</p><div className="blg-journey">{selected.steps.map((step, index) => <div className="blg-journey-step" key={step.id}><div className="blg-step-number">{String(index + 1).padStart(2, '0')}</div><div><h3>{step.label}</h3><small>{step.source}</small></div><strong>{formatNumber(step.value)}</strong><span>{step.denominator != null ? `${formatNumber(step.value)} / ${formatNumber(step.denominator)} · ${step.denominator > 0 && step.value !== null ? formatNumber(step.value / step.denominator * 100, 'percent') : 'Taux indisponible'}` : 'Volume observé'}</span><p>{step.coverage}</p></div>)}</div></> : <Empty title="Le parcours attend ses événements">Les étapes seront visibles après réception de mesures datées et dédoublonnées.</Empty>}</section><DetailsTable data={data.details} initialPagination={data.detailsPagination} filters={filters} /></>;
 }
 
 function Sales({ data, query, onQuery, busy }: { data: ProspectsResponse; query: ProspectsQuery; onQuery: (query: ProspectsQuery) => void; busy: boolean }) {
@@ -160,21 +155,37 @@ function Sales({ data, query, onQuery, busy }: { data: ProspectsResponse; query:
 function Links({ data, onUpdate, announce, refresh }: { data: LinksResponse; onUpdate: (value: LinksResponse) => void; announce: (message: string) => void; refresh: () => void }) {
   const blank: LinkInput = { placement: 'instagram_bio', destination: 'quiz', campaign: '', label: '' };
   const [input, setInput] = useState<LinkInput>(blank); const [editing, setEditing] = useState<TrackedLink | null>(null); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [archive, setArchive] = useState(false); const [copied, setCopied] = useState('');
+  const creationId = useRef<string | null>(null);
   const form = useRef<HTMLFormElement>(null); const urlInput = useRef<HTMLInputElement>(null);
   const shown = data.links.filter(link => link.archived === archive);
   useEffect(() => {
+    if (creationId.current && data.links.some(link => link.id === creationId.current)) { creationId.current = null; setInput(blank); setError(''); announce('Le lien est bien enregistré et présent dans le registre.'); }
     setEditing(current => current ? data.links.find(link => link.id === current.id) ?? current : null);
   }, [data.links]);
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('');
     const body: LinkInput | LinkMutation = editing ? { action: 'revise', id: editing.id, expectedVersion: editing.current.version, input } : input;
-    try { const updated = await request<LinksResponse>('/api/links', { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(body) }); onUpdate(updated); setInput(blank); setEditing(null); announce(editing ? 'Nouvelle version enregistrée. Les anciennes URLs sont conservées.' : 'Lien créé et enregistré.'); }
-    catch (error) { setError(error instanceof Error ? error.message : 'Le lien n’a pas pu être enregistré.'); }
+    if (!editing && !creationId.current) creationId.current = crypto.randomUUID();
+    try {
+      const result = await request<LinkWriteResult>('/api/links', { method: editing ? 'PATCH' : 'POST', headers: editing ? {} : { 'X-BLG-Link-Id': creationId.current! }, body: JSON.stringify(body) });
+      creationId.current = null;
+      if (result.links) onUpdate(result.links);
+      setInput(blank); setEditing(null);
+      if (!result.links) setError(result.notice ?? 'Enregistrement confirmé. Actualise le registre pour retrouver le lien.');
+      announce(result.notice ?? (editing ? 'Nouvelle version enregistrée. Les anciennes URLs sont conservées.' : 'Lien créé et enregistré.'));
+    }
+    catch (error) { setError((error instanceof Error ? error.message : 'La réponse d’enregistrement est indisponible.') + ' Actualise le registre pour vérifier le résultat. Ta saisie est conservée.'); }
     finally { setBusy(false); }
   }
   async function changeArchive(link: TrackedLink) {
     setBusy(true); setError('');
-    try { const command: LinkMutation = { action: link.archived ? 'restore' : 'archive', id: link.id, expectedVersion: link.current.version }; onUpdate(await request<LinksResponse>('/api/links', { method: 'PATCH', body: JSON.stringify(command) })); announce(link.archived ? 'Lien restauré.' : 'Lien archivé. Ses URLs sont conservées.'); }
+    try {
+      const command: LinkMutation = { action: link.archived ? 'restore' : 'archive', id: link.id, expectedVersion: link.current.version };
+      const result = await request<LinkWriteResult>('/api/links', { method: 'PATCH', body: JSON.stringify(command) });
+      if (result.links) onUpdate(result.links);
+      else setError(result.notice ?? 'Modification enregistrée. Actualise le registre.');
+      announce(result.notice ?? (link.archived ? 'Lien restauré.' : 'Lien archivé. Ses URLs sont conservées.'));
+    }
     catch (error) { setError(error instanceof Error ? error.message : 'La modification n’a pas abouti.'); }
     finally { setBusy(false); }
   }
@@ -200,12 +211,13 @@ function Connections({ data, refresh, announce }: { data: ConnectionsResponse; r
 export default function Cockpit({ mode, user }: { mode: DataMode; user: string }) {
   const [view, setView] = useState<View>('results'); const [filters, setFilters] = useState<DashboardFilters>(() => defaultFilters()); const [draftFilters, setDraftFilters] = useState<DashboardFilters>(filters); const [filterError, setFilterError] = useState(''); const [revision, setRevision] = useState(0); const [notice, setNotice] = useState(''); const [metric, setMetric] = useState<Metric | null>(null); const [logoutPending, setLogoutPending] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [salesQuery, setSalesQuery] = useState<ProspectsQuery>({ search: '', stage: '', page: 0 });
+  const [journey,setJourney]=useState('quiz');
+  const [salesDay, setSalesDay] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
   const active = views.find(item => item.id === view)!; const title = useRef<HTMLHeadingElement>(null);
   const dashboard = useRemote<DashboardResponse>(view === 'results' || view === 'journey' ? `/api/dashboard?${filtersQuery(filters)}` : null, revision);
+  const reports = usePostHogReports(filters, mode==='live' && ['results','journey'].includes(view) && !!dashboard.data && !dashboard.loading && dashboard.data.period.from===filters.from && dashboard.data.period.to===filters.to, revision, dashboard.setData,filters.tunnel==='masterclass'||(view==='journey'&&filters.tunnel==='all'&&journey==='masterclass')?'masterclass':'quiz');
   const links = useRemote<LinksResponse>(view === 'links' ? '/api/links' : null, revision);
-  const salesPath = !salesQuery.search && !salesQuery.stage && salesQuery.page === 0 ? '/api/prospects' : `/api/prospects?${new URLSearchParams({ search: salesQuery.search, stage: salesQuery.stage, page: String(salesQuery.page) })}`;
-  const sales = useRemote<ProspectsResponse>(view === 'sales' ? salesPath : null, revision, true);
+  const sales = useRemote<CommercialDashboard>(view === 'sales' ? `/api/commercial?day=${salesDay}` : null, revision);
   const connections = useRemote<ConnectionsResponse>(view === 'connections' ? '/api/connections' : null, revision);
   const current = view === 'results' || view === 'journey' ? dashboard : view === 'links' ? links : view === 'sales' ? sales : connections;
   const refresh = useCallback(() => setRevision(value => value + 1), []);
@@ -245,5 +257,5 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
       {view === 'results' && <ResultsFilters draft={draftFilters} applied={filters} onChange={setDraftFilters} onApply={applyFilters} campaigns={dashboard.data?.campaigns ?? []} busy={current.loading} error={filterError} />}
       {view === 'journey' && <form className="blg-filters" onSubmit={applyFilters}><label>Du<input type="date" value={draftFilters.from} onChange={event => setDraftFilters({ ...draftFilters, from: event.target.value })} required /></label><label>Au<input type="date" value={draftFilters.to} onChange={event => setDraftFilters({ ...draftFilters, to: event.target.value })} required /></label><label>Source<select aria-label="Source" value={draftFilters.source} onChange={event => setDraftFilters({ ...draftFilters, source: event.target.value as DashboardFilters['source'] })}><option value="all">Toutes</option><option value="paid">Payé</option><option value="organic">Organique</option><option value="unknown">Inconnu</option></select></label><label>Tunnel<select aria-label="Tunnel" value={draftFilters.tunnel} onChange={event => setDraftFilters({ ...draftFilters, tunnel: event.target.value as DashboardFilters['tunnel'] })}><option value="all">Tous</option><option value="quiz">Quiz</option><option value="masterclass">Masterclass</option></select></label><label>Périmètre<select aria-label="Campagne, publicité ou créative" value={draftFilters.campaign} onChange={event => setDraftFilters({ ...draftFilters, campaign: event.target.value })}><option value="">Toutes</option>{dashboard.data?.campaigns.map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.label}</option>)}</select></label><button className="blg-button blg-primary" disabled={current.loading}>Appliquer</button><label className="blg-compare"><input type="checkbox" checked={draftFilters.compare} onChange={event => setDraftFilters({ ...draftFilters, compare: event.target.checked })} />Comparer à la période précédente</label><span className="blg-filter-timezone">Dates incluses · Europe/Paris</span>{filterError && <p className="blg-filter-error" role="alert">{filterError}</p>}</form>}
       {dashboard.data && view === 'journey' && <><div className="blg-period-summary"><span><Icon name="calendar" size={15} />{formatDate(dashboard.data.period.from)} — {formatDate(dashboard.data.period.to)}</span><span>Lecture : {formatDate(dashboard.data.generatedAt, true)}</span></div>{dashboard.data.notices.map((message, index) => <p className="blg-note" key={index}><Icon name="info" size={17} />{message}</p>)}</>}
-      <div className="blg-content" aria-busy={current.loading}>{current.loading && !current.data ? <div className="blg-loading" role="status"><span className="blg-loading-mark" /><p>Lecture des données disponibles…</p></div> : current.error && !current.data ? <Empty title="La lecture est interrompue" action={<button className="blg-button" onClick={refresh}>Réessayer</button>}>{current.error}</Empty> : <>{current.loading && <p className="blg-note" role="status">Actualisation en cours. Les données de la dernière lecture restent affichées.</p>}{current.error && <p className="blg-inline-error" role="alert">{current.error} Les données de la dernière lecture restent affichées.</p>}{view === 'results' && dashboard.data && <ResultsPage data={dashboard.data} filters={filters} />}{view === 'journey' && dashboard.data && <Journey data={dashboard.data} compare={filters.compare} onMetric={setMetric} filters={filters} />}{view === 'sales' && sales.data && <Sales data={sales.data} query={salesQuery} onQuery={setSalesQuery} busy={sales.loading} />}{view === 'links' && links.data && <Links data={links.data} onUpdate={links.setData} announce={setNotice} refresh={refresh} />}{view === 'connections' && connections.data && <Connections data={connections.data} refresh={refresh} announce={setNotice} />}</>}</div><footer className="blg-footer"><span>BLG · Un point de vue sur les faits.</span><span>{view === 'results' ? 'Espace privé' : mode === 'demo' ? 'Démonstration · données synthétiques' : 'Sources en lecture seule'} <span>·</span> Europe/Paris</span></footer></main></div><div className={`blg-toast ${notice ? 'is-visible' : ''}`} role="status" aria-live="polite">{notice}</div>{metric && <MetricDetail metric={metric} mode={mode} onClose={() => setMetric(null)} />}</div>;
+      <div className="blg-content" aria-busy={current.loading}>{current.loading && !current.data ? <div className="blg-loading" role="status"><span className="blg-loading-mark" /><p>Lecture des données disponibles…</p></div> : current.error && !current.data ? <Empty title="La lecture est interrompue" action={<button className="blg-button" onClick={refresh}>Réessayer</button>}>{current.error}</Empty> : <>{current.loading && <p className="blg-note" role="status">Actualisation en cours. Les données de la dernière lecture restent affichées.</p>}{current.error && <p className="blg-inline-error" role="alert">{current.error} Les données de la dernière lecture restent affichées.</p>}{view === 'results' && dashboard.data && <ResultsPage data={dashboard.data} filters={filters} posthog={reports.state} retryPosthog={reports.retry} />}{view === 'journey' && dashboard.data && <Journey data={dashboard.data} compare={filters.compare} onMetric={setMetric} filters={filters} journey={journey} setJourney={setJourney} posthog={reports.state} retryPosthog={reports.retry} />}{view === 'sales' && sales.data && <CommercialPage key={sales.data.day} data={sales.data} loading={sales.loading} onDateChange={day => { if (day) setSalesDay(day); }} onRetry={refresh} />}{view === 'links' && links.data && <Links data={links.data} onUpdate={links.setData} announce={setNotice} refresh={refresh} />}{view === 'connections' && connections.data && <Connections data={connections.data} refresh={refresh} announce={setNotice} />}</>}</div><footer className="blg-footer"><span>BLG · Un point de vue sur les faits.</span><span>{view === 'results' ? 'Espace privé' : mode === 'demo' ? 'Démonstration · données synthétiques' : 'Sources en lecture seule'} <span>·</span> Europe/Paris</span></footer></main></div><div className={`blg-toast ${notice ? 'is-visible' : ''}`} role="status" aria-live="polite">{notice}</div>{metric && <MetricDetail metric={metric} mode={mode} onClose={() => setMetric(null)} />}</div>;
 }

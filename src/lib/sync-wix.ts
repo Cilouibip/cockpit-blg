@@ -7,7 +7,7 @@ import { AppError } from './errors';
 import type { Metric } from './ui-contract';
 import { readSourceSnapshot, invalidateSourceSnapshots,sourceAttempt } from './source-snapshots';
 
-type Options = { db?: Database; reader?: typeof syncWixPaymentsAnalytics; env?: NodeJS.ProcessEnv };
+type Options = { db?: Database; reader?: typeof syncWixPaymentsAnalytics; env?: NodeJS.ProcessEnv; fetcher?: typeof fetch };
 /** Publish a complete, reconciled source aggregate only after all pages were read.
  * Exact periods remain separate: a monthly total is never spread over days. */
 export async function synchronizeWix(from: string, to: string, options: Options = {}) {
@@ -23,7 +23,7 @@ export async function synchronizeWix(from: string, to: string, options: Options 
   let finished = false;
   try {
     const result = await (options.reader ?? syncWixPaymentsAnalytics)({ apiKey: env.WIX_API_KEY, siteId: namespace,
-      from: start, to: end, timezone: 'Europe/Paris' });
+      from: start, to: end, timezone: 'Europe/Paris', fetcher: options.fetcher });
     if (result.status === 'complete' && result.coverage.complete) {
       const daily = new Map<string, number>();
       for (const row of result.breakdown) {

@@ -18,12 +18,22 @@ export type Pagination = { page: number; pageSize: number; total: number };
 export type DetailsResponse = { details: DetailRow[]; pagination: Pagination };
 export type ProspectsQuery = { search: string; stage: string; page: number };
 export type JourneyStep = { id: string; label: string; value: number | null; denominator?: number | null; source: string; coverage: string };
+export type LeadDefinitions = {
+ available:boolean;sourceBasis:string;definitionState:'pending_business_choice'|'first_contact';observedAt:string|null;reason:string;
+ firstKnownAcquisitions:number|null;peopleWithRequests:number|null;sourceRequestPeople:number|null;requestCount:number|null;
+ unresolvedDatedRequests:number|null;unresolvedNotionRows:number|null;earlierClientEvidence:number|null;knownBeforePeriod:number|null;excludedSourceRequests:number|null;
+  families:{family:string;status:string;from:string;to:string;observedAt:string;counts:Record<string,number>|null}[];missingFamilies?:string[];
+  latestAttempts?:{family:string;status:string;startedAt:string;finishedAt:string|null;errorCode:string|null}[];
+  mappingPending?:{family:string;requestedProfile:string;publishedProfile:string}[];
+};
 export type DashboardResponse = {
   mode: DataMode; generatedAt: string; period: { from: string; to: string; timezone: string }; comparisonLabel?: string;
   metrics: Metric[]; series: { date: string; revenue: number | null; spend: number | null }[];
   pillars: { id: string; title: string; description: string; metrics: Metric[] }[];
   journeys: { id: string; title: string; description: string; steps: JourneyStep[] }[];
   details: DetailRow[]; detailsPagination?: Pagination; campaigns: { id: string; label: string }[]; notices: string[];
+  leadDefinitions?:LeadDefinitions;
+  commerce?:import('./notion-commerce-storage').CommerceDashboard;
 };
 export type LinkPlacement = 'instagram_bio' | 'youtube_description' | 'meta_ad' | 'email' | 'other';
 export type LinkInput = { placement: LinkPlacement; destination: 'quiz' | 'masterclass'; campaign: string; label: string };
