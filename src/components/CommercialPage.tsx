@@ -1,77 +1,61 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { CommercialAttendance, CommercialPageProps, CommercialRecord } from '../lib/commercial-contract';
-import { filterCommercialDashboard } from '../lib/commercial-filter';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { CommercialAttendance, CommercialPageProps, CommercialQuery, CommercialRecord } from '../lib/commercial-contract';
 
 const PARIS = 'Europe/Paris';
-const longDate = new Intl.DateTimeFormat('fr-FR', { timeZone: PARIS, weekday: 'long', day: 'numeric', month: 'long' });
 const dateTime = new Intl.DateTimeFormat('fr-FR', { timeZone: PARIS, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const dayOnly = new Intl.DateTimeFormat('fr-FR', { timeZone: PARIS, day: 'numeric', month: 'short', year: 'numeric' });
-
-const attendanceCopy: Record<CommercialAttendance, string> = {
-  present: 'Présent', absent: 'Absent', planned: 'Prévu', cancelled: 'Annulé', rescheduled: 'Reporté', unknown: 'À confirmer',
-};
-const formatDate = (value: string | null, withTime = true) => {
-  if (!value) return 'Non renseignée';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return dayOnly.format(date);
-  return (withTime ? dateTime : dayOnly).format(date);
-};
-export const formatAppointment = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
-  ? `${formatDate(value, false)} · Horaire non renseigné`
-  : formatDate(value);
+const attendanceCopy: Record<CommercialAttendance, string> = { present: 'Présent', absent: 'Absent', planned: 'Prévu', cancelled: 'Annulé', rescheduled: 'Reporté', unknown: 'À confirmer' };
+const formatDate = (value: string | null, withTime = true) => { if (!value) return 'Non renseignée'; const date = new Date(value); if (Number.isNaN(date.getTime())) return value; return /^\d{4}-\d{2}-\d{2}$/.test(value) ? dayOnly.format(date) : (withTime ? dateTime : dayOnly).format(date); };
+export const formatAppointment = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${formatDate(value, false)} · Horaire non renseigné` : formatDate(value);
 const formatSummary = (value: number | null) => value === null ? '—' : String(value);
+const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: PARIS, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const addDays = (day: string, amount: number) => { const date = new Date(`${day}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + amount); return date.toISOString().slice(0, 10); };
 
 function CommercialDialog({ record, onClose }: { record: CommercialRecord; onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null); const titleId = useId();
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const dialog = ref.current;
-    dialog?.showModal();
-    return () => { dialog?.close(); if (opener?.isConnected) opener.focus(); };
-  }, []);
+  const ref = useRef<HTMLDialogElement>(null), titleId = useId();
+  useEffect(() => { const opener = document.activeElement as HTMLElement | null, dialog = ref.current; dialog?.showModal(); return () => { dialog?.close(); if (opener?.isConnected) opener.focus(); }; }, []);
+  const appointment = record.appointment;
   return <dialog ref={ref} className="a-r-dialog commercial-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === ref.current) onClose(); }}>
-    <header className="a-r-dialog-head"><div><span className="commercial-eyebrow">FICHE COMMERCIALE</span><h2 id={titleId}>{record.name}</h2></div><button className="a-button a-secondary commercial-close" onClick={onClose} aria-label="Fermer la fiche">Fermer</button></header>
-    <div className="a-r-dialog-body commercial-dialog-body">
-      <dl className="commercial-facts">
-        <div><dt>Rendez-vous</dt><dd>{formatAppointment(record.appointment.scheduledAt)} · {attendanceCopy[record.appointment.attendance]}</dd></div>
-        <div><dt>Origine</dt><dd>{record.origin}</dd></div>
-        <div><dt>Point d’entrée</dt><dd>{record.tunnel ?? 'Non renseigné'}</dd></div>
-        <div><dt>Responsable</dt><dd>{record.owner ?? 'Non renseigné'}</dd></div>
-        <div><dt>Statut commercial</dt><dd>{record.commercialStatus}</dd></div>
-        <div><dt>Issue de closing</dt><dd>{record.closingOutcome ?? 'Non renseignée'}</dd></div>
-        <div><dt>Prochaine action</dt><dd>{formatDate(record.nextActionAt)}</dd></div>
-      </dl>
-      <section className="commercial-history" aria-label="Historique enregistré"><div className="commercial-section-heading"><span className="commercial-eyebrow">HISTORIQUE ENREGISTRÉ</span><h3>Ce qui s’est passé</h3></div>
-        {record.history.length ? <ol>{record.history.map(item => <li key={item.id}><time dateTime={item.at ?? undefined}>{formatDate(item.at)}</time><div><strong>{item.label}</strong>{item.value && <span>{item.value}</span>}</div></li>)}</ol> : <div className="a-r-notice"><span className="a-r-notice-icon" aria-hidden="true">i</span><div className="a-r-notice-copy"><strong>Aucun historique enregistré</strong><p>Cette fiche ne reconstitue pas d’événements à partir de sa dernière mise à jour.</p></div></div>}
-      </section>
-    </div>
-  </dialog>;
+    <header className="a-r-dialog-head"><div><span className="commercial-eyebrow">FICHE COMMERCIALE</span><h2 id={titleId}>{record.name}</h2></div><button className="a-button a-secondary commercial-close" onClick={onClose}>Fermer</button></header>
+    <div className="a-r-dialog-body commercial-dialog-body"><dl className="commercial-facts">
+      <div><dt>Statut commercial actuel</dt><dd>{record.commercialStatus}</dd></div><div><dt>Rendez-vous de la période</dt><dd>{appointment ? `${formatAppointment(appointment.scheduledAt)} · ${attendanceCopy[appointment.attendance]}` : 'Aucun rendez-vous dans cette période'}</dd></div>
+      <div><dt>Origine</dt><dd>{record.origin}</dd></div><div><dt>Point d’entrée</dt><dd>{record.tunnel ?? 'Non renseigné'}</dd></div><div><dt>Responsable</dt><dd>{record.owner ?? 'Non renseigné'}</dd></div>
+      <div><dt>Closing enregistré</dt><dd>{record.closingAt ? `Daté du ${formatDate(record.closingAt, false)}` : record.closingOutcome ?? 'Non renseigné'}</dd></div><div><dt>Prochaine action enregistrée</dt><dd>{formatDate(record.nextActionAt)}</dd></div>
+    </dl><section className="commercial-history" aria-label="Historique enregistré"><div className="commercial-section-heading"><span className="commercial-eyebrow">HISTORIQUE ENREGISTRÉ</span><h3>Ce qui s’est passé</h3></div>
+      {record.history.length ? <ol>{record.history.map(item => <li key={item.id}><time dateTime={item.at ?? undefined}>{formatDate(item.at)}</time><div><strong>{item.label}</strong>{item.value && <span>{item.value}</span>}</div></li>)}</ol> : <div className="a-r-notice"><span className="a-r-notice-icon" aria-hidden="true">i</span><div className="a-r-notice-copy"><strong>Aucun historique enregistré</strong><p>La fiche ne transforme pas son statut actuel en événement passé.</p></div></div>}
+    </section></div></dialog>;
 }
 
-export default function CommercialPage({ data, loading = false, onDateChange, onRetry }: CommercialPageProps) {
-  const [origin, setOrigin] = useState('all'); const [selected, setSelected] = useState<CommercialRecord | null>(null);
-  useEffect(() => { setOrigin('all'); setSelected(null); }, [data.day]);
-  const filtered = useMemo(() => filterCommercialDashboard(data, origin), [data, origin]);
-  const origins = useMemo(() => [...new Set(data.records.map(record => record.origin))].sort((left, right) => left.localeCompare(right, 'fr')), [data.records]);
-  function moveDay(offset: number) { const day = new Date(`${data.day}T12:00:00Z`); day.setUTCDate(day.getUTCDate() + offset); onDateChange(day.toISOString().slice(0,10)); }
-  const isDemo = data.mode === 'demo';
-  return <section className="commercial-page" aria-label="Suivi commercial de la journée">
-    <div className="commercial-toolbar"><button type="button" className="a-button a-secondary" onClick={() => moveDay(-1)} aria-label="Journée précédente">‹</button><label className="a-f-field" data-emphasis="quiet"><span>Journée</span><span className="a-field-shell"><input type="date" value={data.day} onInput={event => { if (event.currentTarget.validity.valid && event.currentTarget.value) onDateChange(event.currentTarget.value); }} aria-label="Journée commerciale" /></span></label><button type="button" className="a-button a-secondary" onClick={() => moveDay(1)} aria-label="Journée suivante">›</button><span className="commercial-day">{longDate.format(new Date(`${data.day}T12:00:00Z`))}</span><label className="a-f-field commercial-origin-filter" data-emphasis="quiet"><span>Origine</span><span className="a-field-shell"><select value={origin} onChange={event => setOrigin(event.target.value)} aria-label="Filtrer par origine"><option value="all">Toutes les origines</option>{origins.map(value => <option key={value} value={value}>{value}</option>)}</select></span></label></div>
-    {!isDemo && data.updatedAt && <p className="commercial-freshness">D’après les données importées le {formatDate(data.updatedAt)}. Les changements intervenus depuis peuvent manquer.</p>}
-    {isDemo && <div className="a-r-notice commercial-demo"><span className="a-r-notice-icon" aria-hidden="true">D</span><div className="a-r-notice-copy"><strong>Données de démonstration</strong><p>Les rendez-vous et fiches de cette vue sont fictifs.</p></div></div>}
-    {data.notice && <div className="a-r-notice"><span className="a-r-notice-icon" aria-hidden="true">i</span><div className="a-r-notice-copy"><strong>Couverture à compléter</strong><p>{data.notice}</p></div>{onRetry && <button className="a-button a-secondary" onClick={onRetry}>Réessayer</button>}</div>}
-    <section className="a-d-stage commercial-summary" aria-label="Chiffres de la journée"><div className="a-d-cards">
-      <article className="a-d-card"><h3>Rendez-vous</h3><div className="a-d-value">{formatSummary(filtered.summary.appointments)}</div><p>{filtered.summary.appointments === null ? 'Collection non couverte' : 'Rendez-vous datés ce jour'}</p></article>
-      <article className="a-d-card"><h3>Présences</h3><div className="a-d-value">{formatSummary(filtered.summary.present)}</div><p>{filtered.summary.present === null ? 'Collection non couverte' : 'Statut « présent » enregistré'}</p></article>
-      <article className="a-d-card"><h3>Personnes avec rendez-vous</h3><div className="a-d-value">{formatSummary(filtered.summary.distinctProspects)}</div><p>{filtered.summary.distinctProspects === null ? 'Collection non couverte' : 'Prospects distincts du jour'}</p></article>
-    </div></section>
-    <section className="a-d-stage commercial-table-section"><div className="commercial-table-heading"><div><span className="commercial-eyebrow">RENDEZ-VOUS DU JOUR</span><h2>{filtered.records.length} rendez-vous affiché{filtered.records.length !== 1 ? 's' : ''}</h2></div><span>{loading ? 'Actualisation…' : `Dernier import : ${formatDate(data.updatedAt)}`}</span></div>
-      {filtered.records.length ? <div className="commercial-table-scroll" tabIndex={0} role="region" aria-label="Liste des rendez-vous"><table className="a-t-table commercial-table"><thead><tr><th>Personne</th><th>Horaire</th><th>Présence</th><th>Origine</th><th>Statut</th><th>Closing</th></tr></thead><tbody>{filtered.records.map(record => <tr key={record.id}><td><button className="a-button a-n-quiet commercial-person" onClick={() => setSelected(record)}>{record.name}<span aria-hidden="true">›</span></button>{record.owner && <small>{record.owner}</small>}</td><td>{formatAppointment(record.appointment.scheduledAt)}</td><td>{attendanceCopy[record.appointment.attendance]}</td><td>{record.origin}</td><td>{record.commercialStatus}</td><td>{record.closingOutcome ?? 'Non renseignée'}</td></tr>)}</tbody></table></div> : <div className="commercial-empty"><span className="commercial-empty-symbol" aria-hidden="true">—</span><h3>{data.summary.appointments === null ? 'Rendez-vous indisponibles' : origin === 'all' ? 'Aucun rendez-vous pour cette journée' : 'Aucun rendez-vous pour cette origine'}</h3><p>{data.summary.appointments === null ? 'La couverture de cette journée n’est pas encore établie.' : 'Les compteurs et la liste utilisent le même filtre.'}</p></div>}
-      <footer className="commercial-coverage">{data.coverage}</footer>
-    </section>
-    {selected && <CommercialDialog record={selected} onClose={() => setSelected(null)} />}
+function DatePresets({ draft, onChange }: { draft: CommercialQuery; onChange: (next: Partial<CommercialQuery>) => void }) {
+  const current = today();
+  const inferred = draft.from === current && draft.to === current ? 'today' : draft.from === addDays(current, -6) && draft.to === current ? 'week' : draft.from === current.slice(0, 8) + '01' && draft.to === current ? 'month' : !draft.from && !draft.to ? 'all' : 'custom';
+  const [preset, setPreset] = useState(inferred);
+  useEffect(() => setPreset(inferred), [inferred]);
+  const choose = (value: string) => { setPreset(value); if (value === 'today') onChange({ from: current, to: current }); else if (value === 'week') onChange({ from: addDays(current, -6), to: current }); else if (value === 'month') onChange({ from: current.slice(0, 8) + '01', to: current }); else if (value === 'all') onChange({ from: null, to: null }); };
+  return <><label className="a-f-field" data-emphasis="quiet"><span>Période</span><span className="a-field-shell"><select aria-label="Période" value={preset} onChange={event => choose(event.target.value)}><option value="today">Aujourd’hui</option><option value="week">7 derniers jours</option><option value="month">Ce mois</option><option value="custom">Période personnalisée</option><option value="all">Tout l’historique utile</option></select></span></label>
+  <label className="a-f-field" data-emphasis="quiet"><span>Du</span><span className="a-field-shell"><input type="date" value={draft.from ?? ''} onInput={event => { setPreset('custom'); onChange({ from: event.currentTarget.value || null }); }} /></span></label><label className="a-f-field" data-emphasis="quiet"><span>Au</span><span className="a-field-shell"><input type="date" value={draft.to ?? ''} onInput={event => { setPreset('custom'); onChange({ to: event.currentTarget.value || null }); }} /></span></label></>;
+}
+
+export default function CommercialPage({ data, loading = false, onQueryChange, onRetry }: CommercialPageProps) {
+  const [draft, setDraft] = useState(data.query), [selected, setSelected] = useState<CommercialRecord | null>(null), [periodError, setPeriodError] = useState('');
+  useEffect(() => { setDraft(data.query); setSelected(null); }, [data.query]);
+  const change = (next: Partial<CommercialQuery>) => { setDraft(current => ({ ...current, ...next })); setPeriodError(''); };
+  const apply = () => { if ((draft.from === null) !== (draft.to === null) || (draft.from && draft.to && draft.from > draft.to)) { setPeriodError('Choisis une date de début et de fin cohérentes avant d’appliquer.'); return; } onQueryChange({ ...draft, page: 0 }); };
+  const reset = () => { const base = data.query; setDraft({ ...base, search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all' }); onQueryChange({ search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all', page: 0 }); };
+  const title = data.view === 'appointments' ? 'Rendez-vous' : 'Tous les prospects';
+  const empty = data.view === 'appointments' ? 'Aucun rendez-vous pour cette période' : 'Aucun prospect pour ces filtres';
+  return <section className="commercial-page" aria-label="Suivi commercial">
+    <fieldset className="commercial-controls" disabled={loading}><div className="commercial-toolbar"><div className="a-n-tabbar commercial-tabs" role="tablist" aria-label="Vue commerciale"><button className="a-n-tab" aria-selected={data.view === 'appointments'} role="tab" onClick={() => onQueryChange({ view: 'appointments', page: 0 })}>Rendez-vous</button><button className="a-n-tab" aria-selected={data.view === 'prospects'} role="tab" onClick={() => onQueryChange({ view: 'prospects', page: 0 })}>Tous les prospects</button></div>{data.view === 'appointments' ? <DatePresets draft={draft} onChange={change} /> : <p className="commercial-register-note">Tous les prospects restent disponibles. La période des rendez-vous est conservée.</p>}<button className="a-button" type="button" onClick={apply} disabled={loading}>Appliquer</button></div>
+    {periodError && <p className="commercial-inline-error" role="alert">{periodError}</p>}
+    <div className="commercial-filters"><label className="a-f-field" data-emphasis="quiet"><span>Recherche</span><span className="a-field-shell"><input value={draft.search} onChange={event => change({ search: event.target.value })} placeholder="Nom, origine, statut ou responsable" maxLength={100} /></span></label><label className="a-f-field" data-emphasis="quiet"><span>Origine</span><span className="a-field-shell"><select value={draft.origin} onChange={event => change({ origin: event.target.value })}><option value="all">Toutes</option>{data.filters.origins.map(value => <option key={value}>{value}</option>)}</select></span></label><label className="a-f-field" data-emphasis="quiet"><span>Statut</span><span className="a-field-shell"><select value={draft.status} onChange={event => change({ status: event.target.value })}><option value="all">Tous</option>{data.filters.statuses.map(value => <option key={value}>{value}</option>)}</select></span></label><label className="a-f-field" data-emphasis="quiet"><span>Présence</span><span className="a-field-shell"><select value={draft.attendance} onChange={event => change({ attendance: event.target.value as CommercialQuery['attendance'] })}><option value="all">Toutes</option>{(Object.keys(attendanceCopy) as CommercialAttendance[]).map(value => <option key={value} value={value}>{attendanceCopy[value]}</option>)}</select></span></label><label className="a-f-field" data-emphasis="quiet"><span>Responsable</span><span className="a-field-shell"><select value={draft.owner} onChange={event => change({ owner: event.target.value })}><option value="all">Tous</option>{data.filters.owners.map(value => <option key={value}>{value}</option>)}</select></span></label><label className="a-f-field" data-emphasis="quiet"><span>Prochaine action</span><span className="a-field-shell"><select value={draft.nextAction} onChange={event => change({ nextAction: event.target.value as CommercialQuery['nextAction'] })}><option value="all">Toutes</option><option value="recorded">Date enregistrée</option></select></span></label><button className="a-button a-secondary" type="button" onClick={reset}>Réinitialiser</button></div>
+    </fieldset>
+    {data.updatedAt && <p className="commercial-freshness">Dernière lecture importée : {formatDate(data.updatedAt)}.</p>}{data.notice && <p className="commercial-inline-error">{data.notice}{onRetry && <button className="a-button a-n-quiet" onClick={onRetry}>Réessayer</button>}</p>}
+    {data.view === 'appointments' && <section className="a-d-stage commercial-summary"><div className="a-d-cards"><article className="a-d-card"><span>Rendez-vous</span><strong className="a-d-value">{formatSummary(data.summary.appointments)}</strong><p>Dans la période sélectionnée</p></article><article className="a-d-card"><span>Présents</span><strong className="a-d-value">{formatSummary(data.summary.present)}</strong><p>Présences enregistrées</p></article><article className="a-d-card"><span>Personnes</span><strong className="a-d-value">{formatSummary(data.summary.distinctProspects)}</strong><p>Personnes distinctes</p></article></div></section>}
+    <section className="a-d-stage commercial-table-section"><div className="commercial-table-heading"><div><span className="commercial-eyebrow">{data.view === 'appointments' ? 'PÉRIODE RENDEZ-VOUS' : 'REGISTRE COURANT'}</span><h2>{title}</h2></div><span>{data.pagination.total} résultat{data.pagination.total !== 1 ? 's' : ''} · page {data.pagination.page + 1}</span></div>
+      {data.records.length ? <div className="commercial-table-scroll" tabIndex={0} role="region" aria-label={title}><table className="a-t-table commercial-table"><thead><tr><th>Personne</th><th>Rendez-vous</th><th>Présence</th><th>Origine</th><th>Statut actuel</th><th>Action enregistrée</th></tr></thead><tbody>{data.records.map(record => <tr key={record.id}><td><button className="a-button a-n-quiet commercial-person" onClick={() => setSelected(record)}>{record.name}<span aria-hidden="true">›</span></button>{record.owner && <small>{record.owner}</small>}</td><td>{record.appointment ? formatAppointment(record.appointment.scheduledAt) : '—'}</td><td>{record.appointment ? <span className="a-t-badge">{attendanceCopy[record.appointment.attendance]}</span> : '—'}</td><td>{record.origin}</td><td><span className="a-t-badge">{record.commercialStatus}</span>{record.closingAt && <small>Closing daté le {formatDate(record.closingAt, false)}</small>}</td><td>{formatDate(record.nextActionAt, false)}</td></tr>)}</tbody></table></div> : <div className="commercial-empty"><span className="commercial-empty-symbol" aria-hidden="true">—</span><h3>{empty}</h3><p>{data.view === 'appointments' ? 'Élargis la période ou réinitialise les filtres.' : 'Réinitialise les filtres pour parcourir le registre.'}</p></div>}
+      {data.pagination.total > data.pagination.pageSize && <nav className="commercial-pagination" aria-label="Pagination commerciale"><button className="a-button a-secondary" disabled={loading || data.pagination.page === 0} onClick={() => onQueryChange({ page: data.pagination.page - 1 })}>Précédent</button><span>{data.pagination.page * data.pagination.pageSize + 1}–{Math.min((data.pagination.page + 1) * data.pagination.pageSize, data.pagination.total)} sur {data.pagination.total}</span><button className="a-button a-secondary" disabled={loading || (data.pagination.page + 1) * data.pagination.pageSize >= data.pagination.total} onClick={() => onQueryChange({ page: data.pagination.page + 1 })}>Suivant</button></nav>}
+      <footer className="commercial-coverage">{data.coverage}</footer></section>{selected && <CommercialDialog record={selected} onClose={() => setSelected(null)} />}
   </section>;
 }
