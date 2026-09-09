@@ -8,7 +8,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { database } from '@/lib/db';
 import { linkInputSchema, linkMutationSchema, listLinks, saveLink } from '@/lib/links';
 import { connections } from '@/lib/connections';
-import { loadCommercialDay } from '@/lib/commercial-dashboard';
+import { defaultCommercialQuery, invalidateCommercialSnapshot, loadCommercialDashboard } from '@/lib/commercial-dashboard';
 import { writeLinkThenRead } from '@/lib/link-write-result';
 import { listProspects } from '@/lib/prospects';
 import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
@@ -26,7 +26,11 @@ export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
 async function syncSource(source:'meta'|'notion'|'wix'|'receipts',from?:string,to?:string) {
- if(source==='meta'||source==='notion')return synchronize(source,from,to);
+ if(source==='meta'||source==='notion'){
+  const result=await synchronize(source,from,to);
+  if(source==='notion'&&['complete','empty'].includes(result.status))invalidateCommercialSnapshot(database());
+  return result;
+ }
  const today=Temporal.Now.plainDateISO('Europe/Paris');
  const start=from??today.with({day:1}).toString(),end=to??today.add({days:1}).toString();
  return source==='receipts'?synchronizeWixTransactionCounts(start,end):synchronizeWix(start,end);
@@ -73,7 +77,13 @@ async function handle(request:Request){
   }
   if(route==='attribution'&&method==='GET'){const id=z.uuid().parse(url.searchParams.get('run'));const result=await database().rpc<{run:unknown;results:unknown[]}>('cockpit_attribution_detail',{p_run:id});if(!result.run)throw new AppError('Calcul publié introuvable.',404,'not_found');return json(result);}
   if(route==='details'&&method==='GET')return json(await dashboardDetails(database(),parseFilters(url),z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||0)));
-  if(route==='commercial'&&method==='GET'){const day=z.iso.date().parse(url.searchParams.get('day'));return json(await loadCommercialDay(database(),config.mode,day));}
+  if(route==='commercial'&&method==='GET'){
+   const day=z.iso.date().optional().parse(url.searchParams.get('day')||undefined),from=z.iso.date().optional().parse(url.searchParams.get('from')||undefined),to=z.iso.date().optional().parse(url.searchParams.get('to')||undefined),scope=z.enum(['all']).optional().parse(url.searchParams.get('scope')||undefined);
+   if((from&&!to)||(!from&&to)||(from&&to&&from>to)||(scope==='all'&&!!(day||from||to)))throw new AppError('La période demandée est invalide.',400,'invalid_period');
+   const base=defaultCommercialQuery(day??new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
+   const query={...base,from:scope==='all'?null:from??base.from,to:scope==='all'?null:to??base.to,view:z.enum(['appointments','prospects']).parse(url.searchParams.get('view')||'appointments'),page:z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||'0'),pageSize:z.coerce.number().int().min(1).max(50).parse(url.searchParams.get('pageSize')||'50'),search:z.string().max(100).parse(url.searchParams.get('q')||''),origin:z.string().max(120).parse(url.searchParams.get('origin')||'all'),status:z.string().max(120).parse(url.searchParams.get('status')||'all'),attendance:z.enum(['all','present','absent','planned','cancelled','rescheduled','unknown']).parse(url.searchParams.get('attendance')||'all'),owner:z.string().max(120).parse(url.searchParams.get('owner')||'all'),nextAction:z.enum(['all','recorded']).parse(url.searchParams.get('nextAction')||'all')};
+   return json(await loadCommercialDashboard(database(),config.mode,query));
+  }
   if(route==='prospects'&&method==='GET')return json(await listProspects(database(),config.mode,z.string().max(200).parse(url.searchParams.get('search')||''),z.string().max(200).parse(url.searchParams.get('stage')||''),z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||0)));
   if(route==='links'){
    const db=database();

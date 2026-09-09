@@ -1,8 +1,15 @@
 /* Composition only: the visual primitives come from public/kit. */
+#atelier-a .commercial-controls { min-width:0; margin:0; padding:0; border:0; display:grid; gap:20px; }
 #atelier-a .commercial-page { display:grid; gap:20px; font-size:14px; }
 #atelier-a .commercial-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:14px; }
+#atelier-a .commercial-tabs { display:flex; gap:8px; }
+#atelier-a .commercial-register-note { margin:0; max-width:330px; color:var(--a-muted); font-size:12px; line-height:1.55; }
+#atelier-a .commercial-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
+#atelier-a .commercial-filters .a-f-field { min-width:150px; }
+#atelier-a .commercial-filters .a-f-field:first-child { min-width:min(320px,100%); flex:1 1 240px; }
+#atelier-a .commercial-inline-error { display:flex; gap:10px; align-items:center; margin:0; color:var(--a-muted); font-size:12px; line-height:1.55; }
 #atelier-a .commercial-toolbar .a-f-field { display:grid; gap:6px; font-size:13px; }
-#atelier-a .commercial-toolbar input,#atelier-a .commercial-toolbar select { width:100%; min-height:42px; padding:0 12px; border:0; background:transparent; color:var(--a-ink); font:inherit; }
+#atelier-a .commercial-toolbar input,#atelier-a .commercial-toolbar select,#atelier-a .commercial-filters input,#atelier-a .commercial-filters select { width:100%; min-height:42px; padding:0 12px; border:0; background:transparent; color:var(--a-ink); font:inherit; }
 #atelier-a .commercial-day { min-height:42px; display:flex; align-items:center; color:var(--a-muted); }
 #atelier-a .commercial-origin-filter { margin-left:auto; min-width:190px; }
 #atelier-a .commercial-demo { margin:0; }
@@ -26,6 +33,7 @@
 #atelier-a .commercial-person:hover { text-decoration:underline; text-underline-offset:4px; }
 #atelier-a .commercial-person span { color:var(--a-muted); font-size:18px; line-height:1; }
 #atelier-a .commercial-coverage { border-top:1px solid var(--a-line); padding:14px 20px; color:var(--a-muted); font-size:12px; line-height:1.6; }
+#atelier-a .commercial-pagination { display:flex; align-items:center; justify-content:flex-end; gap:12px; padding:14px 20px; border-top:1px solid var(--a-line); color:var(--a-muted); font-size:12px; }
 #atelier-a .commercial-empty { display:grid; justify-items:center; gap:8px; min-height:220px; align-content:center; padding:28px; text-align:center; }
 #atelier-a .commercial-empty-symbol { width:38px; height:38px; display:grid; place-items:center; border:1px solid var(--a-line); border-radius:9px; color:var(--a-muted); }
 #atelier-a .commercial-empty h3 { margin:4px 0 0; font-size:16px; }
@@ -43,7 +51,7 @@
 #atelier-a .commercial-history strong,#atelier-a .commercial-history span { display:block; }
 #atelier-a .commercial-history strong { font-size:13px; font-weight:600; }
 #atelier-a .commercial-history span { margin-top:4px; color:var(--a-muted); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
-@media(max-width:700px) { #atelier-a .commercial-toolbar { align-items:stretch; } #atelier-a .commercial-toolbar .a-f-field,#atelier-a .commercial-origin-filter { width:100%; margin-left:0; } #atelier-a .commercial-day { order:-1; } #atelier-a .commercial-summary .a-d-card { min-height:0; } #atelier-a .commercial-table-heading { align-items:start; padding:19px 16px 14px; } #atelier-a .commercial-table-heading > span { width:100%; } #atelier-a .commercial-facts > div,#atelier-a .commercial-history li { grid-template-columns:minmax(0,1fr); gap:5px; } #atelier-a .commercial-dialog .a-r-dialog-head { align-items:start; } }
+@media(max-width:700px) { #atelier-a .commercial-toolbar { align-items:stretch; } #atelier-a .commercial-toolbar .a-f-field,#atelier-a .commercial-origin-filter,#atelier-a .commercial-filters .a-f-field { width:100%; margin-left:0; } #atelier-a .commercial-day { order:-1; } #atelier-a .commercial-summary .a-d-card { min-height:0; } #atelier-a .commercial-table-heading { align-items:start; padding:19px 16px 14px; } #atelier-a .commercial-table-heading > span { width:100%; } #atelier-a .commercial-facts > div,#atelier-a .commercial-history li { grid-template-columns:minmax(0,1fr); gap:5px; } #atelier-a .commercial-dialog .a-r-dialog-head { align-items:start; } #atelier-a .commercial-pagination { justify-content:space-between; padding:14px 16px; } }
 
 #atelier-a .commercial-freshness { margin:0; color:var(--a-muted); font-size:12px; line-height:1.6; }
 
