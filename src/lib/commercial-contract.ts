@@ -1,7 +1,8 @@
 import type { DataMode } from './ui-contract';
 
 export type CommercialAttendance = 'present' | 'absent' | 'planned' | 'cancelled' | 'rescheduled' | 'unknown';
-export type CommercialView = 'appointments' | 'prospects';
+export type CommercialView = 'appointments' | 'prospects' | 'followups';
+export type CommercialFollowUp = 'all' | 'overdue' | 'today' | 'upcoming';
 export type CommercialHistoryEntry = { id: string; at: string | null; label: string; value: string | null };
 export type CommercialAppointment = { id: string; scheduledAt: string; attendance: CommercialAttendance; sourceStatus: string | null };
 
@@ -11,12 +12,12 @@ export type CommercialRecord = {
   commercialStatus: string; closingOutcome: string | null; closingAt: string | null; nextActionAt: string | null;
   appointment: CommercialAppointment | null; history: CommercialHistoryEntry[];
 };
-export type CommercialSummary = { appointments: number | null; present: number | null; distinctProspects: number | null };
+export type CommercialSummary = { appointments: number | null; present: number | null; distinctProspects: number | null; followUps: { overdue: number; today: number; upcoming: number; undated: number } | null };
 export type CommercialPagination = { page: number; pageSize: number; total: number };
 export type CommercialFilterOptions = { origins: string[]; statuses: string[]; owners: string[] };
 export type CommercialQuery = {
   from: string | null; to: string | null; view: CommercialView; page: number; pageSize: number;
-  search: string; origin: string; status: string; attendance: CommercialAttendance | 'all'; owner: string; nextAction: 'all' | 'recorded';
+  search: string; origin: string; status: string; attendance: CommercialAttendance | 'all'; owner: string; nextAction: 'all' | 'recorded' | 'missing'; followUp: CommercialFollowUp;
 };
 export type CommercialDashboard = {
   mode: DataMode; day: string; period: { from: string | null; to: string | null; timezone: string };

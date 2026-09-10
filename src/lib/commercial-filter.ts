@@ -11,6 +11,7 @@ export function filterCommercialDashboard(data: CommercialDashboard, origin: str
       appointments: records.length,
       present: records.filter(record => record.appointment?.attendance === 'present').length,
       distinctProspects: new Set(records.map(record => record.prospectId).filter((value): value is string => value !== null)).size,
+      followUps: data.summary.followUps,
     },
   };
 }

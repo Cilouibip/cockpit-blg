@@ -1,6 +1,6 @@
 import { allRows, type Database, type Row } from './db';
 import type { DataMode } from './ui-contract';
-import type { CommercialAppointment, CommercialAttendance, CommercialDashboard, CommercialHistoryEntry, CommercialQuery, CommercialRecord } from './commercial-contract';
+import type { CommercialAppointment, CommercialAttendance, CommercialDashboard, CommercialFollowUp, CommercialHistoryEntry, CommercialQuery, CommercialRecord } from './commercial-contract';
 
 const PARIS = 'Europe/Paris';
 const DAY = new Intl.DateTimeFormat('en-CA', { timeZone: PARIS, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -27,6 +27,14 @@ export function parisAppointmentDay(row: Row): string | null {
   return localDay && DATE.test(localDay) ? localDay : null;
 }
 
+/** A recorded next-action date keeps its Paris calendar day; malformed values are not due dates. */
+export function parisNextActionDay(value: string | null): string | null {
+  if (!value) return null;
+  if (DATE.test(value)) return value;
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : DAY.format(timestamp);
+}
+
 function sourceAttendance(status: unknown): CommercialAttendance {
   switch (text(status)) { case 'attended': return 'present'; case 'no_show': return 'absent'; case 'scheduled': return 'planned'; case 'cancelled': return 'cancelled'; case 'rescheduled': return 'rescheduled'; default: return 'unknown'; }
 }
@@ -45,16 +53,24 @@ function record(prospect: Row | undefined, prospectId: string | null, slot: Comm
   const currentBusiness = prospect ? business(prospect) : null;
   return { id: slot?.id ?? `prospect:${prospectId ?? fallbackName}`, prospectId, name: text(prospect?.display_name) ?? fallbackName, owner: text(prospect?.owner_label), origin: currentBusiness?.channels.join(' · ') || 'Inconnue', tunnel: currentBusiness?.tunnels.join(' · ') || null, commercialStatus: text(prospect?.source_status) ?? 'Non renseigné', closingOutcome: text(prospect?.outcome), closingAt: currentBusiness?.closedDay ?? null, nextActionAt: text(prospect?.next_follow_up_at), appointment: slot, history: [...new Map(history.map(entry => [entry.id, entry])).values()].sort((a, b) => historyTime(b) - historyTime(a) || a.id.localeCompare(b.id)) };
 }
-function matches(record: CommercialRecord, query: CommercialQuery) {
+function followUpMatches(day: string | null, scope: CommercialFollowUp, todayDay: string) {
+  if (scope === 'all') return true;
+  if (!day) return false;
+  if (scope === 'overdue') return day < todayDay;
+  if (scope === 'today') return day === todayDay;
+  return day > todayDay;
+}
+function matches(record: CommercialRecord, query: CommercialQuery, todayDay: string) {
   const searchable = `${record.name} ${record.origin} ${record.commercialStatus} ${record.owner ?? ''}`.toLocaleLowerCase('fr');
-  return (!query.search || searchable.includes(query.search.toLocaleLowerCase('fr'))) && (query.origin === 'all' || record.origin === query.origin) && (query.status === 'all' || record.commercialStatus === query.status) && (query.owner === 'all' || record.owner === query.owner) && (query.attendance === 'all' || record.appointment?.attendance === query.attendance) && (query.nextAction === 'all' || record.nextActionAt !== null);
+  const nextActionDay = parisNextActionDay(record.nextActionAt);
+  return (!query.search || searchable.includes(query.search.toLocaleLowerCase('fr'))) && (query.origin === 'all' || record.origin === query.origin) && (query.status === 'all' || record.commercialStatus === query.status) && (query.owner === 'all' || record.owner === query.owner) && (query.attendance === 'all' || record.appointment?.attendance === query.attendance) && (query.nextAction === 'all' || (query.nextAction === 'recorded' ? nextActionDay !== null : nextActionDay === null)) && followUpMatches(nextActionDay, query.followUp, todayDay);
 }
 function filterOptions(records: CommercialRecord[]) {
   const unique = (values: (string | null)[]) => [...new Set(values.filter((value): value is string => value !== null && value !== ''))].sort((a, b) => a.localeCompare(b, 'fr'));
   return { origins: unique(records.map(record => record.origin)), statuses: unique(records.map(record => record.commercialStatus)), owners: unique(records.map(record => record.owner)) };
 }
-function effectiveQuery(query: CommercialQuery): CommercialQuery { return query.view === 'prospects' ? { ...query, from: null, to: null } : query; }
-export function defaultCommercialQuery(day: string): CommercialQuery { return { from: day, to: day, view: 'appointments', page: 0, pageSize: 50, search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all' }; }
+function effectiveQuery(query: CommercialQuery): CommercialQuery { return query.view === 'appointments' ? query : { ...query, from: null, to: null }; }
+export function defaultCommercialQuery(day: string): CommercialQuery { return { from: day, to: day, view: 'appointments', page: 0, pageSize: 50, search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all', followUp: 'all' }; }
 
 export function buildCommercialDashboard(input: { mode: DataMode; query: CommercialQuery; prospects: Row[]; appointments: Row[]; commercialHistory: Row[]; businessSnapshotPublished?: boolean; updatedAt?: string | null }): CommercialDashboard {
   const query = effectiveQuery(input.query);
@@ -90,14 +106,20 @@ export function buildCommercialDashboard(input: { mode: DataMode; query: Commerc
       : latest ? appointment(latest, '', prospect) : null;
     return record(prospect, prospectId, slot, historyFor(prospectId, latest ? String(latest.id) : null));
   }).sort((a, b) => a.name.localeCompare(b.name, 'fr') || a.id.localeCompare(b.id));
-  const allForView = query.view === 'appointments' ? appointmentRecords : prospectRecords;
-  const filteredRecords = allForView.filter(candidate => matches(candidate, query));
-  const filteredAppointments = appointmentRecords.filter(candidate => matches(candidate, query));
+  const todayDay = DAY.format(new Date());
+  const followUpRecords = prospectRecords.filter(record => parisNextActionDay(record.nextActionAt) !== null).sort((left, right) => (parisNextActionDay(left.nextActionAt) ?? '').localeCompare(parisNextActionDay(right.nextActionAt) ?? '') || left.name.localeCompare(right.name, 'fr') || left.id.localeCompare(right.id));
+  const allForView = query.view === 'appointments' ? appointmentRecords : query.view === 'followups' ? followUpRecords : prospectRecords;
+  const filteredRecords = allForView.filter(candidate => matches(candidate, query, todayDay));
+  const filteredAppointments = appointmentRecords.filter(candidate => matches(candidate, query, todayDay));
+  const followUpScope = { ...query, view: 'followups' as const, nextAction: 'recorded' as const, followUp: 'all' as const };
+  const filteredFollowUps = followUpRecords.filter(candidate => matches(candidate, followUpScope, todayDay));
   const pageSize = Math.min(50, Math.max(1, query.pageSize)), total = filteredRecords.length, page = Math.min(Math.max(0, query.page), Math.max(0, Math.ceil(total / pageSize) - 1)), start = page * pageSize;
   const currentProspects = new Set(filteredAppointments.map(row => row.prospectId).filter((value): value is string => value !== null));
   const updatedAt = input.updatedAt ?? [...input.prospects, ...input.appointments, ...input.commercialHistory].map(row => text(row.observed_at) ?? text(row.source_updated_at)).filter((value): value is string => value !== null).sort().at(-1) ?? null;
   const covered = input.businessSnapshotPublished === true;
-  return { mode: input.mode, day: query.from ?? DAY.format(new Date()), period: { from: query.from, to: query.to, timezone: PARIS }, view: query.view, query: { ...input.query, page, pageSize }, generatedAt: new Date().toISOString(), updatedAt, records: filteredRecords.slice(start, start + pageSize), pagination: { page, pageSize, total }, filters: filterOptions(allForView), summary: { appointments: covered ? filteredAppointments.length : null, present: covered ? filteredAppointments.filter(row => row.appointment?.attendance === 'present').length : null, distinctProspects: covered ? currentProspects.size : null }, coverage: covered ? 'Données Notion importées : les rendez-vous et présences disponibles sont affichés.' : input.appointments.length ? 'Des rendez-vous datés sont disponibles, mais les totaux restent indisponibles.' : 'Les rendez-vous ne sont pas encore disponibles dans cette lecture.', notice: covered ? undefined : 'La liste peut être partielle. Les compteurs restent indisponibles tant que la lecture complète n’est pas établie.' };
+  const followUps = { overdue: filteredFollowUps.filter(record => (parisNextActionDay(record.nextActionAt) ?? '') < todayDay).length, today: filteredFollowUps.filter(record => parisNextActionDay(record.nextActionAt) === todayDay).length, upcoming: filteredFollowUps.filter(record => (parisNextActionDay(record.nextActionAt) ?? '') > todayDay).length, undated: prospectRecords.filter(record => parisNextActionDay(record.nextActionAt) === null).length };
+  const coverage = query.view === 'followups' && followUpRecords.length === 0 ? 'Aucune prochaine action datée n’est enregistrée dans le suivi commercial.' : covered ? 'Données Notion importées : les rendez-vous et présences enregistrés sont affichés.' : input.appointments.length ? 'Des rendez-vous datés sont disponibles, mais les totaux restent indisponibles.' : 'Les rendez-vous ne sont pas encore disponibles dans cette lecture.';
+  return { mode: input.mode, day: query.from ?? DAY.format(new Date()), period: { from: query.from, to: query.to, timezone: PARIS }, view: query.view, query: { ...input.query, page, pageSize }, generatedAt: new Date().toISOString(), updatedAt, records: filteredRecords.slice(start, start + pageSize), pagination: { page, pageSize, total }, filters: filterOptions(allForView), summary: { appointments: covered ? filteredAppointments.length : null, present: covered ? filteredAppointments.filter(row => row.appointment?.attendance === 'present').length : null, distinctProspects: covered ? currentProspects.size : null, followUps }, coverage, notice: covered ? undefined : 'La liste peut être partielle. Les compteurs restent indisponibles tant que la lecture complète n’est pas établie.' };
 }
 
 export function buildCommercialDay(input: Omit<Parameters<typeof buildCommercialDashboard>[0], 'query'> & { day: string }) { return buildCommercialDashboard({ ...input, query: defaultCommercialQuery(input.day) }); }
