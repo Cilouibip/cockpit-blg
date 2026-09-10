@@ -58,3 +58,18 @@ test('missing historical payment or Client refuses publication and preserves pri
  const missingClient=buildNotionCommerceReport(snapshot({clients:[],payments:[payment('prior',{day:'2023-02-03'}),payment('recent')],observedAt:'2024-03-08T12:00:00Z'}));assert.equal(missingClient.totals.firstClientsDeclared,0);await assert.rejects(()=>publishNotionCommerceReport(db,config,missingClient),/COMMERCE_HISTORICAL_SOURCE_MEMBER_MISSING/);
  assert.equal((await readNotionCommerceReport(db,filters,env))!.runId,prior!.runId);assert.equal((await readNotionCommerceReport(db,filters,env))!.counts!.firstPurchaseEvidenceConcordant,0);
 });
+test('paid-sales details are byte-bounded, paginated beyond 1000 chunks, corruption falls back, and exact retry is idempotent',async()=>{
+ const config={...commerceConfig,parcours:{...commerceConfig.parcours,dataSourceId:'paid-sales-chunks-synthetic'}};
+ const report=make('2024-02-03','2024-03-20T12:00:00Z');
+ const long='https://www.notion.so/'+('x'.repeat(780));
+ report.paidSales.details=Array.from({length:1101},(_,index)=>({paymentId:'payment-'+index,paymentUrl:long,clientIds:['client-a'],clientName:'Synthetic '+index,clientUrl:long,scheduleIds:['schedule-'+index],scheduleUrls:[long],parcoursIds:['parcours-a'],day:'2024-02-03',amountMinor:39000,state:'pending' as const,reasons:['synthetic_reason_'+('r'.repeat(60))]}));
+ report.paidSales.pendingInitialPaymentCases=report.paidSales.details.length;
+ const first=await publishNotionCommerceReport(db,config,report);
+ const chunks=await sql.query("SELECT dimensions_key,octet_length(dimensions::text) bytes FROM source_aggregates WHERE sync_run_id=$1 AND metric_key='notion_commerce_paid_sales' ORDER BY dimensions_key",[first.runId]);
+ assert.ok(chunks.rows.length>1000);assert.ok(chunks.rows.every(row=>Number(row.bytes)<4000));
+ const env={NOTION_COMMERCE_CONFIG:JSON.stringify(config)},readBack=await readNotionCommerceReport(db,filters,env);assert.equal(readBack!.paidSales!.details.length,1101);assert.equal(readBack!.paidSales!.pendingInitialPaymentCases,1101);
+ const retry=await publishNotionCommerceReport(db,config,structuredClone(report));assert.equal(retry.runId,first.runId);
+ await sql.query("DELETE FROM source_aggregates WHERE sync_run_id=$1 AND metric_key='notion_commerce_paid_sales' AND dimensions_key=(SELECT dimensions_key FROM source_aggregates WHERE sync_run_id=$1 AND metric_key='notion_commerce_paid_sales' ORDER BY dimensions_key LIMIT 1)",[first.runId]);
+ assert.equal((await readNotionCommerceReport(db,filters,env))!.available,false);
+ const repaired=await publishNotionCommerceReport(db,config,structuredClone(report));assert.notEqual(repaired.runId,first.runId);assert.equal((await readNotionCommerceReport(db,filters,env))!.paidSales!.details.length,1101);
+});

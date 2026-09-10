@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildNotionCommerceReport} from '../src/lib/notion-commerce-report';
-import {normalizeNotionCommerce,readNotionCommerceSnapshot,notionCommerceProfile,type CommerceReadCheckpoint} from '../src/connectors/notion-commerce';
+import {normalizeNotionCommerce,readNotionCommerceSnapshot,notionCommerceConfig,notionCommerceProfile,type CommerceReadCheckpoint} from '../src/connectors/notion-commerce';
 import {emailIdentity} from '../src/domain/identity';
 import {commerceConfig,client,payment,parcours,snapshot} from './commerce-fixtures';
 const secret='synthetic-secret-used-only-for-fixtures';
@@ -38,17 +38,33 @@ test('no date, unresolved client or incomplete source is never silently included
 test('normalizer preserves Paris date and raw date, minimizes private fields and shares existing email HMAC',()=>{
  const fields={Client:{relation:[{id:'client-a'}]},'E-mail':{email:' PERSON@EXAMPLE.TEST '},Date:{date:{start:'2024-03-30T23:30:00Z'}},Montant:{number:null},Status:{select:{name:'succeeded'}},Transaction:{rich_text:[{plain_text:'ch_synthetic'}]},'Invoice Id':{rich_text:[]},'Private notes':{rich_text:[{plain_text:'must never persist'}]}};
  const result=normalizeNotionCommerce({id:'payment-a',properties:fields},'payments',commerceConfig,secret) as ReturnType<typeof payment>;
- assert.equal(result.day,'2024-03-31');assert.equal(result.rawDate,'2024-03-30T23:30:00Z');assert.equal(result.amountMinor,null);assert.equal(result.emailKey,emailIdentity('person@example.test',secret));assert.equal(JSON.stringify(result).includes('must never persist'),false);assert.equal(JSON.stringify(result).includes('PERSON@'),false);
+ const pageResult=normalizeNotionCommerce({id:'payment-a',url:'https://www.notion.so/payment-a',properties:fields},'payments',commerceConfig,secret) as ReturnType<typeof payment>;
+ assert.equal(result.day,'2024-03-31');assert.equal(result.rawDate,'2024-03-30T23:30:00Z');assert.equal(result.amountMinor,null);assert.equal(result.emailKey,emailIdentity('person@example.test',secret));assert.equal(pageResult.notionUrl,'https://www.notion.so/payment-a');assert.equal(JSON.stringify(result).includes('must never persist'),false);assert.equal(JSON.stringify(result).includes('PERSON@'),false);
+});
+test('client normalizer retains only its title and Notion page link for private paid-sales detail',()=>{
+ const fields={'Nom':{type:'title',title:[{plain_text:'Camille Martin'}]},'E-mail':{email:null},'E-mail (BIS)':{email:null},Démarrage:{date:null},Prospect:{relation:[]},Binôme:{relation:[]}};
+ const result=normalizeNotionCommerce({id:'client-a',url:'https://www.notion.so/client-a',properties:fields},'clients',commerceConfig,secret) as import('../src/lib/notion-commerce-report').CommerceClient;
+ assert.equal(result.name,'Camille Martin');assert.equal(result.notionUrl,'https://www.notion.so/client-a');assert.equal(JSON.stringify(result).includes('Camille Martin'),true);
+});
+test('schedule normalizer keeps only explicit relations and reads a Total vente formula',()=>{
+ const fields={Client:{relation:[{id:'client-a'}]},Paiement:{relation:[{id:'payment-a'}]},Date:{date:{start:'2024-03-30T23:30:00Z'}},Montant:{number:390},Statut:{select:{name:'Payé'}},'Total vente':{formula:{number:1170}},Échéance:{rich_text:[{plain_text:'1/3'}]}};
+ const result=normalizeNotionCommerce({id:'schedule-a',properties:fields},'schedule',commerceConfig,secret) as import('../src/lib/notion-commerce-report').CommerceSchedule;
+ assert.equal(result.day,'2024-03-31');assert.equal(result.totalMinor,117000);assert.deepEqual(result.paymentIds,['payment-a']);
+});
+test('legacy commerce config remains readable until the schedule source is configured',async()=>{
+ const legacy=notionCommerceConfig(JSON.stringify({clients:{dataSourceId:'synthetic-clients'},payments:{dataSourceId:'synthetic-payments'},parcours:{dataSourceId:'synthetic-parcours'}}))!;assert.equal(legacy.schedule,undefined);
+ let calls=0;const fetcher=async(input:unknown)=>{const url=new URL(String(input)),family=url.pathname.includes('clients')?'clients':url.pathname.includes('payments')?'payments':'parcours';calls++;return url.pathname.endsWith('/query')?Response.json({results:[],has_more:false,next_cursor:null}):Response.json({properties:Object.fromEntries(Object.values(legacy[family].fields).map((name,i)=>[name,{id:'p'+i}]))});};
+ const result=await readNotionCommerceSnapshot({config:legacy,token:'synthetic',identitySecret:secret,fetcher:fetcher as typeof fetch});assert.equal(result.complete,true);assert.equal(result.snapshot!.schedules.length,0);assert.equal(calls,6);
 });
 test('source pagination is resumable, terminal observation time is stable and secret/profile changes reject the checkpoint',async()=>{
  let calls=0,saved:CommerceReadCheckpoint|undefined;const fetcher=async(input:unknown,init?:RequestInit)=>{const url=new URL(String(input));calls++;
-  const family=url.pathname.includes('synthetic-clients')?'clients':url.pathname.includes('synthetic-payments')?'payments':'parcours';
-  if(!url.pathname.endsWith('/query'))return Response.json({properties:Object.fromEntries(Object.values(commerceConfig[family].fields).map((name,i)=>[name,{id:'p'+i}]))});
+  const family=url.pathname.includes('synthetic-clients')?'clients':url.pathname.includes('synthetic-payments')?'payments':url.pathname.includes('synthetic-schedule')?'schedule':'parcours';
+  if(!url.pathname.endsWith('/query'))return Response.json({properties:Object.fromEntries(Object.values(commerceConfig[family]!.fields).map((name,i)=>[name,{id:'p'+i}]))});
   assert.ok(url.searchParams.getAll('filter_properties[]').length>0);assert.deepEqual(JSON.parse(String(init?.body)).sorts,[{timestamp:'created_time',direction:'ascending'}]);return Response.json({results:[],has_more:false,next_cursor:null});
  };
  const a=await readNotionCommerceSnapshot({config:commerceConfig,token:'synthetic-token',identitySecret:secret,maxPages:1,fetcher:fetcher as typeof fetch,onCheckpoint:async c=>{saved=c;}});assert.equal(a.complete,false);assert.equal(a.checkpoint.familyIndex,1);const untouched=JSON.stringify(saved);
- const b=await readNotionCommerceSnapshot({config:commerceConfig,token:'synthetic-token',identitySecret:secret,checkpoint:saved,fetcher:fetcher as typeof fetch});assert.equal(b.complete,true);assert.equal(calls,6);assert.equal(JSON.stringify(saved),untouched);
- const c=await readNotionCommerceSnapshot({config:commerceConfig,token:'synthetic-token',identitySecret:secret,checkpoint:b.checkpoint,fetcher:fetcher as typeof fetch});assert.equal(c.snapshot!.observedAt,b.snapshot!.observedAt);assert.equal(calls,6);
+ const b=await readNotionCommerceSnapshot({config:commerceConfig,token:'synthetic-token',identitySecret:secret,checkpoint:saved,fetcher:fetcher as typeof fetch});assert.equal(b.complete,true);assert.equal(calls,8);assert.equal(JSON.stringify(saved),untouched);
+ const c=await readNotionCommerceSnapshot({config:commerceConfig,token:'synthetic-token',identitySecret:secret,checkpoint:b.checkpoint,fetcher:fetcher as typeof fetch});assert.equal(c.snapshot!.observedAt,b.snapshot!.observedAt);assert.equal(calls,8);
  await assert.rejects(()=>readNotionCommerceSnapshot({config:commerceConfig,token:'x',identitySecret:secret+'changed',checkpoint:saved}),/INVALID_SOURCE_CHECKPOINT/);
  const changed=structuredClone(commerceConfig);changed.parcours.fields.order='Different field';assert.notEqual(notionCommerceProfile(changed),notionCommerceProfile(commerceConfig));await assert.rejects(()=>readNotionCommerceSnapshot({config:changed,token:'x',identitySecret:secret,checkpoint:saved}),/INVALID_SOURCE_CHECKPOINT/);
 });

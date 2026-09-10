@@ -52,10 +52,17 @@ export async function applyStoredBusiness(response:DashboardResponse,db:Database
    Object.assign(clientMetric,{value,source:'Notion · démarrages Client',updatedAt:commerce.observedAt,definition:'Personnes qui commencent leur premier accompagnement à leur Démarrage Client effectif. Les binômes sont inclus.',coverage:commerce.available?`${commerce.counts!.firstAccompanimentsStarted} démarrages · ${commerce.coverage!.undatedClientStarts} sans date · ${commerce.coverage!.futureClientStarts} à venir non comptés.`:commerce.reason,completeness:commerce.available?'partial':undefined,unavailableReason:value===null?commerce.reason:undefined});
   }
  }
- const transactionIndex=response.metrics.findIndex(m=>m.id==='transactions');
- if(transactionIndex>=0){
-  if(all)response.metrics[transactionIndex]=await readWixTransactionCount(db,filters.from,to);
-  else Object.assign(response.metrics[transactionIndex],{value:null,unavailableReason:'Les reçus Wix ne sont pas reliés à ce filtre source, tunnel ou campagne.'});
+ const paidIndex=response.metrics.findIndex(m=>m.id==='paid_sales');
+ if(paidIndex>=0){
+  const report=commerce?.available&&all?commerce.paidSales:null;
+  const metric=response.metrics[paidIndex];
+  Object.assign(metric,{value:report?report.confirmedInitialSales:null,source:'Notion · ventes et paiements',updatedAt:commerce?.observedAt??null,paidSales:report??undefined,completeness:'partial',definition:'Première vente payée connue de chaque client, avec paiement réussi et liaison explicite à la première échéance réglée. Les rapprochements incomplets restent séparés.',coverage:report?`${report.confirmedInitialSales} ventes identifiées · ${report.reconciledInitialSales} paiement(s) rapproché(s) · ${report.pendingInitialPaymentCases} cas à rattacher. ${report.excludedSubsequentPayments} mensualités ou paiements suivants séparés.`:commerce?.reason??'Le relevé des ventes payées doit être actualisé.',unavailableReason:report?undefined:commerce?.reason??'Le relevé des ventes payées doit être actualisé.'});
+ }
+ if(all){
+  const receipts=await readWixTransactionCount(db,filters.from,to);
+  receipts.id='payment_receipts';receipts.label='Paiements reçus';
+  const conversion=response.pillars.find(p=>p.id==='conversion');
+  if(conversion)conversion.metrics.push(receipts);
  }
  const metaScope=filters.tunnel==='all'&&['all','paid'].includes(filters.source)&&(!filters.campaign||filters.campaign==='all');
  if(metaScope){

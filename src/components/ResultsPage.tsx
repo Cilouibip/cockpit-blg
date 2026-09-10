@@ -5,6 +5,7 @@ import type { DashboardFilters, DashboardResponse, DetailRow, DetailsResponse, M
 import { matchingPeriod, resultPeriods, type PeriodId } from './result-periods';
 import { filtersQuery, formatDate, formatNumber, validateDateRange } from './ui-format';
 import { resultCopy, resultMessage, resultSource, resultState } from './result-copy';
+import PaidSalesDetails from './PaidSalesDetails';
 import type {PostHogClientState} from '../lib/posthog-report-client';
 
 // Atelier A: A.11.4 cards/curve, A.10.3 tables/filters, A.04.2 hierarchy and A.08 dialogs.
@@ -73,6 +74,7 @@ function MetricDrawer({ metric, onClose, filters,posthog={},retryPosthog }: { me
     {metric.value === null && <span className="results-state">{report && ['loading','waiting'].includes(report.state)?'Chargement…':'Indisponible'}</span>}
     {text && <p className="results-drawer-description">{text.description}</p>}
     {message && (!report || report.state==='ready') && <p className="results-reason">{message}</p>}
+    {metric.id==='paid_sales' && metric.paidSales && <PaidSalesDetails report={metric.paidSales} />}
     {metric.id==='arrivals' && <ReportStatus reports={posthog} retry={retryPosthog} />}
     {(source || metric.updatedAt) && <p className="results-source">{source && <span>{source}</span>}{metric.updatedAt && <span>Mis à jour le {formatDate(metric.updatedAt, true)}</span>}</p>}
   </ResultDialog>;
