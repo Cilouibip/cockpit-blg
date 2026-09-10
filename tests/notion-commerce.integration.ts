@@ -4,7 +4,7 @@ import {Client} from 'pg';
 import fs from 'node:fs';
 import {postgresDatabase,type Database} from '../src/lib/db';
 import {buildNotionCommerceReport} from '../src/lib/notion-commerce-report';
-import {publishNotionCommerceReport,readNotionCommerceReport} from '../src/lib/notion-commerce-storage';
+import {commerceReadMemo,publishNotionCommerceReport,readNotionCommerceReport} from '../src/lib/notion-commerce-storage';
 import {snapshot,parcours,payment,commerceConfig,commerceEnv,filters} from './commerce-fixtures';
 const base=new URL(process.env.TEST_DATABASE_URL||'postgresql://localhost:55440/postgres');if(!['localhost','127.0.0.1','[::1]'].includes(base.hostname))throw Error('LOCAL_ONLY');
 const name='commerce_test_'+Date.now(),admin=new Client({connectionString:base.href}),target=new URL(base);target.pathname='/'+name;let sql:Client,db:Database;
@@ -72,4 +72,14 @@ test('paid-sales details are byte-bounded, paginated beyond 1000 chunks, corrupt
  await sql.query("DELETE FROM source_aggregates WHERE sync_run_id=$1 AND metric_key='notion_commerce_paid_sales' AND dimensions_key=(SELECT dimensions_key FROM source_aggregates WHERE sync_run_id=$1 AND metric_key='notion_commerce_paid_sales' ORDER BY dimensions_key LIMIT 1)",[first.runId]);
  assert.equal((await readNotionCommerceReport(db,filters,env))!.available,false);
  const repaired=await publishNotionCommerceReport(db,config,structuredClone(report));assert.notEqual(repaired.runId,first.runId);assert.equal((await readNotionCommerceReport(db,filters,env))!.paidSales!.details.length,1101);
+});
+
+test('la comparaison de période relit chaque famille de lignes une seule fois par requête',async()=>{
+ const calls:{table:string;metric?:string}[]=[];const observed={...db,select:async(...args:Parameters<Database['select']>)=>{calls.push({table:args[0],metric:(args[1] as {eq?:{metric_key?:string}}|undefined)?.eq?.metric_key});return db.select(...args);}};
+ const single=await readNotionCommerceReport(observed,filters,commerceEnv,commerceReadMemo());assert.equal(single!.available,true);const expected=calls.length;calls.length=0;
+ const memo=commerceReadMemo(),previous={...filters,from:'2024-01-01',to:'2024-01-31'};
+ const [current,prior]=await Promise.all([readNotionCommerceReport(observed,filters,commerceEnv,memo),readNotionCommerceReport(observed,previous,commerceEnv,memo)]);
+ assert.equal(current!.runId,single!.runId);assert.equal(prior!.runId,single!.runId);assert.deepEqual(current!.counts,single!.counts);assert.equal(current!.paidSales!.details.length,single!.paidSales!.details.length);
+ assert.equal(calls.length,expected);assert.equal(calls.filter(c=>c.table==='sync_runs').length,1);assert.equal(calls.filter(c=>c.metric==='notion_commerce_paid_sales').length,calls.filter(c=>c.metric==='notion_commerce_overview').length);
+ assert.equal((await readNotionCommerceReport(observed,filters,commerceEnv))!.runId,single!.runId);
 });
