@@ -19,8 +19,8 @@ const reasons: Record<string,string> = {
   explicit_schedule_payment_conflict:'Le paiement et l’échéance ne concordent pas',
 };
 const noteworthy = (row:PaidSaleDetail) => row.state==='confirmed' ? 'Paiement relié à la première échéance réglée' : row.state==='reconciled' ? 'Client, date et montant concordent ; liaison à compléter' : row.reasons.map(reason=>reasons[reason]).filter(Boolean).join(' · ') || 'Rattachement à examiner';
-const notionLink=(value:string|null|undefined)=>{try{if(!value)return null;const url=new URL(value);return url.protocol==='https:'&&(url.hostname==='notion.so'||url.hostname==='www.notion.so')?url.toString():null;}catch{return null;}};
-function SourceLink({url,label}:{url:string|null|undefined;label:string}){const href=notionLink(url);return href?<a href={href} target="_blank" rel="noopener noreferrer">{label}</a>:null;}
+export const notionEvidenceUrl=(value:string|null|undefined)=>{try{if(!value)return null;const url=new URL(value);return url.protocol==='https:'&&(url.hostname==='notion.so'||url.hostname==='www.notion.so'||url.hostname==='app.notion.com')?url.toString():null;}catch{return null;}};
+function SourceLink({url,label}:{url:string|null|undefined;label:string}){const href=notionEvidenceUrl(url);return href?<a href={href} target="_blank" rel="noopener noreferrer">{label}</a>:null;}
 export default function PaidSalesDetails({report}:{report:PaidSalesReport}){
  const groups=[{state:'confirmed',title:'Ventes identifiées',open:true},{state:'reconciled',title:'Paiements rapprochés — liaison à compléter',open:true},{state:'pending',title:'Cas à rattacher',open:true},{state:'excluded',title:'Autres paiements et remboursements',open:false}] as const;
  return <section className="paid-sales-details" aria-label="Ventes et paiements de la période">
