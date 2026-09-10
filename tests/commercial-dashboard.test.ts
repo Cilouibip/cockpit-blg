@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCommercialDashboard, buildCommercialDay, defaultCommercialQuery, filterCommercialDashboard, invalidateCommercialSnapshot, loadCommercialDashboard, loadCommercialDay, parisAppointmentDay } from '../src/lib/commercial-dashboard';
+import { buildCommercialDashboard, buildCommercialDay, defaultCommercialQuery, filterCommercialDashboard, invalidateCommercialSnapshot, loadCommercialDashboard, loadCommercialDay, parisAppointmentDay, parisNextActionDay } from '../src/lib/commercial-dashboard';
 import { serializeCommercialQuery } from '../src/lib/commercial-query';
 import type { Database, Row } from '../src/lib/db';
 import { formatAppointment } from '../src/components/CommercialPage';
@@ -8,6 +8,8 @@ import { formatAppointment } from '../src/components/CommercialPage';
 const prospect = (overrides: Row = {}): Row => ({ id: 'p-1', display_name: 'Ada', source_status: 'RDV fait', outcome: null, owner_label: 'Mehdi', ...overrides });
 const appointment = (overrides: Row = {}): Row => ({ id: 'a-1', prospect_id: 'p-1', scheduled_at: '2026-09-09T08:30:00.000Z', status: 'scheduled', source_status: 'Prévu', ...overrides });
 const dashboard = (overrides: Partial<Parameters<typeof buildCommercialDay>[0]> = {}) => buildCommercialDay({ mode: 'demo', day: '2026-09-09', prospects: [prospect()], appointments: [appointment()], commercialHistory: [], ...overrides });
+const parisToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const shiftDay = (day: string, amount: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + amount); return value.toISOString().slice(0, 10); };
 
 test('uses the Paris calendar day around midnight', () => {
   assert.equal(parisAppointmentDay(appointment({ scheduled_at: '2026-09-08T21:59:00.000Z' })), '2026-09-08');
@@ -17,6 +19,11 @@ test('uses the Paris calendar day around midnight', () => {
 test('a date-only scheduled day never gains an invented hour in the interface', () => {
   assert.match(formatAppointment('2026-09-09'), /Horaire non renseigné/);
   assert.doesNotMatch(formatAppointment('2026-09-09'), /02:00/);
+});
+
+test('next-action timestamps keep their Paris day', () => {
+  assert.equal(parisNextActionDay('2026-09-09T22:30:00.000Z'), '2026-09-10');
+  assert.equal(parisNextActionDay('date non renseignée'), null);
 });
 
 test('deduplicates appointments before daily counters, beyond a 50-row page', () => {
@@ -179,4 +186,28 @@ test('prospect filters preserve the requested appointment dates while the regist
 test('a history entry linked to both the person and appointment appears once', () => {
   const result = dashboard({ commercialHistory: [{ id: 'h-1', prospect_id: 'p-1', appointment_id: 'a-1', field_key: 'source_status', after_value: 'RDV fait', observed_at: '2026-09-09T09:00:00Z' }] });
   assert.equal(result.records[0].history.filter(row => row.id === 'history:h-1').length, 1);
+});
+
+test('a date change in history does not create another appointment or daily KPI', () => {
+  const result = buildCommercialDay({ mode: 'live', day: '2026-09-04', businessSnapshotPublished: true, prospects: [prospect({ business: { scheduledDay: '2026-09-10', attendance: 'show_up' } })], appointments: [appointment({ scheduled_at: '2026-09-10T08:00:00Z' })], commercialHistory: [{ id: 'moved-slot', prospect_id: 'p-1', field_key: 'current_appointment_at', before_value: '2026-09-04', after_value: '2026-09-10', observed_at: '2026-09-05T10:00:00Z' }] });
+  assert.equal(result.summary.appointments, 0);
+  assert.equal(result.records.length, 0);
+});
+
+test('follow-up view only uses recorded dates, sorts them, and applies filters before its counters', () => {
+  const today = parisToday(), yesterday = shiftDay(today, -1), tomorrow = shiftDay(today, 1);
+  const prospects = [
+    prospect({ id: 'late', display_name: 'À traiter', owner_label: 'Sophie', next_follow_up_at: yesterday, business: { channels: ['Publicité'] } }),
+    prospect({ id: 'today', display_name: 'À faire aujourd’hui', owner_label: 'Sophie', next_follow_up_at: today, business: { channels: ['Publicité'] } }),
+    prospect({ id: 'later', display_name: 'À venir', owner_label: 'Mehdi', next_follow_up_at: tomorrow, business: { channels: ['Organique'] } }),
+    prospect({ id: 'missing', display_name: 'Sans date', next_follow_up_at: null, business: { channels: ['Publicité'] } }),
+  ];
+  const query = { ...defaultCommercialQuery(today), view: 'followups' as const, nextAction: 'recorded' as const, origin: 'Publicité' };
+  const result = buildCommercialDashboard({ mode: 'live', query, prospects, appointments: [], commercialHistory: [], businessSnapshotPublished: true });
+  assert.deepEqual(result.records.map(record => record.name), ['À traiter', 'À faire aujourd’hui']);
+  assert.deepEqual(result.summary.followUps, { overdue: 1, today: 1, upcoming: 0, undated: 1 });
+  const overdue = buildCommercialDashboard({ mode: 'live', query: { ...query, followUp: 'overdue' }, prospects, appointments: [], commercialHistory: [], businessSnapshotPublished: true });
+  assert.equal(overdue.records.length, 1);
+  const registry = buildCommercialDashboard({ mode: 'live', query: { ...defaultCommercialQuery(today), view: 'prospects', nextAction: 'missing' }, prospects, appointments: [], commercialHistory: [], businessSnapshotPublished: true });
+  assert.deepEqual(registry.records.map(record => record.name), ['Sans date']);
 });

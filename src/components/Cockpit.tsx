@@ -58,7 +58,7 @@ function useRemote<T>(path: string | null, revision: number, keepPrevious = fals
   const [error, setError] = useState('');
   const previousPath = useRef<string | null>(null);
   useEffect(() => {
-    if (!path) return;
+    if (!path) { setLoading(false); return; }
     const controller = new AbortController();
     setLoading(true); setError('');
     if (previousPath.current !== path && !keepPrevious) setData(null);
@@ -202,7 +202,7 @@ function Connections({ data, refresh, announce }: { data: ConnectionsResponse; r
   const status: Record<Connection['status'], string> = { connected: 'Accès disponible', partial: 'Partiellement raccordé', missing: 'À raccorder', error: 'Lecture interrompue', demo: 'Démonstration' };
   async function sync(connection: Connection) {
     setBusy(connection.id); setError('');
-    try { const result=connection.id==='notion'?await refreshNotionToCompletion(()=>request(`/api/sync/notion`,{method:'POST',body:'{}'}),read=>announce(`Notion : ${read} fiches lues, lecture en cours…`)):await request<{status:string}>(`/api/sync/${connection.id}`, { method: 'POST', body: '{}' }); announce(result.status==='partial'?`Lecture ${connection.name} en cours ou partielle. Les données déjà publiées restent disponibles.`:`Lecture ${connection.name} terminée. Consulte la couverture actualisée.`); refresh(); }
+    try { const result=connection.id==='notion'?await refreshNotionToCompletion(()=>request(`/api/sync/notion`,{method:'POST',body:'{}',timeoutMs:75_000}),read=>announce(`Notion : ${read} fiches lues, lecture en cours…`)):await request<{status:string}>(`/api/sync/${connection.id}`, { method: 'POST', body: '{}' }); announce(result.status==='partial'?`Lecture ${connection.name} en cours ou partielle. Les données déjà publiées restent disponibles.`:`Lecture ${connection.name} terminée. Consulte la couverture actualisée.`); refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : 'La lecture n’a pas abouti.'); }
     finally { setBusy(''); }
   }
@@ -213,7 +213,7 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
   const [view, setView] = useState<View>('results'); const [filters, setFilters] = useState<DashboardFilters>(() => defaultFilters()); const [draftFilters, setDraftFilters] = useState<DashboardFilters>(filters); const [filterError, setFilterError] = useState(''); const [revision, setRevision] = useState(0); const [notice, setNotice] = useState(''); const [metric, setMetric] = useState<Metric | null>(null); const [logoutPending, setLogoutPending] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [journey,setJourney]=useState('quiz');
-  const [salesQuery, setSalesQuery] = useState<CommercialQuery>(() => { const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); return { from: day, to: day, view: 'appointments', page: 0, pageSize: 50, search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all' }; });
+  const [salesQuery, setSalesQuery] = useState<CommercialQuery>(() => { const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); return { from: day, to: day, view: 'appointments', page: 0, pageSize: 50, search: '', origin: 'all', status: 'all', attendance: 'all', owner: 'all', nextAction: 'all', followUp: 'all' }; });
   const active = views.find(item => item.id === view)!; const title = useRef<HTMLHeadingElement>(null);
   const dashboard = useRemote<DashboardResponse>(view === 'results' || view === 'journey' ? `/api/dashboard?${filtersQuery(filters)}` : null, revision);
   const reports = usePostHogReports(filters, mode==='live' && ['results','journey'].includes(view) && !!dashboard.data && !dashboard.loading && dashboard.data.period.from===filters.from && dashboard.data.period.to===filters.to, revision, dashboard.setData,filters.tunnel==='masterclass'||(view==='journey'&&filters.tunnel==='all'&&journey==='masterclass')?'masterclass':'quiz');
@@ -227,7 +227,7 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
       if(mode==='demo'){refresh();return;}
       setSyncing(true);
       try {
-        const invoke=async()=>{const response=await fetch('/api/sync/notion',{method:'POST',credentials:'same-origin'});const result=await response.json();if(!response.ok&&response.status!==207)throw new Error(result.error||'Lecture Notion interrompue.');return result as {status:string;rowsRead?:number;coverage?:{reason?:string}};};
+        const invoke=()=>request<import('../lib/refresh-plan').RefreshResult>('/api/sync/notion',{method:'POST',body:'{}',timeoutMs:75_000});
         const result=await refreshNotionToCompletion(invoke,read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`));
         const label:Record<string,string>={complete:'Lecture Notion terminée.',empty:'Aucune fiche retournée par Notion.',partial:'Lecture Notion partielle ou en cours.',failed:'Lecture Notion interrompue.'};
         setNotice((label[result.status]??'Lecture Notion interrompue.')+(result.coverage?.reason?` ${result.coverage.reason}`:'')); refresh();
@@ -237,7 +237,7 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
     if(mode==='demo'||!['results','journey'].includes(view)){refresh();return;}
     setSyncing(true);
     try {
-      const invoke=async(path:string)=>{const response=await fetch(path,{method:'POST',credentials:'same-origin'});const result=await response.json();if(!response.ok&&response.status!==207)throw new Error();return result;};
+      const invoke=(path:string)=>request<import('../lib/refresh-plan').RefreshResult>(path,{method:'POST',body:'{}',timeoutMs:75_000});
       const query=filtersQuery(filters);
       const jobs:{source:string;work:Promise<{status:string;coverage?:{reason?:string}}> }[]=[
         {source:'wix',work:invoke(`/api/sync/wix?${query}`)},
