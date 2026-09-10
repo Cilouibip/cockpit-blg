@@ -41,3 +41,26 @@ test('changing live filters never calls a source API or writes an import',async(
   if(oldPostHog===undefined)delete process.env.POSTHOG_PROJECT_ID;else process.env.POSTHOG_PROJECT_ID=oldPostHog;
  }
 });
+
+test('les lectures publiées d’une période partent ensemble au lieu de s’attendre',async()=>{
+ const saved={WIX_SITE_ID:process.env.WIX_SITE_ID,NOTION_DATA_SOURCE_ID:process.env.NOTION_DATA_SOURCE_ID,POSTHOG_PROJECT_ID:process.env.POSTHOG_PROJECT_ID};
+ process.env.WIX_SITE_ID='synthetic-site';process.env.NOTION_DATA_SOURCE_ID='synthetic-notion';process.env.POSTHOG_PROJECT_ID='synthetic-project';
+ const skeleton=new Set(['cockpit_dashboard_rollup','cockpit_attribution_snapshot','cockpit_dashboard_lists']);
+ const {db}=stub();const base=db.rpc.bind(db);const stored:string[]=[];let inFlight=0,peak=0;
+ db.rpc=async<T>(name:string,args:Row):Promise<T>=>{
+  if(skeleton.has(name))return base<T>(name,args);
+  stored.push(name);inFlight++;peak=Math.max(peak,inFlight);
+  try{
+   await new Promise(resolve=>setTimeout(resolve,5));
+   if(name==='cockpit_business_rollup')return {available:false,observedAt:null,sourceRows:0,leads:{rows:0,known:0,unresolved:0,creationOnly:0},appointments:{total:0,attended:0,explicitFinished:0,noShow:0,cancelled:0,unknown:0,booked:0,closed:0}} as T;
+   return await base<T>(name,args);
+  }finally{inFlight--;}
+ };
+ db.select=async()=>[];
+ try{
+  const result=await dashboard(db,filters,'live');
+  assert.ok(stored.includes('cockpit_business_rollup')&&stored.filter(name=>name==='cockpit_source_window').length>=4,stored.join(','));
+  assert.ok(peak>=4,`lectures simultanées observées : ${peak}`);
+  assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
+ } finally {for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+});

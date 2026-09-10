@@ -8,7 +8,8 @@ import { watchedSeconds, type WatchedInterval } from '../domain/video';
 import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
 import type {DetailsResponse} from './ui-contract';
 import { readWixReportedPeriod } from './sync-wix';
-import { applyStoredBusiness } from './business-dashboard';
+import { applyBusinessReads, readStoredBusiness } from './business-dashboard';
+import { commerceReadMemo } from './notion-commerce-storage';
 import { readPostHogPeriod, applyPostHogQuiz, postHogScopeFromFilters, readPostHogMasterclassPeriod, applyPostHogMasterclass } from './posthog-dashboard';
 export function parseFilters(url:URL):DashboardFilters {
  const today=Temporal.Now.plainDateISO('Europe/Paris');
@@ -149,30 +150,32 @@ export async function dashboardDetails(db:Database,filters:DashboardFilters,page
  return db.rpc<DetailsResponse&{campaigns:DashboardResponse['campaigns']}>('cockpit_dashboard_lists',{p_from:filters.from,p_to:Temporal.PlainDate.from(filters.to).add({days:1}).toString(),p_source:filters.source,p_tunnel:filters.tunnel,p_campaign:filters.campaign==='all'?'':filters.campaign,p_page:page,p_page_size:50});
 }
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
+ const memo=commerceReadMemo();
  async function view(selected:DashboardFilters,withLists:boolean){
   const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
-  const [rollup,snapshot,lists]=await Promise.all([
+  // Every read of a period is independent: they all start together, then apply in the historical order.
+  const live=mode==='live',all=selected.source==='all'&&selected.tunnel==='all'&&!campaign,scope=postHogScopeFromFilters(selected);
+  const readsQuiz=live&&!!scope&&selected.tunnel!=='masterclass',readsMasterclass=live&&selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign;
+  const [rollup,snapshot,lists,wix,business,quiz,masterclass]=await Promise.all([
    db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
    db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
    withLists?dashboardDetails(db,selected):Promise.resolve(null),
+   live&&all?readWixReportedPeriod(db,selected.from,to):null,
+   live?readStoredBusiness(db,selected,to,memo):null,
+   readsQuiz?readPostHogPeriod(db,selected.from,to,{scope:scope!}):null,
+   readsMasterclass?readPostHogMasterclassPeriod(db,selected.from,to):null,
   ]);
   const skeleton=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[],attributionRuns:snapshot.run?[snapshot.run]:[],attributionResults:snapshot.results},{...selected,compare:false},mode);
   const response=applyDashboardRollup(skeleton,rollup,selected,mode);
-  if(mode==='live' && selected.source==='all' && selected.tunnel==='all' && !campaign) {
-   const wix=await readWixReportedPeriod(db,selected.from,to);
-   if(wix) {
-    response.metrics=response.metrics.map(m=>m.id==='cash'?wix.cash:m);
-    const daily=new Map(wix.dailyRevenue.map(row=>[row.date,row.value]));
-    response.series=response.series.map(row=>({...row,revenue:daily.get(row.date)??null}));
-   }
+  if(wix) {
+   response.metrics=response.metrics.map(m=>m.id==='cash'?wix.cash:m);
+   const daily=new Map(wix.dailyRevenue.map(row=>[row.date,row.value]));
+   response.series=response.series.map(row=>({...row,revenue:daily.get(row.date)??null}));
   }
-  if(mode==='live')await applyStoredBusiness(response,db,selected,to);
+  if(business)applyBusinessReads(response,business,selected);
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
-  if(mode==='live'){
-   const scope=postHogScopeFromFilters(selected);
-   if(scope&&selected.tunnel!=='masterclass')applyPostHogQuiz(response,await readPostHogPeriod(db,selected.from,to,{scope}),selected);
-   if(selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign)applyPostHogMasterclass(response,await readPostHogMasterclassPeriod(db,selected.from,to),selected);
-  }
+  if(readsQuiz)applyPostHogQuiz(response,quiz,selected);
+  if(readsMasterclass)applyPostHogMasterclass(response,masterclass,selected);
   return {response,run:snapshot.run};
  }
  const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;

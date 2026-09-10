@@ -3,7 +3,7 @@ import {AppError} from './errors';
 import type {DashboardResponse,DashboardFilters,Metric} from './ui-contract';
 import {readWixTransactionCount} from './wix-transaction-counts';
 import {readMetaAccountPeriod} from './meta-account-dashboard';
-import {readNotionCommerceReport} from './notion-commerce-storage';
+import {readNotionCommerceReport,type CommerceReadMemo} from './notion-commerce-storage';
 import {readLeadDefinitions} from './lead-entry-dashboard';
 export interface BusinessRollup {
  available:boolean;observedAt:string|null;sourceRows:number;
@@ -30,20 +30,32 @@ export function applyNotionBusiness(response:DashboardResponse,r:BusinessRollup,
  return response;
 }
 const missing:BusinessRollup={available:false,observedAt:null,sourceRows:0,leads:{rows:0,known:0,unresolved:0,creationOnly:0},appointments:{total:0,attended:0,explicitFinished:0,noShow:0,cancelled:0,unknown:0,booked:0,closed:0}};
-/** Stored data only. Each source can be unavailable without hiding other available metrics. */
-export async function applyStoredBusiness(response:DashboardResponse,db:Database,filters:DashboardFilters,to:string){
+export interface StoredBusinessReads {notion:BusinessRollup|null;leadDefinitions:Awaited<ReturnType<typeof readLeadDefinitions>>;commerce:Awaited<ReturnType<typeof readNotionCommerceReport>>;receipts:Metric|null;meta:Awaited<ReturnType<typeof readMetaAccountPeriod>>|null}
+/** Stored data only, read together: each source can be unavailable without hiding other available metrics. */
+export async function readStoredBusiness(db:Database,filters:DashboardFilters,to:string,memo?:CommerceReadMemo):Promise<StoredBusinessReads>{
  const all=filters.source==='all'&&filters.tunnel==='all'&&(!filters.campaign||filters.campaign==='all');
  const namespace=process.env.NOTION_DATA_SOURCE_ID;
- let notion=missing;
- if(namespace)try{notion=await db.rpc<BusinessRollup>('cockpit_business_rollup',{p_namespace:namespace,p_from:filters.from,p_to:to});}catch(e){if(!(e instanceof AppError&&e.code==='schema_missing'))throw e;}
- if(namespace)applyNotionBusiness(response,notion,filters);
-  const leadDefinitions=await readLeadDefinitions(db,filters,to);
+ const metaScope=filters.tunnel==='all'&&['all','paid'].includes(filters.source)&&(!filters.campaign||filters.campaign==='all');
+ const [notion,leadDefinitions,commerce,receipts,meta]=await Promise.all([
+  namespace?db.rpc<BusinessRollup>('cockpit_business_rollup',{p_namespace:namespace,p_from:filters.from,p_to:to}).catch((e:unknown)=>{if(e instanceof AppError&&e.code==='schema_missing')return missing;throw e;}):null,
+  readLeadDefinitions(db,filters,to),
+  readNotionCommerceReport(db,filters,process.env,memo),
+  all?readWixTransactionCount(db,filters.from,to):null,
+  metaScope?readMetaAccountPeriod(db,filters.from,to):null,
+ ]);
+ return {notion,leadDefinitions,commerce,receipts,meta};
+}
+/** Applies the reads in the historical order, so the response equals the former sequential version. */
+export function applyBusinessReads(response:DashboardResponse,reads:StoredBusinessReads,filters:DashboardFilters){
+ const all=filters.source==='all'&&filters.tunnel==='all'&&(!filters.campaign||filters.campaign==='all');
+ if(reads.notion)applyNotionBusiness(response,reads.notion,filters);
+ const leadDefinitions=reads.leadDefinitions;
  if(leadDefinitions){
   response.leadDefinitions=leadDefinitions;
   const leadMetric=response.metrics.find(metric=>metric.id==='leads'),value=all&&leadDefinitions.available?leadDefinitions.firstKnownAcquisitions:null;
   if(leadMetric)Object.assign(leadMetric,{value,source:'Wix + Notion · premiers contacts',updatedAt:leadDefinitions.observedAt,definition:'Personnes dont le premier contact connu avec BLG tombe dans la période. Les demandes répétées sont conservées mais ne créent pas un nouveau lead.',coverage:leadDefinitions.available?`${leadDefinitions.requestCount} demandes source · ${leadDefinitions.peopleWithRequests} personnes avec demande · ${leadDefinitions.knownBeforePeriod} déjà connues avant la période · ${leadDefinitions.unresolvedDatedRequests} demandes datées sans identité résolue.`:leadDefinitions.reason,completeness:leadDefinitions.available?'partial':undefined,unavailableReason:value===null?leadDefinitions.reason:undefined});
  }
- const commerce=await readNotionCommerceReport(db,filters);
+ const commerce=reads.commerce;
  if(commerce){
   response.commerce=commerce;
   const clientMetric=response.metrics.find(metric=>metric.id==='new_clients');
@@ -58,15 +70,14 @@ export async function applyStoredBusiness(response:DashboardResponse,db:Database
   const metric=response.metrics[paidIndex];
   Object.assign(metric,{value:report?report.confirmedInitialSales:null,source:'Notion · ventes et paiements',updatedAt:commerce?.observedAt??null,paidSales:report??undefined,completeness:'partial',definition:'Première vente payée connue de chaque client, avec paiement réussi et liaison explicite à la première échéance réglée. Les rapprochements incomplets restent séparés.',coverage:report?`${report.confirmedInitialSales} ventes identifiées · ${report.reconciledInitialSales} paiement(s) rapproché(s) · ${report.pendingInitialPaymentCases} cas à rattacher. ${report.excludedSubsequentPayments} mensualités ou paiements suivants séparés.`:commerce?.reason??'Le relevé des ventes payées doit être actualisé.',unavailableReason:report?undefined:commerce?.reason??'Le relevé des ventes payées doit être actualisé.'});
  }
- if(all){
-  const receipts=await readWixTransactionCount(db,filters.from,to);
+ if(reads.receipts){
+  const receipts=reads.receipts;
   receipts.id='payment_receipts';receipts.label='Paiements reçus';
   const conversion=response.pillars.find(p=>p.id==='conversion');
   if(conversion)conversion.metrics.push(receipts);
  }
- const metaScope=filters.tunnel==='all'&&['all','paid'].includes(filters.source)&&(!filters.campaign||filters.campaign==='all');
- if(metaScope){
-  const report=await readMetaAccountPeriod(db,filters.from,to);
+ if(reads.meta){
+  const report=reads.meta;
   if(report.status!=='missing'){
    const metrics=[...response.metrics,...response.pillars.flatMap(p=>p.metrics)];
    const values={spend:report.totals.spendMinor===null?null:report.totals.spendMinor/100,impressions:report.totals.impressions,clicks:report.totals.outboundClicks,ctr:report.totals.ctrPercent,cpm:report.totals.cpmMinor===null?null:report.totals.cpmMinor/100,cpc:report.totals.cpcMinor===null?null:report.totals.cpcMinor/100};

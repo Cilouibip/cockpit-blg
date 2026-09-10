@@ -56,23 +56,30 @@ export async function publishNotionCommerceReport(db:Database,config:NotionComme
  }catch(e){if(runId)await db.rpc('finish_sync',{p_run:runId,p_status:'failed',p_read:0,p_rejected:0,p_complete:false,p_error:'COMMERCE_REPORT_FAILED'}).catch(()=>undefined);throw e;}
 }
 export interface CommerceDashboard {available:boolean;source:string;definitionState:'pending_business_choice';observedAt:string|null;counts:CommerceCounters|null;paidSales:PaidSalesReport|null;coverage:CommerceReport['coverage']|null;reason:string;runId?:string;provisional?:boolean}
+/** Reads of one request share each publication row family; the memo never outlives the request. */
+export type CommerceReadMemo=Map<string,Promise<Row[]>>;
+export const commerceReadMemo=():CommerceReadMemo=>new Map();
+function memoised(memo:CommerceReadMemo|undefined,key:string,load:()=>Promise<Row[]>):Promise<Row[]>{if(!memo)return load();let value=memo.get(key);if(!value){value=load();memo.set(key,value);}return value;}
 /** Indexed reads of a single immutable publication; no source call, write, or browser event. */
-export async function readNotionCommerceReport(db:Database,filters:DashboardFilters,env:Record<string,string|undefined>=process.env):Promise<CommerceDashboard|null>{
+export async function readNotionCommerceReport(db:Database,filters:DashboardFilters,env:Record<string,string|undefined>=process.env,memo?:CommerceReadMemo):Promise<CommerceDashboard|null>{
  const config=notionCommerceConfig(env.NOTION_COMMERCE_CONFIG);if(!config)return null;
  const unavailable=(reason:string):CommerceDashboard=>({available:false,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt:null,counts:null,paidSales:null,coverage:null,reason});
  if(filters.source!=='all'||filters.tunnel!=='all'||filters.campaign&&filters.campaign!=='all')return unavailable('Le rattachement de ces achats au filtre source, campagne ou parcours n’est pas établi.');
- const profile=notionCommerceProfile(config),runs=await publications(db,config.parcours.dataSourceId,profile);
+ const profile=notionCommerceProfile(config),namespace=config.parcours.dataSourceId,runs=await memoised(memo,'publications:'+namespace+':'+profile,()=>publications(db,namespace,profile));
  for(const run of runs){
   try{
-  const overview=await rowsForRun(db,String(run.id),OVERVIEW);if(overview.length!==1)continue;const info=overview[0].dimensions as Row;
+  const id=String(run.id),rows=(metric:string)=>memoised(memo,id+':'+metric,()=>rowsForRun(db,id,metric));
+  // The row families of a complete publication are immutable: read them together, validate them in order.
+  const [overview,stored,paidRows]=await Promise.all([rows(OVERVIEW),rows(DAY),rows(PAID_SALES)]);
+  if(overview.length!==1)continue;const info=overview[0].dimensions as Row;
   if(info.version!==NOTION_COMMERCE_VERSION||!validCounts(info.totals)||!Number.isSafeInteger(info.dailyCount)||Number(info.dailyCount)>=1000)continue;
-  const stored=await rowsForRun(db,String(run.id),DAY);if(stored.length!==info.dailyCount)continue;
+  if(stored.length!==info.dailyCount)continue;
   const daily=stored.map(r=>({date:String((r.dimensions as Row).date),counts:(r.dimensions as Row).counts}));if(digest(daily)!==info.dailyHash||daily.some(d=>!validCounts(d.counts)))continue;
   const hasPaidSales=info.paidSalesSummary!==undefined||info.paidSalesCount!==undefined||info.paidSalesHash!==undefined;
   let paidSales:PaidSalesReport|null=null;
   if(hasPaidSales){
    if(!info.paidSalesSummary||!Number.isSafeInteger(info.paidSalesCount)||typeof info.paidSalesHash!=='string')continue;
-   const paidDetails=(await rowsForRun(db,String(run.id),PAID_SALES)).flatMap(r=>((r.dimensions as {details?:unknown}).details??[]));
+   const paidDetails=paidRows.flatMap(r=>((r.dimensions as {details?:unknown}).details??[]));
    if(info.paidSalesCount!==paidDetails.length||info.paidSalesHash!==digest(paidDetails))continue;
    paidSales=selectPaidSalesPeriod({...((info.paidSalesSummary as Omit<PaidSalesReport,'details'>)),details:paidDetails as PaidSalesReport['details']},filters.from,filters.to);
   }
