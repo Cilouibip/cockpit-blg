@@ -13,6 +13,8 @@ import { writeLinkThenRead } from '@/lib/link-write-result';
 import { listProspects } from '@/lib/prospects';
 import { dashboard, dashboardDetails, emptyDashboard, parseFilters } from '@/lib/dashboard';
 import { synchronize } from '@/lib/sync';
+import { refreshNotionCommerce } from '@/lib/sync-notion-commerce';
+import { notionCommerceConfig } from '@/connectors/notion-commerce';
 import { synchronizeWix } from '@/lib/sync-wix';
 import { postHogPeriod,postHogMasterclassPeriod,postHogScopeFromFilters } from '@/lib/posthog-dashboard';
 import { synchronizeWixTransactionCounts } from '@/lib/wix-transaction-counts';
@@ -115,6 +117,14 @@ async function handle(request:Request){
    await rateLimit(config,'sync','lead_entries_'+family,60,60);
    const result=await synchronizeLeadEntries(family);
    return json(result,syncHttpStatus(result.status));
+  }
+  if(route==='sync/commerce'&&method==='POST'){
+   if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+   const commerce=notionCommerceConfig(process.env.NOTION_COMMERCE_CONFIG);
+   if(!commerce?.schedule)throw new AppError('Le rapprochement des ventes n’est pas configuré.',503,'commerce_missing');
+   await rateLimit(config,'sync','commerce',60,60);
+   const result=await refreshNotionCommerce({db:database(),config:commerce,token:process.env.NOTION_TOKEN??'',identitySecret:config.identitySecret});
+   return json({...result,coverage:{reason:result.reason??(result.coverage==='checkpoint'?'Lecture des ventes à poursuivre.':undefined)}},syncHttpStatus(result.status));
   }
   if(route.startsWith('sync/')&&method==='POST'){
    const source=z.enum(['meta','notion','wix','receipts']).parse(route.slice(5));

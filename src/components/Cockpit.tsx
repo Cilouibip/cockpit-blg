@@ -242,6 +242,7 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
       const jobs:{source:string;work:Promise<{status:string;coverage?:{reason?:string}}> }[]=[
         {source:'wix',work:invoke(`/api/sync/wix?${query}`)},
         {source:'notion',work:refreshNotionToCompletion(()=>invoke('/api/sync/notion'),read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`))},
+        {source:'commerce',work:refreshNotionToCompletion(()=>invoke('/api/sync/commerce'),read=>setNotice(`Ventes : ${read} éléments lus, rapprochement en cours…`))},
         {source:'receipts',work:invoke(`/api/sync/receipts?${query}`)},
         {source:'meta',work:(async()=>{for(const period of metaRefreshPeriods(filters.from,filters.to)){const result=await invoke(`/api/sync/meta?${filtersQuery({...filters,...period})}`);if(result.status!=='complete')return result;}return {status:'complete'};})()},
       ];
@@ -249,9 +250,9 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
       if(filters.tunnel!=='masterclass'&&quizSupported)jobs.push({source:'quiz',work:invoke(`/api/sync/analytics?${query}&type=quiz`)});
       if(filters.tunnel!=='quiz'&&filters.source==='all'&&!filters.campaign)jobs.push({source:'masterclass',work:invoke(`/api/sync/analytics?${query}&type=masterclass`)});
       const tasks=await Promise.allSettled(jobs.map(job=>job.work));
-      const sources=tasks.map((r,i)=>({source:jobs[i].source,status:r.status==='rejected'?'failed':r.value.status,detail:r.status==='rejected'&&jobs[i].source==='notion'?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
+      const sources=tasks.map((r,i)=>({source:jobs[i].source,status:r.status==='rejected'?'failed':r.value.status,detail:r.status==='rejected'&&['notion','commerce'].includes(jobs[i].source)?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
       const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',empty:'aucune mesure retournée',failed:'échec'};
-      const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Transactions',meta:'Meta'};
+      const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Paiements reçus',commerce:'Ventes payées',meta:'Meta'};
       setNotice(sources.map((s:{source:string;status:string;detail?:string})=>`${names[s.source]??s.source} : ${labels[s.status]??'échec'}${s.detail?` — ${s.detail}`:''}`).join(' · '));
       refresh();
     } catch {setNotice('Actualisation interrompue. Les données déjà enregistrées restent disponibles.');}

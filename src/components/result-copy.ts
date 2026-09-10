@@ -5,7 +5,8 @@ import type { DashboardFilters, Metric } from '../lib/ui-contract';
 export const resultCopy: Record<string, { label: string; description: string; missing: string }> = {
   cash: { label: 'CA encaissé', description: 'L’argent reçu, remboursements déduits. Montant TTC, avant frais.', missing: 'Les paiements ne sont pas encore disponibles ici pour ces dates.' },
   contracted: { label: 'CA contracté', description: 'Le montant des ventes signées, y compris ce qui reste à encaisser.', missing: 'Les ventes signées ne sont pas encore reliées à leurs montants.' },
-  transactions: { label: 'Transactions', description: 'Les paiements reçus. Un paiement en plusieurs fois compte plusieurs transactions.', missing: 'Le nombre de paiements n’est pas encore disponible ici pour ces dates.' },
+  paid_sales: { label: 'Nouvelles ventes payées', description: 'Une première vente compte une seule fois au premier paiement. Les mensualités suivantes sont séparées. Les paiements dont le rattachement reste incomplet sont détaillés à part.', missing: 'Le relevé des ventes et de leurs paiements doit être actualisé.' },
+  payment_receipts: { label: 'Paiements reçus', description: 'Chaque paiement positif compte ici, mensualités comprises. Un paiement remboursé reste un reçu historique ; les remboursements sont déduits du CA encaissé.', missing: 'Le nombre de paiements n’est pas encore disponible pour ces dates.' },
   spend: { label: 'Dépenses publicitaires', description: 'Le montant dépensé pour les publicités Meta.', missing: 'Les dépenses Meta ne sont pas encore disponibles pour ces dates.' },
   leads: { label: 'Leads uniques', description: 'Les personnes qui nous contactent pour la première fois pendant la période.', missing: 'Les premiers contacts ne sont pas encore disponibles ici pour ces dates.' },
   appointments: { label: 'RDV réalisés', description: 'Les rendez-vous honorés selon le suivi commercial.', missing: 'Les rendez-vous réalisés ne sont pas encore disponibles pour ces dates.' },
@@ -39,6 +40,7 @@ export function resultSource(metric: Metric): string | null {
 
 export function resultState(metric: Metric): string | null {
   if (metric.value === null) return 'Indisponible';
+  if (metric.id === 'paid_sales') return 'Ventes identifiées';
   if (metric.completeness !== 'partial') return null;
   if (metric.missingDays?.length) return 'Partiel';
   if (metric.source.includes('Wix') && metric.source.includes('Notion')) return 'Selon Wix et Notion';
@@ -49,9 +51,10 @@ export function resultState(metric: Metric): string | null {
 }
 
 export function resultMessage(metric: Metric, filters: DashboardFilters): string | null {
+  if (metric.id === 'paid_sales' && metric.paidSales) return metric.coverage;
   const filtered = filters.source !== 'all' || filters.tunnel !== 'all' || (!!filters.campaign && filters.campaign !== 'all');
   if (metric.value === null) {
-    if (filtered && (metric.source.startsWith('Notion') || ['cash', 'transactions'].includes(metric.id))) {
+    if (filtered && (metric.source.startsWith('Notion') || ['cash', 'paid_sales', 'payment_receipts'].includes(metric.id))) {
       return 'Ce chiffre n’est pas encore disponible avec ces filtres. Retire les filtres pour le retrouver.';
     }
     if (['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'cpm'].includes(metric.id)) {
@@ -66,7 +69,7 @@ export function resultMessage(metric: Metric, filters: DashboardFilters): string
     if (metric.latestAttempt?.status === 'failed' && !metric.updatedAt) return 'La mise à jour n’a pas abouti. Réessaie dans un instant.';
     return resultCopy[metric.id]?.missing ?? 'Ce chiffre n’est pas encore disponible pour cette sélection.';
   }
-  const wix = metric.source.includes('Wix') && ['cash', 'transactions'].includes(metric.id)
+  const wix = metric.source.includes('Wix') && ['cash', 'paid_sales', 'payment_receipts'].includes(metric.id)
     ? metric.id === 'cash' ? 'Ce montant couvre les paiements Wix.' : 'Les paiements enregistrés dans Wix.'
     : null;
   let message: string | null = null;
