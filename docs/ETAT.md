@@ -1,35 +1,120 @@
-# État du cockpit — 8 septembre 2026
+# État du cockpit — reprise du 9 septembre 2026
 
-Lire `DECISIONS-ACTEES.md` à chaque reprise. Le chantier actif est `codex/build`. Les corrections sont locales et les sources restent en lecture seule ; aucun push, déploiement ou cron activé dans ce lot. L’historique des travaux est dans `JOURNAL.md`.
+Lire `DECISIONS-ACTEES.md` à chaque reprise. Les preuves, valeurs métier, identifiants et configurations restent privés. La publication GitHub/Vercel est autorisée par Mehdi le 9 septembre 2026 et en cours. La planification automatique reste différée.
 
-## Données raccordées
 
-Huit migrations Supabase sont installées. La migration additive 007 a été appliquée une seule fois après revue indépendante, sans rejouer les six précédentes. Elle apporte le staging privé Notion, la reprise au checkpoint et la publication atomique. Les identités utilisent le même domaine et le même HMAC que le backend existant ; aucune inscription ou conversion n’est inventée lors de l’import CRM.
+## Actualisation du 16 septembre — lot local de contrôle avant installation
 
-Le miroir commercial Notion enrichi est publié. Les acquisitions connues utilisent le mapping versionné date réelle > historique > Wix. Les dates de création seules, les identités absentes et les copies sont comptées séparément. Présences, absences, annulations, réservations et closings décrivent le suivi courant Notion, avec provenance et couverture toujours partielle ; les créneaux remplacés ne deviennent pas des occurrences reconstituées. Les acquisitions publiées sont conservées après archivage.
+Ce bloc remplace les chiffres de tests et les états locaux plus anciens. Le lot tracking/cockpit reste local ; aucun déploiement ou import distant effectué pendant ce contrôle. Le code distingue les rendez-vous reportés, conserve les visites sous les filtres, choisit l’origine de façon déterministe et affiche les données financières absentes comme indisponibles. Les personnes déjà connues ne sont plus appelées systématiquement clients.
 
-Les totaux Meta du compte sont importés depuis début 2024 jusqu’au jour du relevé. Totaux et mesures quotidiennes ont été rapprochés de la source indépendamment. Les détails annonces/campagnes restent partiels, notamment avant le 23 octobre 2024 ; les créatives ne sont pas encore raccordées. Les ratios observés sont possibles sur une même plage continue, même provisoire, avec bornes explicites et comparaison désactivée lorsque la couverture est partielle.
+Les lecteurs sont configurés localement pour une heure ; le résultat d’un lot complet n’est plus présenté comme partiel. Forms ne demande que les formulaires configurés. CMS utilise la pagination documentée count/offset/total, avec garde sur les totaux absents ou approximatifs et compatibilité du booléen tooManyToCount omis. Les reprises Forms restent inchangées.
 
-Wix synthèse et reçus ont été importés sur les périodes autorisées. Les transactions comptent des reçus positifs distincts, échéances et reçus remboursés inclus, par date de création Wix ; les remboursements restent séparés. Cette date ne devient pas une date effective de règlement. Le cash connu conserve le périmètre Wix et une couverture partielle tant que le rapprochement financier Notion/Wix n’est pas terminé. Une période absente de Wix reste inconnue, y compris si son historique existe dans Notion.
+Validation finale : `npm run check` réussi — vérification TypeScript, **313 tests unitaires réussis**, construction de production. Les scénarios sont synthétiques ; aucun test navigateur, inscription, réservation ou email réel. La recette et l’installation demeurent des étapes distinctes. La présence du code horaire ne prouve pas qu’un déclencheur est actif ; aucune configuration de planification modifiée.
 
-PostHog possède des rapports exacts pour les fenêtres de recette : août, année en cours, période personnalisée et jour du relevé ; les témoins source/campagne ont leurs propres profils. Les distincts ne sont jamais additionnés entre journées. Quiz et observations du kit masterclass sont séparés ; ces dernières ne prouvent ni visite de production, ni inscription, ni durée vidéo.
+## Finalisation de publication du 16 septembre
 
-## Application et actualisation
+La revue avant publication ne trouve ni secret, ni identité client, ni export métier dans les fichiers à publier. La migration 012 est déjà installée sur la base existante et ne doit pas être rejouée. Les deux révisions de liens déjà actives restent inchangées ; ce lot publie leur lecture et le suivi par publicité, sans recréer de lien.
 
-Huit cartes : encaissé, contracté, transactions, dépenses, leads, RDV, nouveaux clients et ROAS. Disposition réversible choisie par le coordinateur ; le coût publicitaire par nouveau client reste dans Acquisition. Les détails reprennent les définitions et limites retournées par l’API. Les filtres incompatibles donnent leur propre motif d’indisponibilité.
+L’actualisation horaire est préparée dans GitHub Actions sur le dépôt existant. À la minute 17, le workflow appelle `GET /api/jobs/tick` avec le secret chiffré `CRON_SECRET`, puis reprend les réponses partielles dans le même passage, au maximum huit appels bornés et quinze minutes. Un seul appel de fonction ne suffit pas à garantir que toutes les sources dues sont traitées : chaque fonction conserve son budget court, tandis que le workflow draine les unités jusqu’au statut complet. Il échoue si le drainage reste partiel après la borne. Le workflow ne modifie aucune source : il lit les connecteurs autorisés et publie uniquement dans Supabase par les chemins serveur existants. Sans secret GitHub, l’appel est ignoré proprement et la cadence reste inactive.
 
-Le GET dashboard lit uniquement la base. Actualiser lance une seule lecture Wix, une lecture de reçus, les périodes Meta de 93 jours au plus et les types PostHog compatibles séparément. Notion poursuit automatiquement les requêtes courtes jusqu’à publication (40 requêtes au plus par clic), affiche sa progression et conserve le checkpoint en cas d’interruption. Le succès n’est annoncé qu’après publication complète ; une relance reprend le travail restant.
+La configuration privée disponible contient `WIX_LEAD_ENTRY_CONFIG` et la destination masterclass. Elle ne contient pas les trois réglages PostHog explicites ni les deux profils Notion supplémentaires ; les valeurs déjà présentes sur Vercel sont conservées. La clé Wix serveur répond pour Forms, mais la lecture CMS du quiz reste refusée (`403 WDE0027`) et Meta refuse encore la lecture complémentaire (`400`, code Meta 200). Ces deux droits ne sont pas élargis par la publication et les données concernées restent signalées indisponibles. Le transfert de `CRON_SECRET` vers GitHub a été refusé par le contrôle automatique avant exécution ; le secret n’a pas été exposé et le workflow reste inactif jusqu’à accord explicite sur cette destination.
 
-Le tick préparé choisit une seule source due et ne lit que les derniers runs du bon namespace/stream/profil. Wix/reçus/PostHog relisent le mois précédent et le mois courant. Aucun planificateur n’est actif. La migration additive 008 borne désormais la lecture des observations à la période et au profil demandés : lots quotidiens, rapport exact PostHog ou rapport Wix entier validé avant découpe. Historique conservé, dernière tentative séparée du dernier bon relevé. Cache 30 secondes, 128 entrées maximum, expirées supprimées et promesses en cours mutualisées. Restent la rotation des anciennes périodes et la planification revue, non activées.
 
-## Validation et prochaine action
+## Version et périmètre de livraison
 
-Typecheck, 162 tests unitaires, 37 tests SQL et build passent. La contre-revue indépendante a testé la publication sur plus de dix mille fiches synthétiques sous la limite locale de huit secondes ; l’import réel est ensuite parvenu au terminal sans rejet. Contre-recette source→base : Notion, compte Meta et Wix rapprochés par membres et mesures quotidiennes, avec bornes explicites. Les preuves et valeurs métiers restent uniquement dans le journal privé.
+Les trois premières parties sont partiellement livrées : leads et rendez-vous, clients et paiements, acquisition et parcours. La prochaine reprise demandée doit terminer les données restantes, contrôler les liens de bout en bout et les connexions quiz/masterclass, puis proposer un Commercial proche d’un CRM. Actualisation continue, mise en ligne et design Parcours/Connexions restent différés.
 
-La version locale de référence est servie sur le port 3102, build `VooIRl5UAmBkQw5Y-Lnz0`. Sa contre-recette finale passe : 82 contrôles API, 17 contrôles d’interface et 129 rapprochements indépendants. Le parcours Actualiser réel a réussi auparavant en un clic jusqu’à publication, sans changement des comptes ni rejet ; les membres et valeurs avant/après ont été rapprochés indépendamment. Aucun second clic n’a été nécessaire pour valider le lecteur borné. Le manifeste et la preuve de sauvegarde privés fixent les fichiers relus et leur version locale ; les changements antérieurs sont conservés.
+Le résultat reste une interface courte avec des sources et limites expliquées. Les vues et interactions du futur Commercial doivent être proposées à l’utilisateur avant la refonte ; le miroir Notion reste en lecture seule.
 
-Prochaine action métier : expliquer la différence Notion/Wix par identifiants fournisseur exacts, puis raccorder l’historique des paiements absent de Wix. Ce rapprochement doit précéder le calcul des nouveaux clients au premier paiement prouvé. Le CA contracté nécessite encore le lien entre vente, date et montant ; l’attribution nécessite les liens et événements de bout en bout.
+Dans le dossier local du centre de contrôle BLG, la reprise commence par `private/derived/cockpit/PASSATION-COURANTE.md`, puis le lot pertinent de `SUIVI.json`. Les anciennes notes d’exécution ne remplacent pas cet état courant. La prévisualisation locale sert le build `Gss7Lk2OPVlCTSU7VSgne` avec la correction 011. Le code est modifié localement et non publié ; reprendre le dossier existant en préservant tous les changements.
 
-Restants exploitation : importer les détails Meta anciens après revue et enrichir les créatives sans remplacer les mesures ; définir la rotation historique et faire relire la planification avant activation. Le déploiement Vercel appartient au propriétaire et reste une opération séparée. Aucun total connu n’est supprimé en attendant ces raccords.
+## Stockage et données publiées
 
-La lecture bornée a passé une contre-revue indépendante de sélection, droits, concurrence, nulls et rapports vides, puis des mesures cloud en lecture seule sans différence des valeurs. Les fenêtres annuelles respectent la limite UI de 367 jours ; les appels internes multiannuels sont plus coûteux et ne doivent pas être présentés comme ayant un coût constant. Aucun timeout global n’a été augmenté.
+Les migrations privées versionnées jusqu’à 011 sont installées. Elles ajoutent le stockage technique nécessaire aux observations d’inscription et aux métadonnées créatives, sans modifier les données métier existantes. Elles ne valent ni autorisation d’import supplémentaire, ni activation d’une tâche planifiée.
+
+Le rapport commercial L3 est publié. Il conserve un rapport complet par lecture, les jours associés et les empreintes minimisées nécessaires à la reprise. La carte Nouveaux clients correspond aux personnes qui commencent leur premier accompagnement, binômes inclus, à partir du Démarrage Client effectif. Les démarrages sans date ou à venir restent hors compteur. Un renouvellement ne reçoit jamais une date historique inventée.
+
+Le cash et les transactions conservent leur définition Wix. Le rapprochement financier entre sources reste partiel. Pour les offres explicitement en trois fois, Mehdi confirme que le prix vendu correspond à trois mensualités. Le champ Total vente de l’échéancier permet cette lecture ; son raccord au cockpit reste à faire une seule fois par vente avec sa date, sans additionner le prix complet de chacune des trois échéances. Le CA contracté reste donc indisponible pendant ce raccord.
+
+## Leads et rendez-vous
+
+La définition actée des leads est : personnes qui contactent BLG pour la première fois. Les demandes répétées sont conservées dans les volumes source mais ne créent pas un nouveau lead.
+
+L’import supervisé L1 est publié et le dernier double compte est corrigé. La correction 011, autorisée précisément par Mehdi, utilise en lecture seule les relations réciproques Client–Prospect avant le choix de la première date. Elle est installée ; les tables métier contrôlées sont inchangées. La fonction reste privée, accessible au serveur. Les périodes de référence historiques et celle incluant le jour du relevé sont contrôlées dans la vraie API. La prévisualisation locale a été reconstruite avec cette fonction.
+
+Les observations de formulaires, quiz et historique Client sont séparées, minimisées et reprises de façon bornée. Les rendez-vous restent affichés selon leur classification source ; les reports historiques ne sont pas reconstitués.
+
+## Acquisition et parcours
+
+Les rapports PostHog réels sont préparés et vérifiés pour les périodes et filtres disponibles. Ils restent séparés des inscriptions, des ventes et des mesures de durée vidéo. Un rapport navigateur vide ne transforme jamais une donnée CRM en zéro.
+
+L’historique Meta est publié et contre-vérifié. Les derniers lots de métadonnées créatives sont suspendus par une limitation temporaire de lecture Meta. Les lots déjà publiés sont conservés ; ne pas rejouer l’historique. L’attribution entre publicité, personne, rendez-vous et vente reste distincte. Aucun ROAS, CPL ou coût client n’est fabriqué en attendant ces liens.
+
+## État des autres pages
+
+- **Liens** : génération, paramètres de campagne, identifiant du lien, copie, versions et archivage implémentés. Les contrôles de logique sont synthétiques ; la chaîne réelle création du lien, arrivée, inscription et résultat commercial reste à prouver.
+- **Commercial** : liste issue de Notion avec recherche, statuts et pagination. Un CRM lisible avec fiche et historique est demandé ; aucune refonte ni écriture dans Notion réalisée dans la préparation de passation.
+- **Connexions** : le code distingue configuration, accès et dernière lecture. Vérifier ces états sur les usages quiz/masterclass ; la présence d’une clé ne prouve ni collecte complète ni mise à jour automatique. Refonte visuelle différée.
+- **Parcours** : rapports PostHog vérifiés sur les cas conservés ; toutes les étapes de chaque page et leur attribution ne sont pas certifiées. Design différé.
+
+## Configuration à reporter séparément
+
+Les variables privées existantes restent nécessaires. Le nouveau L1 ajoute **`WIX_LEAD_ENTRY_CONFIG`** (familles, formulaires, exclusions explicites et champs) et **`NOTION_CLIENT_DATA_SOURCE_ID`, `NOTION_COMMERCE_CONFIG`**. Elles sont chargées dans la prévisualisation locale privée ; leur report sur Vercel reste à faire lors du déploiement par Mehdi. Une famille non configurée n’est pas un zéro ni une couverture exhaustive.
+
+Les profils PostHog utilisent aussi **`POSTHOG_QUIZ_HOST`**, **`POSTHOG_PRODUCTION_HOSTS`** et **`POSTHOG_MASTERCLASS_PAGE_ID`**. Reporter les valeurs du profil client vérifié, sans supposer que l’ancien jeu de variables suffit. Les secrets et identifiants réels restent hors Git.
+
+La clé serveur Wix permet les lectures financières existantes mais les lectures Contacts, Data Items et Forms du nouveau raccord sont refusées. La permission Forms documentée pour le polling est plus large qu’une simple lecture ; la modification des droits a été présentée séparément au propriétaire. Aucun droit ni clé n’a été modifié.
+
+## Limites et suite
+
+L’absence d’une source, d’une permission ou d’un rapprochement donne une indisponibilité expliquée, jamais un zéro implicite. Le dernier rapport complet reste disponible lorsqu’une lecture échoue.
+
+Les périodes historiques et une période incluant le jour du relevé ont été lues dans la vraie API et l’interface ; les anciennes recettes figées ne sont pas des mesures du jour courant. Le dernier contrôle L1 est terminé après installation autorisée de 011. Les métadonnées restantes attendent le retour du quota Meta. Le raccord du montant confirmé des offres en trois fois reste à terminer pour le CA contracté ; le rapprochement financier et l’attribution demeurent ouverts. Les trois parties ne sont donc pas déclarées entièrement terminées. L’actualisation automatique, la rotation historique, le déploiement et la vérification de la version en ligne restent différés. La publication de cette version par Codex est maintenant autorisée par Mehdi le 9 septembre 2026.
+
+Choix de travail pour la reprise : Terra pour pilotage et exécution courante, Luna pour vérification ciblée, Sol pour intégration ou conception complexe, Astra en recours. Cette répartition ne remplace pas les décisions de l’utilisateur ; la règle globale ne change pas automatiquement le modèle d’une conversation en cours.
+
+
+## Préparations locales après les précisions du 9 septembre
+
+Le besoin Commercial est précisé : journée, rendez-vous, présences, origine, fiche/historique et situation commerciale avec badges. Une proposition cliquable avec exemples fictifs est présentée dans la conversation avant refonte. L’application active n’a pas été remplacée. Le RPC actuel ne renseigne pas source/tunnel et expose le dernier RDV par personne sans chronologie ; sa pagination de50 ne permet pas les compteurs du jour. Ces raccords restent à réaliser.
+
+Le générateur accepte désormais **`BLG_MASTERCLASS_URL`**, facultative et vide dans `.env.example`. Sans configuration, l’ancienne destination est conservée. La valeur est lue pour les nouvelles révisions ; les URLs persistées restent inchangées. URL HTTPS du domaine BLG sans identifiants ni paramètres imposés, indépendance du quiz, UTM et macros Meta couverts par les contrôles ciblés. Aucun réglage réel, lien distant ou page modifié. Au lancement de la nouvelle masterclass, le propriétaire doit aussi aligner la reconnaissance de l’adresse dans la page et le profil de mesure, conserver l’identité/version cohérente et distinguer ancien historique. La future adresse n’est pas encore choisie.
+
+La préparation `contracted-revenue.ts` regroupe uniquement des preuves explicites d’une même vente : identifiant, date de conclusion, total confirmé et relations aux échéances. Elle ne déduit plus une vente d’une mensualité ou d’un bénéficiaire DUO et rend le total indisponible en cas d’élément incomplet/contradictoire. Ce module est préparatoire, non raccordé aux données réelles ni à la carte. Les derniers travaux de lecture ciblée et la limite finale restent consignés dans la passation privée. Aucun CA contracté supplémentaire publié, aucun import ou migration installé.
+
+La lecture ciblée de reprise a retrouvé le chemin Échéancier → Paiements → Parcours et le champ Date de closing. Ce chemin doit être éprouvé avec le total vendu et les cardinalités ; il ne faut pas exiger par principe une nouvelle base de contrats ni rejeter une date de closing faute de document signé. La preuve privée distingue schémas réellement lus et interprétation du coordinateur.
+
+## Publication du 9 septembre — état prioritaire
+
+Mise à jour du dépôt et du projet Vercel existants autorisée ; contrôles prépublication en cours. Le périmètre livré comprend les résultats existants, le Commercial quotidien et ses fiches, les corrections du registre de liens et des flux Connexions. Supabase est conservée ; aucun nouveau schéma distant, cron, envoi ni modification des pages d’acquisition n’est inclus. Le CA contracté et l’attribution complète restent indisponibles tant que leurs raccordements ne sont pas établis.
+
+
+Publication du9septembre2026 autorisée et terminée : GitHub PR1 fusionnée, production d4211e20172b3ce24ff88ecb53d47aa232daf8d1 sur https://cockpit-blg.vercel.app. Accès privé et lectures réelles vérifiés ; même Supabase, aucun cron ni migration distante. 246tests unitaires et37testsSQL, typage et build réussis. Suite en pause.
+
+
+Correction Commercial du9septembre2026 : périodes au-delà dujour, registredeprospects même sansRDV, recherche/filtres/pagination cohérents et fiche/historique. Actualiser relie la lectureNotion existante à la demande. Tests256dont22Commercial, build et CIréussis, contrôle HTTPproduction et CUAChrome local effectué. PR2 fusionnée ; production 34b843977086b23d9aa01a622b610d2add49bf21 ; https://cockpit-blg.vercel.app. Pas d’importsource lancé en test, ni cron ou migration distante. Autres travaux enpause.
+
+## 10 septembre 2026 — lecture des périodes accélérée
+
+Fait : la lecture des Résultats lance ensemble toutes les lectures publiées d’une période et ne relit plus le relevé des ventes payées pour la période comparée ; fonction Vercel dans la région de la base. Preuve : mesures avant/après et tests dans le journal du 10 septembre ; PR5 fusionnée. Restant : lenteur propre des fonctions SQL (migration nécessaire, non autorisée) ; recette production des trois périodes à confirmer après déploiement. Prochaine action : contrôle en ligne des trois périodes avec comparaison, détails et liens, sans relance.
+
+Recette production du 14 septembre 2026 terminée : trois périodes avec comparaison en 3 à 4 s sans relance, comptes 8 / 7 / 5 et détail août 7 / 1 / 3 / 17 inchangés. Restant : lenteur propre des fonctions SQL, à traiter par migration seulement sur décision de l’utilisateur.
+
+
+## 15 septembre 2026 — suivi par publicité, préparation locale
+
+Fait : contrat commun de paramètres (macros Meta dans les UTM, `blg_link_id` conservé), import Wix étendu à la première origine A et aux champs cachés du formulaire masterclass, projection serveur par publicité sans nouvelle table, tableau « Par publicité » dans Résultats. Preuves : tests `links*`, `lead-entries`, `ad-funnel`, build. Restant : migration 012 distante (accord Mehdi), champs cachés du formulaire Wix et code Velo/Cloudflare à installer (voir passation privée), lecture Wix des inscriptions à relancer, visites PostHog à vérifier sur les premiers parcours réels. Prochaine action : relecture Codex des diffs puis PR, sans déploiement automatique.
+
+
+## 16 septembre 2026 — pourcentages, règle A datée, présence, visiteurs et actualisation (Claude Code)
+
+Fait localement, non publié : la projection par publicité crédite chaque personne à sa plus ancienne origine mesurée (première origine A datée par le navigateur, sinon l'arrivée de la première inscription, l'heure décidant entre deux inscriptions du même jour et entre tunnels) ; la présence aux rendez-vous est lue dans la classification Notion du prospect (`prospects.business`), les rendez-vous à venir et sans issue restent à part ; les visiteurs uniques sont lus dans PostHog par origine A (quiz : `$pageview` de l'accueil, masterclass : `mc_page_view` sur l'adresse `/blank-1` seulement, versions antérieures signalées) ; les trois pourcentages validés (opt-in, réservation, présence) sont calculés avec numérateur, dénominateur et période, jamais un zéro sans mesure ; les filtres source, campagne, publicité, créative et lien s'appliquent au tableau 05. Le quiz envoie sa vue de page lui-même avec visiteur et première origine ; le composant masterclass attend la réponse du parent avant sa vue de page (version `mc-wix-surprise-2026-09-16.4`). Les inscriptions Wix, l'antériorité Client et les ventes payées deviennent des unités planifiables (`jobs/tick`) et se lisent depuis Connexions et Actualiser ; un échec de droits reste visible. Migration 012 rendue rejouable avec précontrôle et retour arrière sans perte (`output/tracking-deux-tunnels-2026-09-15/installation/sql`).
+
+Preuves : 297 tests unitaires, 40 tests SQL locaux (dont migration 012), typecheck, build de production ; 30 tests de pages dans le paquet. Restant : installation distante (migration 012, champs Wix, codes Wix et Cloudflare, configuration d'import, relecture de l'historique, droits de la clé serveur Wix, accès Meta), puis recette réelle des deux parcours ; planification non activée (proposition dans le manifeste d'installation). Prochaine action : relecture Codex des diffs et du manifeste `installation/operations.json`, puis exécution des opérations qui lui reviennent.
+
+
+## 16 septembre 2026 (suite) — adresse /masterclass26 et opt-in par cohorte (Claude Code)
+
+Fait localement, non publié : destination masterclass par défaut `https://www.blg-studio.fr/masterclass26` (page publiée par Mehdi ; `/blank-1` redirige 301 et reste reconnue comme ancienne adresse pour les visites, jamais comme destination active) ; pourcentage d'opt-in recalculé sur un même groupe : visiteurs mesurés (identifiant de navigateur `blg_vid`) dont la première visite tombe dans la période, reliés côté serveur à leurs inscriptions confirmées (même identifiant, inscription au plus tôt le jour de la première visite, même tunnel ; total sans double compte), lus jusqu'à la date d'observation. Nouveaux leads, personnes déjà connues et identités non rapprochées distingués ; visiteurs sans identifiant et inscriptions sans visite raccordable comptés à part. Aucun identifiant ni parcours individuel ne sort de l'API.
+
+Preuves : tests `ad-funnel` (11), typecheck, build, tests SQL et tests de pages relancés (voir journal). Restant : identique à l'entrée précédente ; tant que les pages mises à jour ne sont pas installées, aucune inscription ne porte d'identifiant de navigateur et le pourcentage d'opt-in reste affiché « indisponible » avec sa raison.

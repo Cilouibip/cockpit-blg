@@ -24,6 +24,8 @@ import { postHogReportRequest,requestPostHogReport } from '@/lib/posthog-report-
 import { invalidateSourceWindow } from '@/lib/source-snapshots';
 import { Temporal } from '@js-temporal/polyfill';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
+import { buildAdFunnel } from '@/lib/ad-funnel';
+import { readVisitsByOrigin, readVisitorCohort } from '@/lib/ad-arrivals';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
@@ -76,6 +78,14 @@ async function handle(request:Request){
    await rateLimit(config,'report','posthog',24,60);
    const result=await requestPostHogReport(filters,type);
    return json(result,{ready:200,waiting:202,failed:502,unsupported:422}[result.state]);
+  }
+  if(route==='ad-funnel'&&method==='GET'){
+   const filters=parseFilters(url);
+   if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+   await rateLimit(config,'ad-funnel','shared',30,60);
+   // Visites lues à la demande ; une panne PostHog laisse les autres colonnes lisibles et se voit dans les notices.
+   const [visits,cohort]=await Promise.all([readVisitsByOrigin(filters.from,filters.to,process.env).catch(()=>null),readVisitorCohort(filters.from,filters.to,process.env).catch(()=>null)]);
+   return json(await buildAdFunnel(database(),{from:filters.from,to:filters.to,tunnel:filters.tunnel,source:filters.source,campaign:filters.campaign},{visits,cohort}));
   }
   if(route==='attribution'&&method==='GET'){const id=z.uuid().parse(url.searchParams.get('run'));const result=await database().rpc<{run:unknown;results:unknown[]}>('cockpit_attribution_detail',{p_run:id});if(!result.run)throw new AppError('Calcul publié introuvable.',404,'not_found');return json(result);}
   if(route==='details'&&method==='GET')return json(await dashboardDetails(database(),parseFilters(url),z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('page')||0)));

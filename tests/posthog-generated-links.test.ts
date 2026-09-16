@@ -16,8 +16,8 @@ test('Generated organic placements belong to the explicit organic query category
 });
 test('Every campaign query reads generated Meta IDs before the named UTM campaign',()=>{
  const link=makeRevision({placement:'meta_ad',destination:'quiz',campaign:'Summer discovery',label:'One ad'});
- const params=new URL(link.generated_url.replace('{{campaign.id}}','12345').replace('{{adset.id}}','67890').replace('{{ad.id}}','99999')).searchParams;
- assert.equal(params.get('meta_campaign_id'),'12345');assert.equal(params.get('utm_campaign'),'summer-discovery');
+ const params=new URL(link.generated_url.replaceAll('{{campaign.id}}','12345').replaceAll('{{adset.id}}','67890').replaceAll('{{ad.id}}','99999')).searchParams;
+ assert.equal(params.get('meta_campaign_id'),'12345');assert.equal(params.get('utm_campaign'),'12345','contrat du 15 septembre : utm_campaign porte l’ID Meta résolu, le libellé reste dans le registre');assert.equal(params.get('utm_content'),'99999');
  const expressions=postHogAttributionExpressions();
  assert.ok(expressions.campaignId.indexOf('properties.meta_campaign_id')<expressions.campaignId.indexOf('properties.campaign_id'));
   assert.ok(expressions.campaignId.indexOf('properties.campaign_id')<expressions.campaignId.indexOf('properties.utm_campaign'));
