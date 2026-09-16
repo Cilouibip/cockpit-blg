@@ -21,7 +21,8 @@ jobs:
     steps:
       - name: Signaler une configuration incomplète
         if: ${{ env.CRON_SECRET == '' }}
-        run: echo "CRON_SECRET absent : actualisation horaire non activée."
+        run: |
+          echo "CRON_SECRET absent : actualisation horaire non activée."
       - name: Lancer une unité bornée
         if: ${{ env.CRON_SECRET != '' }}
         run: |

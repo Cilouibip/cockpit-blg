@@ -250,4 +250,6 @@ Ajout d’un workflow GitHub Actions horaire qui appelle la route serveur `jobs/
 
 Le contrôle automatique a refusé avant exécution le transfert de la valeur privée `CRON_SECRET` vers les secrets du dépôt GitHub : il demande un accord explicite sur ce payload et cette destination. Aucune seconde tentative ni contournement ; le secret n’a pas été affiché. La liste des secrets GitHub a ensuite été lue sans valeur et confirme qu’aucun secret n’est configuré.
 
+Après accord explicite, le secret est enregistré et la PR 6 est fusionnée. Le premier déclenchement manuel a été refusé par GitHub avant exécution (`422`, déclencheur non reconnu) : le scalaire YAML du message de configuration contenait un deux-points et empêchait l’enregistrement correct du workflow, visible par son nom réduit au chemin du fichier. Le message est converti en bloc YAML ; aucune route de synchronisation n’a été appelée pendant cet échec.
+
 État des raccords avant publication : configuration Wix des inscriptions et destination masterclass disponibles dans le fichier privé de déploiement ; profils PostHog explicites et profils Notion supplémentaires absents de ce fichier et donc non inventés. Forms répond, CMS quiz reste refusé par Wix (`WDE0027`) et Meta refuse la lecture complémentaire (code Meta 200). Les derniers rapports conservés restent la référence quand une lecture échoue.
