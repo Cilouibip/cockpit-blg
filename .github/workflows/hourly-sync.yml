@@ -32,7 +32,11 @@ jobs:
               --header "Authorization: Bearer $CRON_SECRET" \
               https://cockpit-blg.vercel.app/api/jobs/tick)"
             status="$(printf '%s' "$response" | jq -er '.status')"
-            printf '%s' "$response" | jq -c '{status,units,jobs}'
+            printf '%s' "$response" | jq -c '{status,units,unitResults}'
+            if printf '%s' "$response" | jq -e 'any(.unitResults[]?; .status == "failed")' >/dev/null; then
+              echo "Au moins une source a échoué ; le dernier rapport complet est conservé." >&2
+              exit 1
+            fi
             if [ "$status" = "complete" ]; then
               exit 0
             fi
