@@ -3,10 +3,10 @@ types.setTypeParser(1082, value=>value);
 types.setTypeParser(1184, value=>new Date(value).toISOString());
 import { getConfig, type Config } from './config';
 import { AppError } from './errors';
-export const TABLES = ['tracked_links','link_revisions','people','person_identities','events','lead_registrations','prospects','appointments','commercial_history','deals','payments','ads','ad_daily','meta_conversions_daily','sync_runs','source_mappings','source_aggregates','attribution_runs','attribution_results','v_ad_daily','v_events_canonical','v_meta_conversions_daily','v_attribution_published'] as const;
+export const TABLES = ['tracked_links','link_revisions','people','person_identities','events','lead_registrations','lead_source_observations','prospects','appointments','commercial_history','deals','payments','ads','ad_daily','meta_conversions_daily','sync_runs','source_mappings','source_aggregates','attribution_runs','attribution_results','v_ad_daily','v_events_canonical','v_meta_conversions_daily','v_attribution_published'] as const;
 export type TableName = typeof TABLES[number];
 export type Row = Record<string, unknown>;
-export type SelectOptions = { order?:string; descending?:boolean; from?:number; limit?:number; eq?:Record<string,string>; };
+export type SelectOptions = { order?:string; descending?:boolean; from?:number; limit?:number; eq?:Record<string,string>; in?:Record<string,string[]>; gte?:Record<string,string>; lt?:Record<string,string>; columns?:string[]; };
 export interface Database {
   select(table:TableName,options?:SelectOptions):Promise<Row[]>;
   upsert(table:TableName,rows:Row[],conflict?:string):Promise<void>;
@@ -33,9 +33,13 @@ export function postgresDatabase(url:string):Database {
     async select(table,options={}) {
       const params:unknown[]=[];
       const where=Object.entries(options.eq||{}).map(([key,value])=>{params.push(value);return `${checkIdentifier(key)}=$${params.length}`;});
+      for(const [key,values] of Object.entries(options.in||{})){if(!values.length)return [];params.push(values);where.push(`${checkIdentifier(key)}=ANY($${params.length})`);}
+      for(const [key,value] of Object.entries(options.gte||{})){params.push(value);where.push(`${checkIdentifier(key)}>=$${params.length}`);}
+      for(const [key,value] of Object.entries(options.lt||{})){params.push(value);where.push(`${checkIdentifier(key)}<$${params.length}`);}
       params.push(Math.min(options.limit||1000,1000),options.from||0);
       const order=(options.order||'id').split(',').map(k=>checkIdentifier(k)+(options.descending?' DESC':' ASC')).join(',');
-      return (await query(`SELECT * FROM public.${checkIdentifier(table)} ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY ${order} LIMIT $${params.length-1} OFFSET $${params.length}`,params)).rows;
+      const columns=options.columns?.length?options.columns.map(checkIdentifier).join(','):'*';
+      return (await query(`SELECT ${columns} FROM public.${checkIdentifier(table)} ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY ${order} LIMIT $${params.length-1} OFFSET $${params.length}`,params)).rows;
     },
     async upsert(table,rows,conflict='id') {
       if(!rows.length)return;
@@ -71,7 +75,7 @@ export function supabaseDatabase(config:Config,fetcher:typeof fetch=fetch):Datab
     const text=await response.text();return text?JSON.parse(text):null;
   }
   return {
-    async select(table,o={}){const params=new URLSearchParams({select:'*',order:(o.order||'id').split(',').map(k=>{checkIdentifier(k);return k+(o.descending?'.desc':'.asc');}).join(','),limit:String(Math.min(o.limit||1000,1000)),offset:String(o.from||0)});for(const [k,v] of Object.entries(o.eq||{})){checkIdentifier(k);params.set(k,'eq.'+v);}return call(table+'?'+params);},
+    async select(table,o={}){const params=new URLSearchParams({select:o.columns?.length?o.columns.map(checkIdentifier).map(c=>c.replace(/"/g,'')).join(','):'*',order:(o.order||'id').split(',').map(k=>{checkIdentifier(k);return k+(o.descending?'.desc':'.asc');}).join(','),limit:String(Math.min(o.limit||1000,1000)),offset:String(o.from||0)});for(const [k,v] of Object.entries(o.eq||{})){checkIdentifier(k);params.set(k,'eq.'+v);}for(const [k,values] of Object.entries(o.in||{})){checkIdentifier(k);if(!values.length)return [];if(values.some(v=>/[,()"]/.test(v)))throw new AppError('Valeur de filtre invalide.',500);params.set(k,'in.('+values.join(',')+')');}for(const [k,v] of Object.entries(o.gte||{})){checkIdentifier(k);params.set(k,'gte.'+v);}for(const [k,v] of Object.entries(o.lt||{})){checkIdentifier(k);params.set(k,'lt.'+v);}return call(table+'?'+params);},
     async upsert(table,rows,conflict='id'){if(rows.length)await call(table+'?on_conflict='+encodeURIComponent(conflict),'POST',rows,{Prefer:'resolution=merge-duplicates,return=minimal'});},
     async rpc<T>(name:string,args:Row){if(!allowedRPC.has(name))throw new AppError('Opération interne inconnue.',500);return call('rpc/'+name,'POST',args) as Promise<T>;},
     async probe(){await call('tracked_links?select=id&limit=1');}

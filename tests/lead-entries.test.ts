@@ -38,7 +38,43 @@ test('Forms page sends site header and supported update filter; cursor continuat
  const fetcher=(async(url,init)=>{requests.push({url:String(url),body:JSON.parse(String(init?.body)),headers:init?.headers});return Response.json({submissions:[form()],metadata:{count:1,hasNext:false,cursors:{}}});}) as typeof fetch;
  const args={family:'forms' as const,config,siteId:'site',apiKey:'synthetic',identitySecret:secret,from:'2026-08-01T00:00:00Z',to:'2026-09-01T00:00:00Z',fetcher};
  const page=await readWixLeadEntryPage(args);assert.equal(page.done,true);assert.equal(page.read,1);assert.equal(requests[0].headers['wix-site-id'],'site');assert.ok(requests[0].body.query.filter.$and.some((x:any)=>x.updatedDate?.$gte));
+ assert.deepEqual(requests[0].body.query.filter.$and.find((x:any)=>x.formId),{formId:{$in:['form-a']}},'Only configured forms may be fetched; unrelated CRM submissions must stay outside the request');
  await readWixLeadEntryPage({...args,cursor:'opaque'});assert.deepEqual(requests[1].body.query,{cursorPaging:{limit:100,cursor:'opaque'}});
+});
+const quizItem=(id:string)=>({id,data:{_id:id,email:'person@example.org',_createdDate:{$date:'2026-08-30T16:11:04.883Z'},_updatedDate:{$date:'2026-08-30T16:15:00Z'},status:'completed',source:'ig',page:'https://example.org/quiz'}});
+test('CMS quiz continues from count and offset when the first page is short, until total is reached',async()=>{
+ const requests:any[]=[];
+ const pages=[
+  {dataItems:[quizItem('quiz-one')],pagingMetadata:{count:1,offset:0,total:2,tooManyToCount:false}},
+  {dataItems:[quizItem('quiz-two')],pagingMetadata:{count:1,offset:1,total:2,tooManyToCount:false}}
+ ];
+ const fetcher=(async(_url,init)=>{requests.push(JSON.parse(String(init?.body)));return Response.json(pages.shift());}) as typeof fetch;
+ const args={family:'quiz' as const,config,siteId:'site',apiKey:'synthetic',identitySecret:secret,from:'2026-08-01T00:00:00Z',to:'2026-09-01T00:00:00Z',fetcher};
+ const first=await readWixLeadEntryPage(args);assert.equal(first.done,false);assert.equal(first.cursor,'1');assert.equal(first.read,1);
+ const second=await readWixLeadEntryPage({...args,cursor:first.cursor});assert.equal(second.done,true);assert.equal(second.cursor,null);assert.equal(second.read,1);
+ assert.deepEqual(requests.map(r=>r.query.paging.offset),[0,1]);assert.equal(requests[0].returnTotalCount,true);
+});
+test('CMS quiz accepts an empty terminal page with an exact total and omitted or false tooManyToCount',async()=>{
+ for(const pagingMetadata of [
+  {count:0,offset:0,total:0,tooManyToCount:false},
+  {count:0,offset:0,total:0}
+ ]){
+  const fetcher=(async()=>Response.json({dataItems:[],pagingMetadata})) as typeof fetch;
+  const page=await readWixLeadEntryPage({family:'quiz',config,siteId:'site',apiKey:'synthetic',identitySecret:secret,from:'2026-08-01T00:00:00Z',to:'2026-09-01T00:00:00Z',fetcher});
+  assert.equal(page.done,true);assert.equal(page.cursor,null);assert.equal(page.read,0);
+ }
+});
+test('CMS quiz refuses missing/approximate totals, invalid tooManyToCount, a response offset mismatch and an inconsistent count',async()=>{
+ const args={family:'quiz' as const,config,siteId:'site',apiKey:'synthetic',identitySecret:secret,from:'2026-08-01T00:00:00Z',to:'2026-09-01T00:00:00Z'};
+ for(const pagingMetadata of [
+  {count:0,offset:0,tooManyToCount:false},
+  {count:0,offset:0,total:0,tooManyToCount:true},
+  {count:0,offset:0,total:0,tooManyToCount:null},
+  {count:0,offset:0,total:0,tooManyToCount:'false'},
+  {count:0,offset:0,total:0,tooManyToCount:0},
+  {count:0,offset:1,total:0,tooManyToCount:false},
+  {count:1,offset:0,total:1,tooManyToCount:false}
+ ])await assert.rejects(()=>readWixLeadEntryPage({...args,fetcher:(async()=>Response.json({dataItems:[],pagingMetadata})) as typeof fetch}),/INVALID_SOURCE_PAGINATION/);
 });
 test('source page rejects duplicates and missing terminal evidence',async()=>{
  const args={family:'forms' as const,config,siteId:'site',apiKey:'synthetic',identitySecret:secret,from:'2026-08-01T00:00:00Z',to:'2026-09-01T00:00:00Z'};
@@ -60,4 +96,49 @@ test('unconfigured family is unavailable without issuing database/source calls',
  await assert.rejects(()=>synchronizeLeadEntries('forms',{db,env:{IDENTITY_HMAC_SECRET:secret}}),/pas configurée/);assert.equal(called,false);
  assert.equal(wixLeadEntryConfig(undefined),null);
  assert.equal(await readLeadDefinitions(db,{from:'2026-01-01',to:'2026-08-31',source:'all',tunnel:'all',campaign:'all',compare:false},'2026-09-01',{}),null);
+});
+
+// --- Origine commune aux deux tunnels (15-09-2026) ---
+const originConfig:WixLeadEntryConfig={...config,formOriginFields:{visitor:'blg_visiteur',first:'blg_origine',current:'blg_arrivee',session:'blg_session'},quiz:{...config.quiz!,originFields:{source:'source',medium:'support',campaign:'campagne',ad:'publicite',adset:'motCle',linkId:'lienId',pagePath:'pageArrivee',visitor:'visiteur'},firstTouchFields:{source:'premiereSource',medium:'premiereSupport',campaign:'premiereCampagne',ad:'premierePublicite',adset:'premiereMotCle',linkId:'premiereLienId',page:'premierePage',at:'premiereLe',tunnel:'premiereTunnel'}}};
+const LINK='11111111-1111-4111-8111-111111111111',VID='22222222-2222-4222-8222-222222222222';
+test('quiz : A (première origine) et B (arrivée) restent distinctes, adset et lien lus, visiteur UUID, paramètres d’arrivée extraits sans valeur personnelle',()=>{
+ const r=normalizeWixLeadEntry({id:'quiz-a',data:{_id:'quiz-a',email:'person@example.org',_createdDate:{$date:'2026-09-15T10:00:00Z'},_updatedDate:{$date:'2026-09-15T10:00:00Z'},status:'completed',source:'fb',support:'paid',campagne:'120200000000000002',publicite:'120200000000000012',motCle:'120200000000000022',lienId:LINK,visiteur:VID.toUpperCase(),pageArrivee:'https://quizz.blg-studio.fr/?utm_source=fb&utm_content=120200000000000012&blg_link_id='+LINK+'&fbclid=abc&email=private%40example.org',premiereSource:'fb',premiereSupport:'paid',premiereCampagne:'120200000000000001',premierePublicite:'120200000000000011',premiereMotCle:'120200000000000021',premiereLienId:'not-a-uuid',premierePage:'https://quizz.blg-studio.fr/',premiereLe:'2026-09-14T09:00:00.000Z',premiereTunnel:'quiz'}},'quiz',originConfig,'site',secret)!;
+ assert.equal((r.properties.origin as Record<string,unknown>).ad,'120200000000000012');
+ assert.equal((r.properties.origin as Record<string,unknown>).adset,'120200000000000022');
+ assert.equal((r.properties.origin as Record<string,unknown>).linkId,LINK);
+ assert.equal((r.properties.origin as Record<string,unknown>).visitor,VID);
+ assert.equal((r.properties.origin as Record<string,unknown>).pagePath,'https://quizz.blg-studio.fr/');
+ assert.equal((r.properties.origin as Record<string,unknown>).fbclid,true);
+ assert.equal((r.properties.firstTouch as Record<string,unknown>).ad,'120200000000000011');
+ assert.equal((r.properties.firstTouch as Record<string,unknown>).linkId,undefined,'lien invalide ignoré');
+ assert.equal((r.properties.firstTouch as Record<string,unknown>).tunnel,'quiz');
+ assert.equal(JSON.stringify(r).includes('private'),false);
+});
+test('quiz historique sans colonnes nouvelles : origine lue dans l’URL d’arrivée, aucune première origine inventée',()=>{
+ const r=normalizeWixLeadEntry({id:'quiz-old',data:{_id:'quiz-old',email:'person@example.org',_createdDate:{$date:'2026-08-20T10:00:00Z'},_updatedDate:{$date:'2026-08-20T10:00:00Z'},status:'completed',pageArrivee:'https://quizz.blg-studio.fr/?utm_source=fb&utm_campaign=120200000000000001&utm_content=120200000000000011'}},'quiz',originConfig,'site',secret)!;
+ assert.equal((r.properties.origin as Record<string,unknown>).ad,'120200000000000011');
+ assert.equal((r.properties.origin as Record<string,unknown>).campaign,'120200000000000001');
+ assert.equal(r.properties.firstTouch,null);
+ const direct=normalizeWixLeadEntry({id:'quiz-direct',data:{_id:'quiz-direct',email:'person@example.org',_createdDate:{$date:'2026-08-21T10:00:00Z'},_updatedDate:{$date:'2026-08-21T10:00:00Z'},status:'completed',pageArrivee:'https://quizz.blg-studio.fr/'}},'quiz',originConfig,'site',secret)!;
+ assert.ok(!(direct.properties.origin as Record<string,unknown>).ad,'arrivée directe : aucune publicité');
+ assert.equal(direct.properties.firstTouch,null);
+});
+test('masterclass : champs cachés lus (A, arrivée, visiteur, session) ; anciennes soumissions sans champs et JSON invalide ou personnel ignorés',()=>{
+ const withFields=normalizeWixLeadEntry(form({submissions:{email:'person@example.org',blg_visiteur:VID,blg_origine:JSON.stringify({utm_source:'fb',utm_campaign:'120200000000000001',utm_content:'120200000000000011',link_id:LINK,at:'2026-09-14T09:00:00.000Z',page:'https://quizz.blg-studio.fr/',tunnel:'quiz',email:'leak@example.org'}),blg_arrivee:JSON.stringify({utm_source:'fb',utm_campaign:'120200000000000002',utm_content:'120200000000000012',ad_id:'ignored-when-utm-present'}),blg_session:'mc-abc-123'}}),'forms',originConfig,'site',secret)!;
+ assert.equal((withFields.properties.firstTouch as Record<string,unknown>).ad,'120200000000000011');
+ assert.equal((withFields.properties.firstTouch as Record<string,unknown>).linkId,LINK);
+ assert.equal((withFields.properties.origin as Record<string,unknown>).ad,'120200000000000012');
+ assert.equal((withFields.properties.origin as Record<string,unknown>).visitor,VID);
+ assert.equal((withFields.properties.origin as Record<string,unknown>).session,'mc-abc-123');
+ assert.equal(JSON.stringify(withFields).includes('leak'),false);
+ const old=normalizeWixLeadEntry(form(),'forms',originConfig,'site',secret)!;
+ assert.deepEqual(old.properties.origin,{});assert.equal(old.properties.firstTouch,null);assert.equal(old.eligible,true);
+ const broken=normalizeWixLeadEntry(form({submissions:{email:'person@example.org',blg_visiteur:'nope',blg_origine:'{broken',blg_arrivee:JSON.stringify({email:'x@y.z'}),blg_session:'bad session'}}),'forms',originConfig,'site',secret)!;
+ assert.deepEqual(broken.properties.origin,{});assert.equal(broken.properties.firstTouch,null);
+ assert.notEqual(withFields.payloadHash,old.payloadHash,'un contexte différent est une observation différente');
+});
+test('configuration : adset, lien, visiteur et première origine acceptés ; clé inconnue refusée',()=>{
+ assert.ok(wixLeadEntryConfig(JSON.stringify({formIds:['f'],formOriginFields:{first:'blg_origine'},quiz:{collectionId:'q',originFields:{adset:'motCle',linkId:'lienId',visitor:'visiteur'},firstTouchFields:{ad:'premierePublicite'}}})));
+ assert.throws(()=>wixLeadEntryConfig(JSON.stringify({formIds:['f'],quiz:{collectionId:'q',originFields:{unknown:'x'}}})),/INVALID_LEAD_ENTRY_CONFIGURATION/);
+ assert.throws(()=>wixLeadEntryConfig(JSON.stringify({formIds:['f'],formOriginFields:{email:'email'}})),/INVALID_LEAD_ENTRY_CONFIGURATION/);
 });

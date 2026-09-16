@@ -6,17 +6,22 @@ import type { Database, Row, TableName } from '../src/lib/db';
 const masterclass={placement:'meta_ad' as const,destination:'masterclass' as const,campaign:'Lancement septembre',label:'Vidéo Meta'};
 const fixed={linkId:'11111111-1111-4111-8111-111111111111',revisionId:'22222222-2222-4222-8222-222222222222',now:'2026-09-09T12:00:00.000Z'};
 
-test('Masterclass conserve exactement la destination historique sans configuration et lit la nouvelle pour une révision créée',()=>{
-  const historic=makeRevision(masterclass,fixed.linkId,1,fixed.revisionId,fixed.now,{});
+test('Masterclass vise /masterclass26 sans configuration et lit la nouvelle adresse pour une révision créée',()=>{
+  const retained=makeRevision(masterclass,fixed.linkId,1,fixed.revisionId,fixed.now,{});
   const current=makeRevision(masterclass,fixed.linkId,2,'33333333-3333-4333-8333-333333333333',fixed.now,{BLG_MASTERCLASS_URL:'https://www.blg-studio.fr/nouvelle-masterclass'});
-  assert.equal(historic.destination_url,'https://www.blg-studio.fr/blg-rugby-mc');
+  assert.equal(retained.destination_url,'https://www.blg-studio.fr/masterclass26');
   assert.equal(current.destination_url,'https://www.blg-studio.fr/nouvelle-masterclass');
   assert.equal(new URL(current.generated_url).pathname,'/nouvelle-masterclass');
-  assert.equal(new URL(current.generated_url).searchParams.get('utm_campaign'),'lancement-septembre');
-  assert.match(current.generated_url,/meta_campaign_id=\{\{campaign.id\}\}/);
-  assert.match(current.generated_url,/meta_adset_id=\{\{adset.id\}\}/);
+  // Sur Meta, la campagne humaine reste dans le registre ; l'URL porte les IDs résolus par Meta, comme les publicités existantes.
+  assert.equal(current.campaign,'Lancement septembre');
+  assert.match(current.generated_url,/utm_campaign=\{\{campaign.id\}\}/);
+  assert.match(current.generated_url,/utm_term=\{\{adset.id\}\}/);
+  assert.match(current.generated_url,/utm_content=\{\{ad.id\}\}/);
   assert.match(current.generated_url,/meta_ad_id=\{\{ad.id\}\}/);
   assert.equal(new URL(current.generated_url).searchParams.get('blg_link_id'),current.id);
+  const organic=makeRevision({placement:'instagram_bio',destination:'masterclass',campaign:'Lancement septembre',label:'Bio'},fixed.linkId,3,'44444444-4444-4444-8444-444444444444',fixed.now,{});
+  assert.equal(new URL(organic.generated_url).searchParams.get('utm_campaign'),'lancement-septembre');
+  assert.equal(new URL(organic.generated_url).searchParams.get('utm_id'),null);
 });
 
 test('Une configuration Masterclass invalide est refusée sans empêcher une révision Quiz',()=>{
@@ -26,7 +31,9 @@ test('Une configuration Masterclass invalide est refusée sans empêcher une ré
 });
 
 test('La lecture conserve les URLs persistées des révisions anciennes',async()=>{
-  const historic=makeRevision(masterclass,fixed.linkId,1,fixed.revisionId,fixed.now,{});
+  const generated=makeRevision(masterclass,fixed.linkId,1,fixed.revisionId,fixed.now,{});
+  // Une révision publiée avant le 15 septembre garde son ancienne destination et ses anciens paramètres.
+  const historic={...generated,destination_url:'https://www.blg-studio.fr/blg-rugby-mc',generated_url:generated.generated_url.replace('/masterclass26','/blg-rugby-mc').replace('utm_content=%7B%7Bad.id%7D%7D','utm_content=video-meta')};
   const db:Database={
     select:async(table:TableName):Promise<Row[]>=>table==='tracked_links'?[{id:fixed.linkId,archived_at:null}]:table==='link_revisions'?[historic]:[],
     upsert:async()=>{},rpc:async<T>()=>undefined as T,probe:async()=>{}

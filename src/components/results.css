@@ -154,3 +154,8 @@
 }
 
 .paid-sales-group{margin:16px 0;border-top:1px solid var(--a-line);padding-top:16px}.paid-sales-group>summary{cursor:pointer;font-weight:600;padding:8px 0}.paid-sales-details .results-table-scroll{margin-top:12px}.paid-sales-details td{vertical-align:top}.paid-sales-details td>div{margin-top:8px}.paid-sales-details a{color:inherit;text-underline-offset:3px}
+/* Tableau 05 · Par publicité : douze colonnes, défilement horizontal dans son cadre ; sous-valeurs en contexte. */
+#atelier-a .results-table-wide { min-width:1480px; }
+#atelier-a .results-table-wide th,#atelier-a .results-table-wide td { width:7%; }
+#atelier-a .results-table-wide th:first-child,#atelier-a .results-table-wide td:first-child { width:23%; }
+#atelier-a .results-table-wide td .a-t-context { display:block; white-space:normal; }

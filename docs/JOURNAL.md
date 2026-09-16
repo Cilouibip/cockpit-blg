@@ -103,3 +103,151 @@ La recette du vrai handler a révélé un endpoint reçus absent, des bornes Met
 Application unique après revue indépendante et contrôle de cible ; registre métier 1–8, droits vérifiés et comptages inchangés. Les requêtes arbitraires de tables/agrégats historiques sont remplacées par une seule lecture cohérente par fenêtre. Cache borné à 128 entrées, nettoyage des expirées, échecs non mémorisés et mutualisation des lectures en cours.162 tests unitaires, 37 SQL et build ; contre-revues SQL/lecteurs/cache et comparaison cloud sans écart. Les intervalles multiannuels restent un coût supérieur explicite, sans relever le timeout.
 
 Le clic réel du lot précédent a été contre-vérifié : publication Notion complète, une seule lecture Wix, reçus distincts, périodes Meta exactes et deux familles PostHog séparées. Aucun second clic, import, cron ou déploiement dans le lot008. Contre-recette finale sur le build `VooIRl5UAmBkQw5Y-Lnz0` : 82 contrôles API, 17 d’interface et 129 rapprochements passent. Contrôle du diff public sans secret connu ni preuve métier réelle ; les changements préexistants sont conservés. Le lot validé fait l’objet d’une sauvegarde locale sur `codex/build`, avec manifeste et patch complets dans le journal privé. Aucun push, merge, cron ni déploiement.
+
+## 8 septembre 2026 — protocole L1/L2 et rapports PostHog ciblés
+
+L2 simplifie les textes de Résultats et ses détails sans refondre les autres pages ni changer les calculs. Build de référence local `QxXbic7n8UDtYWbCs_KGY` conservé sur3102. L1 compare désormais fiches Contacts, vraies inscriptions et suivi Notion, avec répétitions et antériorité ; la création/import d’un contact n’est pas une acquisition. Les deux définitions proposées de Leads restent distinctes et non attribuées à l’utilisateur.
+
+009 développée localement : observations métier isolées des événements navigateur, publication atomique, reprise, identité commune, source et mapping versionnés séparément, antériorité globale et périmètre configuré. Revue indépendante44cas et charge locale ;21tests SQL. Application distante refusée par auto-review avant écriture, puis absence de table/registre inchangé vérifiés. Aucun import L1, droit source ou clé modifié. L’autorisation précise reste une étape distincte.
+
+Le raccord PH GETdescripteur/POSTrapport et l’invalidation ciblée du cache après publication passent les tests du vrai handler, y compris deux instances de lecture, comparaison et rapport vide. Les profils source/campagne restent distincts. Les valeurs vides mesurées concernent seulement le navigateur ; aucun zéro CRM fabriqué. Typecheck et199tests unitaires passent ; contre-revue centrale15cas. Aucun nouveau build sur3102 : l’interface déclencherait un import ciblé à autoriser séparément. L’état courant et les nouvelles clés de configuration privée sont documentés dans ETAT.
+
+L3 proposé à partir des relations Client disponibles : séparer premiers clients accompagnés et premiers acheteurs, conserver les dates contradictoires et l’antériorité, ne pas substituer prix catalogue/échéances au CA contracté. Les preuves réelles et contre-comptages sont privés ; aucun code L3 ni paiement canonique ajouté.
+
+
+## 8 septembre 2026 — préparation des métadonnées créatives Meta
+
+010 intègre la RPC proposée et relue pour enrichir uniquement creative_id des annonces existantes. Contrôle du compte, de l’identifiant et de l’ancienne valeur ; petit lot atomique et rejeu exact sans nouvelle mutation. Quatre tests SQL locaux et typecheck passent, dont invariance des autres colonnes et installation sans la table métier009. Aucun apply ni import. Le hash final et les dépendances sont remis à la contre-revue avant toute opération distante.
+
+### Rapport commercial descriptif L3 — local, collecte séparée
+
+Le rapport Clients/Paiements/Parcours conserve les premières déclarations, le classement payeur, les bénéficiaires, la preuve de paiement et les contradictions comme mesures distinctes. L’antériorité est calculée sur toute la population disponible avant les dates de consultation. La carte Nouveaux clients ne change pas de définition automatiquement. Publication d’un rapport global via les agrégats existants ; lecture du dernier complet avant les journées, omission d’un ancien membre refusée et date corrigée retirée de l’ancien jour. Plafond de 999 jours renseignés explicite, sans troncature. Aucun nouveau schéma requis ; collecte initiale supervisée, reprise locale, pas de cadence automatique livrée.
+
+Neuf tests métier/source, quatre tests sur PostgreSQL jetable avec migrations1–8, suite unitaire et vérification TypeScript passent. Le code et le runner sont remis à une revue indépendante. Une lecture source seule est autorisée séparément pour préparer les preuves minimisées ; aucune publication L3 n’est autorisée. La configuration serveur optionnelle `NOTION_COMMERCE_CONFIG` reste à reporter séparément dans les variables privées avant activation.
+
+Le garde initial limité aux Parcours a été corrigé après deux contre-cas : disparition d’un Paiement ancien ou d’un Client. Les membres utiles des trois familles sont maintenant contrôlés avant toute publication ; quatorze tests ciblés passent. La lecture Notion autorisée est complète, sans publication ; le rapport a été reconstruit localement depuis son checkpoint après ce delta. Une ancienne conclusion d’absence de relation Binôme est invalidée : double encodage de l’identifiant de propriété dans le helper privé, corrigé sans modifier Notion. Arrêt demandé par Mehdi pour reprendre avec des modèles moins coûteux ; checkout et preuves conservés.
+
+## 8 septembre 2026 — installation autorisée du stockage 009
+
+Après autorisation explicite de Mehdi, revue indépendante et contrôle de cible, installation de la seule migration 009. Le refus d’approbation antérieur est résolu. Les empreintes de contenu des tables existantes sont identiques avant/après ; leurs colonnes, index, droits et règles RLS sont également inchangés. Les relations ajoutées n’entraînent aucune suppression en cascade. Le registre technique passe à 1–9 ; le nouveau stockage privé reste vide et ses cinq fonctions sont réservées au serveur. Aucun import, changement Wix/Notion, déploiement ou activation de cron. La migration 010 reste locale et non autorisée.
+
+
+## 8 septembre 2026 — livraison locale des trois premières parties
+
+Mehdi choisit les premiers contacts pour Leads uniques et les personnes au premier accompagnement, binômes inclus, pour Nouveaux clients. Le raccord commercial utilise désormais les Démarrages Client sur tout l’historique disponible avant filtrage, sans fusionner deux bénéficiaires par leur email partagé. Le rapport commercial est publié après revue ; tests ciblés métier/PostgreSQL et vérification de la version locale passent.
+
+Le lecteur supervisé L1 réutilise le stockage009 avec des relevés source minimaux. La lecture réelle Wix Forms a révélé que les réponses sont dans `submissions`, alors que le normaliseur attendait `properties` ; extraction et empreinte de provenance corrigées ensemble. Les trois familles d’inscriptions et d’antériorité sont publiées sans rejet. Le dernier contrecontrôle d’un écart avec la référence préparatoire reste ouvert dans le suivi privé.
+
+010 est installée et les métadonnées créatives sont partiellement publiées. Une limitation de lecture Meta suspend les derniers lots ; les mesures quotidiennes et les lots précédents restent conservés. Les rapports PostHog sur dates choisies ont passé la recette réelle source, stockage, seconde instance et comparaison. Les sélections annuelle et du jour sont vérifiées dans le navigateur.
+
+La version privée locale est reconstruite sur3102 avec les raccords publiés. Le volet Leads présente une définition courte, ses deux sources et la date de mise à jour ; Transactions reste distinct des nouveaux clients. ETAT conserve les configurations à reporter séparément et les limites financières/attribution encore ouvertes. Automatisation, refonte des autres pages et déploiement attendent la reprise par Mehdi ; aucune écriture dans les sources, aucun commit ou push dans cette livraison.
+
+### Dernier contrôle des leads : correction locale, installation en attente
+
+Le contrecontrôle a identifié un double compte dû à l’ordre d’import. Un formulaire peut recevoir une identité différente avant que le lien réciproque Client–Prospect ne soit lu. La correction 011 rassemble ces preuves avant de choisir la première date et de filtrer la période. Elle exige une relation réciproque unique, le même périmètre configuré et l’absence de Prospect concurrent ; elle ne fusionne pas les données stockées. Les cas d’ordre inversé, antériorité, ambiguïté et séparation des périmètres sont couverts par les tests PostgreSQL. Deux anciennes fixtures Forms ont été alignées sur la réponse réelle, sans changer leurs assertions. Les 32 tests SQL ciblés et le contrôle TypeScript passent.
+
+L’installation Supabase a été refusée avant exécution par le contrôle automatique : l’accord précédent concernait 009, pas cette nouvelle fonction. La fonction et la version 011 sont confirmées absentes après ce refus. Aucun contournement ni changement de données. L’accord précis a été demandé ; le build déjà servi conserve la lecture précédente. Le code préparé pour 011 ne doit être déployé qu’après son installation et le contrôle réel du résultat.
+
+## 9 septembre 2026 — correction finale des leads installée
+
+Après accord direct pour 011, installation du SQL exact précédemment relu et testé. Le contrôle avant/après confirme un contenu inchangé dans les dix-neuf tables métier suivies ; seul le registre technique reçoit la version11 et la fonction de lecture privée est ajoutée. Exécution interdite aux rôles navigateur, accordée au serveur. Le refus d’approbation précédent est résolu. Build local reconstruit ; la vraie API confirme la suppression du double compte et la stabilité des années précédentes et des autres KPI. Aucun réimport, aucune écriture Wix/Notion ni déploiement public.
+
+Mehdi confirme la règle de prix pour les offres en trois fois. L’échéancier existant possède les montants et le total calculé ; le raccord au CA contracté doit constituer une seule vente datée et éviter de compter son montant à chaque mensualité. Ce raccord n’a pas été implémenté dans cette opération011. La différence entre prix vendu et encaissements ne résout pas l’écart intersource des paiements.
+
+## 9 septembre 2026 — passation et état consolidés
+
+Les définitions de leads et nouveaux clients encore présentées à tort comme en attente dans le document produit sont remplacées par les réponses directes de l’utilisateur. ETAT décrit désormais chaque page comme vérifiée, partielle ou encore à tester. Les contrôles synthétiques du générateur de liens ne sont pas présentés comme une preuve de trajet réel jusqu’à la vente. Une passation privée unique relie versions, preuves, décisions, autorisations et prochaine action ; les anciens états sont conservés comme historique.
+
+La prochaine tâche doit terminer les données financières, tester les liens et connexions quiz/masterclass, et proposer un Commercial lisible avec historique. Le design Parcours et Connexions, la mise à jour continue et le déploiement restent différés. Aucun nouveau test de parcours, accès source, changement de données ni refonte effectué pendant cette préparation. La préférence globale de modèles économe est enregistrée séparément dans les instructions Codex ; aucun réglage global de modèle modifié.
+
+
+## 9 septembre 2026 — Commercial quotidien et préparations de reprise
+
+L’utilisateur précise Commercial : ouvrir sur la journée, les RDV, présences, origines et situations commerciales, puis une fiche/historique au clic avec badges et couleurs cohérentes. Une maquette de conversation fictive est préparée ; aucune refonte de l’écran actif ni saisie source effectuée. Le contrôle des données exposées montre que les origines et la chronologie ne sont pas encore raccordées et que les compteurs journaliers ne peuvent pas être calculés depuis une page de prospects.
+
+Le générateur lit maintenant une destination Masterclass configurable au moment de créer une révision. Valeur facultative, ancienne adresse par défaut, révisions persistées inchangées et quiz indépendant d’une mauvaise configuration Masterclass. Préservation UTM/identifiant du lien/macros Meta, validation de l’URL et lecture historique contrôlées ; typecheck et tests ciblés passent. `.env.example` ne contient aucune valeur réelle. Aucun changement d’adresse active ni du tracking de page.
+
+La première préparation de calcul financier a été rejetée en revue pour confusion échéance/vente, bénéficiaires/ventes DUO et données manquantes/zéro. Elle a été corrigée sur des preuves explicites d’identifiant, date et total vendu. Quatre tests ciblés couvrent les regroupements et l’indisponibilité ; typecheck passe. Le module reste isolé des indicateurs réels tant que le raccord aux sources n’est pas établi. Aucune somme compensatoire de l’écart Notion/Wix, connexion Stripe, migration distante, publication ou activation.
+
+## 9 septembre 2026 — préparation de la mise à jour autorisée
+
+Commercial quotidien raccordé aux données publiées avec composants du kit, présence distincte du closing, filtre origine et historique enregistré. Liens : accusé de sauvegarde distinct de la relecture et identifiant de création stable contre doublons après coupure. Connexions : import filtré par flux et deux cartes PostHog distinctes. Les destinations Masterclass restent historiques tant que la nouvelle adresse n’est pas configurée ; la migration 012 est locale, non appliquée en ligne.
+
+Mehdi autorise la mise à jour du dépôt existant et sa publication Vercel. Le framework distant est corrigé en Next.js et Node22 ; aucune planification ni écriture dans les sources n’est activée. Publication et validation en ligne en cours ; ne pas interpréter cette préparation comme un déploiement réussi.
+
+
+Publication du9septembre2026 autorisée et terminée : GitHub PR1 fusionnée, production d4211e20172b3ce24ff88ecb53d47aa232daf8d1 sur https://cockpit-blg.vercel.app. Accès privé et lectures réelles vérifiés ; même Supabase, aucun cron ni migration distante. 246tests unitaires et37testsSQL, typage et build réussis. Suite en pause.
+
+
+Correction Commercial du9septembre2026 : périodes au-delà dujour, registredeprospects même sansRDV, recherche/filtres/pagination cohérents et fiche/historique. Actualiser relie la lectureNotion existante à la demande. Tests256dont22Commercial, build et CIréussis, contrôle HTTPproduction et CUAChrome local effectué. PR2 fusionnée ; production 34b843977086b23d9aa01a622b610d2add49bf21 ; https://cockpit-blg.vercel.app. Pas d’importsource lancé en test, ni cron ou migration distante. Autres travaux enpause.
+
+## 10 septembre 2026 — lenteur au changement de période
+
+Mesure de la chaîne `GET /api/dashboard` sur la prévisualisation privée et par script d’appel : 27 appels à la base enchaînés en douze étapes, 12 à 18 s par période depuis un poste local, mêmes ordres de grandeur sans comparaison. `pg_stat_statements` montre des fonctions SQL lentes (`cockpit_source_window` 404 ms en moyenne et jusqu’à 7,5 s, `cockpit_business_rollup` 991 ms, `cockpit_lead_entry_rollup_v2` 1,3 s) et le relevé des ventes payées de 2,5 Mo relu pour la période comparée. La fonction Vercel s’exécutait à Washington alors que la base est à Londres.
+
+Correction, choix technique : les lectures indépendantes d’une période partent ensemble (`dashboard.ts`, `business-dashboard.ts`) et sont appliquées dans l’ordre historique ; les familles de lignes d’une publication sont lues ensemble et une seule fois par requête (`notion-commerce-storage.ts`, mémo limité à la requête) ; la fonction est placée dans la région de la base (`vercel.json`). Aucun délai augmenté, aucune erreur masquée, calcul des ventes payées inchangé. Typecheck, 284 tests unitaires et 37 tests SQL locaux réussis, dont deux nouveaux tests (lectures simultanées, mémo par requête). Après correction : 1,5 à 3 s par période au script, 1,4 à 4,7 s en HTTP local sur douze lectures, résultats 8 / 7 / 5 et détail août 7 / 1 / 3 / 17 avec 68 liens Notion inchangés. PR5 fusionnée, commit de fusion `e987cae66975372a73e9df1ccfdcb848ab01f8ed`.
+
+Limite restante : la lenteur propre des fonctions SQL et l’absence d’index composite sur `source_aggregates (sync_run_id, metric_key)` ne se traitent que par migration, non autorisée dans ce cadre ; une lecture peut encore dépasser quelques secondes sous charge de la base.
+
+Recette production du 14 septembre 2026, session ouverte par l’utilisateur : les trois périodes avec Comparer se lisent en 3 à 4 s sans erreur ni relance (8, 7, 5) ; détail août 7 / 1 / 3 / 17 avec 68 liens Notion. Aucune mensualité comptée comme nouvelle vente. Chantier clos ; le reste du projet demeure en pause.
+
+
+## 15 septembre 2026 — préparation locale du suivi par publicité sur les deux tunnels (Claude Code)
+
+Objectif : créer un lien dans le cockpit, le poser sur une publicité Meta et lire par publicité et par tunnel les visites, inscriptions, leads uniques, rendez-vous, nouvelles ventes et encaissements. Règle du pilote : la première origine mesurable A conserve le crédit, même après un retour par B avant l'inscription.
+
+Fait localement, non publié :
+- `src/lib/links.ts` : pour l'emplacement Meta, `utm_campaign`, `utm_content`, `utm_term` et `utm_id` portent les macros `{{campaign.id}}`, `{{ad.id}}`, `{{adset.id}}` ; `meta_*` conservés en doublon ; destination masterclass par défaut `/blank-1` (`BLG_MASTERCLASS_URL` la remplace). Tests liens et PostHog alignés.
+- `src/connectors/wix-lead-entries.ts` (version `source-entry-v4`) : origine du quiz étendue (`adset`, `linkId`, `visitor`, `pagePath` avec paramètres de campagne lus dans l'URL d'arrivée) ; première origine A (`firstTouchFields`) ; champs cachés des formulaires (`formOriginFields` : visitor, first, current, session) ; JSON borné, aucune valeur personnelle.
+- `src/lib/db.ts` : `lead_source_observations` lisible par le serveur ; filtres bornés `in`, `gte`, `lt` et `columns`.
+- `src/lib/ad-funnel.ts` : projection par publicité (inscriptions, leads uniques, personnes connues, identités non rapprochées, rendez-vous du miroir Notion, premières ventes et encaissements du relevé Notion-commerce, dépenses et clics Meta). Aucune nouvelle table.
+- `src/lib/ad-arrivals.ts` : visites par publicité lues dans PostHog (agrégats).
+- Route `GET /api/ad-funnel` et accordéon « 05 · Par publicité » dans Résultats.
+
+Contrôles : 293 tests unitaires, typecheck et build de production réussis. Tests SQL Postgres non relancés. Rien n'est déployé ; la migration 012 (destination `/blank-1`) reste à installer avant de créer un lien masterclass en production.
+
+
+## 16 septembre 2026 — pourcentages validés, règle A datée, présence Notion, visiteurs uniques et actualisation sans agent (Claude Code)
+
+Objectif : corriger les écarts relevés le 15 septembre (taux absents, filtres ignorés par la route, visites comptées en événements, attribution par jour puis identifiant, ancienne masterclass non exclue), inclure la base et préparer l'installation.
+
+Fait localement, non publié :
+- `src/lib/ad-funnel.ts` : origine d'une personne = plus ancienne origine datée parmi toutes ses inscriptions (première origine A horodatée par le navigateur, bornée entre le 1er juillet 2026 et l'inscription qui la porte ; sinon l'arrivée, datée par `occurred_at`) ; l'heure départage deux inscriptions du même jour ; présence lue dans `prospects.business` (classification Notion datée du créneau) sinon statut de la ligne ; rendez-vous à venir (`appointmentsUpcoming`) et sans issue (`appointmentsUnknown`) séparés ; `leadsBooked` (inscrits de la période ayant un créneau non annulé) ; taux `optin`, `booking`, `attendance` avec numérateur/dénominateur/raison ; filtres `source` et `campaign` (`meta:`, `meta-ad:`, `meta-creative:`, `link:`) ; registre des liens joint aux lignes ; totaux recalculés sur les lignes visibles.
+- `src/lib/ad-arrivals.ts` : visiteurs uniques et pages vues par origine (même clé que les lignes), regroupés par visiteur (`blg_vid` sinon identifiant PostHog) puis rattachés à la première origine transmise par la page, sinon à la première arrivée ; masterclass limitée à `page_path` de `BLG_MASTERCLASS_URL` (défaut `/blank-1`) ; vues sans adresse comptées à part.
+- Route `GET /api/ad-funnel` : transmet tunnel, source et campagne ; écran Résultats, accordéon 05 : colonnes Visiteurs, Inscrits, Opt-in, RDV réservés, Réservation, RDV réalisés, Présence ; tiret quand une mesure manque.
+- `src/lib/sync-jobs.ts` : unités `forms`, `quiz_entries`, `client_history`, `commerce` planifiables quand leur configuration existe (`jobScope`), reprise de plusieurs unités partielles par tick ; `src/lib/connections.ts` et `Cockpit.tsx` : cartes « Wix · inscriptions » et « Notion · ventes payées » avec bouton de lecture, inscriptions ajoutées au bouton Actualiser.
+- `supabase/migrations/012_masterclass_destination_constraint.sql` : rejouable, précontrôle des lignes existantes, retour arrière sans perte dans le paquet d'installation ; `tests/migration-012.integration.ts` ajouté à `test:db`.
+- `scripts/replay-lead-entries.ts` : relecture des inscriptions par la clé serveur ou par pages exportées (import supervisé), cible Supabase vérifiée, mode simulation.
+
+Contrôles : typecheck, 297 tests unitaires, build de production, 40 tests SQL Postgres 17 locaux ; paquet pages : 30 tests (dont vue de page masterclass après réponse visiteur, vue de page quiz avec origine). Rien n'est déployé ; aucune donnée source modifiée ; lecture seule Supabase (migrations 1–11 installées, 012 absente, 0 lien, 1537 rendez-vous en statut inconnu portés par la classification Notion) et PostHog (aucun événement avec visiteur ni première origine avant installation).
+
+
+## 16 septembre 2026 (suite) — deux correctifs avant installation : /masterclass26 et opt-in par cohorte (Claude Code)
+
+Revue Codex du retour précédent : la destination par défaut visait encore `/blank-1` alors que Mehdi a publié `/masterclass26` (redirection 301 vérifiée), et l'opt-in divisait les inscrits de la période par les visiteurs de la même période sans relier chaque visiteur à son inscription.
+
+Fait localement, non publié :
+- `src/lib/links.ts` : destination masterclass `/masterclass26` ; anciennes adresses listées à part (`legacyMasterclassDestinations`), jamais proposées.
+- `src/lib/ad-arrivals.ts` : `MASTERCLASS_PAGE_PATH='/masterclass26'`, `masterclassPagePaths()` = adresse active puis `/blank-1` (reconnue) ; visiteurs du quiz sur toutes ses pages ; nouvelle lecture `readVisitorCohort` (une ligne par visiteur dont la première visite mesurée tombe dans la période, toute l'histoire lue pour dater cette première visite, identifiant raccordable `blg_vid` distingué de l'identifiant PostHog, limite 20 000 au-delà de laquelle le pourcentage devient indisponible).
+- `src/lib/ad-funnel.ts` : `optin` par ligne (quiz, masterclass, total, visiteurs sans identifiant, inscriptions sans visiteur ou hors cohorte) ; jointure visiteur → inscriptions confirmées (`properties.origin.visitor`), inscription au plus tôt le jour de la première visite, une seule fois par visiteur ; total sur visiteurs uniques (première visite la plus ancienne) ; nouveaux leads / déjà connus / identité non rapprochée ; `rates.optin` = cohorte du tunnel filtré ou totale ; couverture `coverage.optin` (période d'entrée, date de lecture, visiteurs raccordables/non raccordables, inscriptions reliées, sans identifiant, hors cohorte).
+- Route `GET /api/ad-funnel` lit la cohorte en parallèle des visites ; écran Résultats : opt-in avec numérateur/dénominateur, visiteurs sans identifiant en contexte, note de définition et de couverture avec date de lecture.
+- Migration 012 (commentaires), `installation/sql` (postcontrôle et retour arrière incluant `/masterclass26`), tests `links-destinations`, `migration-012`, paquet pages (tests sur `/masterclass26`), manifeste OP06/OP07/OP09/OP11/OP12/OP16 et guide d'installation.
+
+Contrôles : typecheck ; tests `ad-funnel` (11 : dix visiteurs → 20 %, visite du 31 et inscription du 1er, inscription antérieure, double soumission, visiteur déjà connu quiz → masterclass crédité à A malgré B, totaux sans double compte, lecture ultérieure plus complète, cohorte tronquée ou absente → indisponible) ; suites complètes relancées (voir retour du lot). Lecture seule PostHog : aucun `mc_page_view` avec `page_path` et aucun `$pageview` quiz avec `visiteur` depuis le 15/09 (pages non installées) : le pourcentage restera « indisponible » avec sa raison jusqu'à l'installation.
+
+
+## 16 septembre 2026 — intégration des contrôles avant installation
+
+Corrections locales : attribution déterministe et filtres du tableau publicitaire, cohorte et antériorité à l’instant, reports distincts, valeurs financières absentes conservées à null, libellé des personnes déjà connues. Cadences des lecteurs ramenées à une heure ; statut final complet/partiel corrigé pour les lots à plusieurs tâches et reprises. Lecteur Forms borné aux formIds configurés ; pagination CMS compatible avec le contrat count/offset/total et refus des preuves terminales incomplètes.
+
+Validation finale : types + 313 tests + build réussis. Tests ciblés de régression avant/après pour les défauts de synchronisation et de périmètre Forms ; scénarios cohorte/finance/identité et pagination CMS. Aucun navigateur, déploiement, migration distante, envoi ou réservation. L’ordonnanceur et les connexions déployées restent à contrôler avant activation.
+
+## 16 septembre 2026 — revue de publication et cadence horaire
+
+Relecture du lot complet, de la liste des fichiers et des motifs sensibles : aucune valeur de secret, identité client ou donnée CRM destinée au dépôt public. La suite déjà validée (types, 313 tests, build) n’est pas relancée car aucun code applicatif n’a changé après cette preuve ; contrôle de diff et du workflow ajouté seulement.
+
+Ajout d’un workflow GitHub Actions horaire qui appelle la route serveur `jobs/tick` avec `CRON_SECRET` chiffré. Revue finale : un seul appel de fonction, limité par son budget court, ne garantit pas le passage des onze unités dues. Le workflow reprend donc immédiatement les réponses `partial` dans le même passage, avec une borne de huit appels et quinze minutes, puis exige `complete`. Une erreur HTTP, une réponse illisible ou un drainage toujours partiel échoue explicitement. En l’absence du secret GitHub, l’appel est ignoré proprement et la cadence reste inactive. Aucun cron Vercel, nouvel abonnement ou service externe ajouté.
+
+Le contrôle automatique a refusé avant exécution le transfert de la valeur privée `CRON_SECRET` vers les secrets du dépôt GitHub : il demande un accord explicite sur ce payload et cette destination. Aucune seconde tentative ni contournement ; le secret n’a pas été affiché. La liste des secrets GitHub a ensuite été lue sans valeur et confirme qu’aucun secret n’est configuré.
+
+État des raccords avant publication : configuration Wix des inscriptions et destination masterclass disponibles dans le fichier privé de déploiement ; profils PostHog explicites et profils Notion supplémentaires absents de ce fichier et donc non inventés. Forms répond, CMS quiz reste refusé par Wix (`WDE0027`) et Meta refuse la lecture complémentaire (code Meta 200). Les derniers rapports conservés restent la référence quand une lecture échoue.

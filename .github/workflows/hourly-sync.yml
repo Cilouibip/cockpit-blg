@@ -1,0 +1,41 @@
+name: Actualiser le cockpit
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cockpit-hourly-sync
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Signaler une configuration incomplète
+        if: ${{ env.CRON_SECRET == '' }}
+        run: echo "CRON_SECRET absent : actualisation horaire non activée."
+      - name: Lancer une unité bornée
+        if: ${{ env.CRON_SECRET != '' }}
+        run: |
+          for attempt in $(seq 1 8); do
+            response="$(curl --silent --show-error --fail-with-body \
+              --max-time 90 \
+              --header "Authorization: Bearer $CRON_SECRET" \
+              https://cockpit-blg.vercel.app/api/jobs/tick)"
+            status="$(printf '%s' "$response" | jq -er '.status')"
+            printf '%s' "$response" | jq -c '{status,units,jobs}'
+            if [ "$status" = "complete" ]; then
+              exit 0
+            fi
+            test "$status" = "partial"
+          done
+          echo "Les unités dues n'ont pas toutes été drainées après huit appels bornés." >&2
+          exit 1
