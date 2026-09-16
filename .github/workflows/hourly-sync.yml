@@ -26,7 +26,7 @@ jobs:
       - name: Lancer une unité bornée
         if: ${{ env.CRON_SECRET != '' }}
         run: |
-          for attempt in $(seq 1 8); do
+          for attempt in $(seq 1 24); do
             response="$(curl --silent --show-error --fail-with-body \
               --max-time 90 \
               --header "Authorization: Bearer $CRON_SECRET" \
@@ -38,5 +38,5 @@ jobs:
             fi
             test "$status" = "partial"
           done
-          echo "Les unités dues n'ont pas toutes été drainées après huit appels bornés." >&2
+          echo "Les unités dues n'ont pas toutes été drainées dans la fenêtre horaire bornée." >&2
           exit 1
