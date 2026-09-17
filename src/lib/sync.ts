@@ -18,7 +18,7 @@ export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:Re
   if(getConfig(env).mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
   await db.probe();
   const today=Temporal.Now.plainDateISO('Europe/Paris');
-  const fromDay=from||today.subtract({days:35}).toString();const toDay=to||today.toString();
+  const fromDay=from||today.subtract({days:35}).toString();const toDay=to||today.add({days:1}).toString();
   if(Temporal.PlainDate.from(fromDay).until(Temporal.PlainDate.from(toDay)).days>93||fromDay>=toDay)throw new AppError('Choisis une période de 1 à 93 jours.',400,'invalid_period');
   const namespace=(env.META_AD_ACCOUNT_ID||'').replace(/^act_/,'');
   if(!namespace)throw new AppError('Les paramètres de cette source sont absents.',503,'source_missing');

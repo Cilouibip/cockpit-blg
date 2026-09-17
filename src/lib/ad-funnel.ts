@@ -177,7 +177,7 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
  // 3. Catalogue Meta, dépenses de la période et registre des liens.
  const ads=await pages(db,'ads',{order:'id'});
  const adByExternal=new Map(ads.map(a=>[String(a.external_id),a]));
- const adDaily=await pages(db,'ad_daily',{gte:{date:from},lt:{date:Temporal.PlainDate.from(to).add({days:1}).toString()},order:'date,id'});
+ const adDaily=await pages(db,'v_ad_daily',{gte:{date:from},lt:{date:Temporal.PlainDate.from(to).add({days:1}).toString()},order:'date,id'});
  let metaLastDay:string|null=null;for(const d of adDaily){const day=String(d.date);if(!metaLastDay||day>metaLastDay)metaLastDay=day;}
  const adUuidToExternal=new Map(ads.map(a=>[String(a.id),String(a.external_id)]));
  const revisions=await pages(db,'link_revisions',{order:'id',columns:['id','label','campaign','tunnel']},10000).catch(()=>[] as Row[]);
@@ -329,14 +329,23 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
 	 }else notices.push(cohort?.reason??'Visiteurs entrés dans la période non lus (PostHog) : pourcentage d’opt-in indisponible.');
 	 for(const r of periodRegistrations){const row=rows.get(r.key);if(!row)continue;if(!r.visitor)row.optin.registrationsWithoutVisitor++;else if(matchedRegistrations.has(r.id))registrationsInCohort++;else row.optin.registrationsOutsideCohort++;}
 	 // 6f. Dépenses Meta après les visites/cohortes : un filtre tunnel conserve la dépense d'une publicité dont l'activité n'existe que dans PostHog.
+ const incompleteMeta=new Map<string,Set<'spendMinor'|'impressions'|'outboundClicks'>>();
 	 for(const d of adDaily){
 	  const external=adUuidToExternal.get(String(d.ad_id));if(!external)continue;
 	  const key='ad:'+external;
 	  if(!rows.has(key)&&filters.tunnel!=='all')continue;
 	  const row=rowFor(key,{adId:external,campaignId:null,adsetId:null,linkId:null,source:null,basis:'none'});
-	  row.spendMinor=(row.spendMinor??0)+Number(d.spend_minor??0);row.impressions=(row.impressions??0)+Number(d.impressions??0);row.outboundClicks=(row.outboundClicks??0)+Number(d.outbound_clicks??0);
+  for(const [field,column] of [['spendMinor','spend_minor'],['impressions','impressions'],['outboundClicks','outbound_clicks']] as const){
+   const value=d[column];
+   if(value===null||value===undefined||!Number.isFinite(Number(value))){const missing=incompleteMeta.get(key)??new Set();missing.add(field);incompleteMeta.set(key,missing);}
+   else row[field]=(row[field]??0)+Number(value);
+  }
 	 }
+ // Catalogue sans activité : présence connue, mesures absentes conservées à null.
+ // Sans inscription/visite, aucun tunnel n’est déduit du nom de la campagne.
+ if(filters.tunnel==='all')for(const ad of ads)rowFor('ad:'+String(ad.external_id),{adId:String(ad.external_id),campaignId:null,adsetId:null,linkId:null,source:null,basis:'none'});
 	 for(const row of rows.values()){
+  for(const field of incompleteMeta.get(row.key)??[])row[field]=null;
 	  if(commerceAvailable){row.firstSalesConfirmed??=0;row.firstSalesReconciled??=0;row.firstSalesPending??=0;row.cashMinor??=0;row.refundsMinor??=0;}
 	  if(incompleteMoneyKeys.has(row.key)){row.cashMinor=null;row.refundsMinor=null;}
 	 }
@@ -369,6 +378,8 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
   for(const t of ['quiz','masterclass'] as const){totals.visitors[t]=addNullable(totals.visitors[t],r.visitors[t]);totals.pageviews[t]=addNullable(totals.pageviews[t],r.pageviews[t]);}
   totals.visitorsWithFirstOrigin=addNullable(totals.visitorsWithFirstOrigin,r.visitorsWithFirstOrigin);
  }
+ for(const field of ['spendMinor','impressions','outboundClicks'] as const)if(ordered.some(row=>incompleteMeta.get(row.key)?.has(field)))totals[field]=null;
+ if(ordered.some(row=>incompleteMeta.has(row.key)))notices.push('Certaines mesures Meta sont absentes : les colonnes concernées restent indisponibles, y compris dans le total.');
  withRates(totals);
  const {key:_k,kind:_kind,label:_l,campaignLabel:_c,adId:_a,campaignId:_ci,adsetId:_as,creativeId:_cr,linkIds:_li,links:_ln,tunnels:_t,...totalsOnly}=totals;
  const leadObservedAt=requests.reduce<string|null>((max,o)=>o.publishedAt&&(!max||o.publishedAt>max)?o.publishedAt:max,null);

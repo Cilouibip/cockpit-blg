@@ -110,7 +110,7 @@ function fixture(extra:Row[]=[],additions:Partial<Record<string,Row[]>>={}){
   sale('pay-6',{clientIds:['client-9'],day:'2026-09-14',amountMinor:15000,state:'reconciled'}),
  ];
  const commerce=commerceRows(sales);
- const tables:Record<string,Row[]>={lead_source_observations:observations,ads,ad_daily:adDaily,appointments,prospects,link_revisions:linkRevisions,sync_runs:commerce.runs,source_aggregates:commerce.aggregates};
+ const tables:Record<string,Row[]>={lead_source_observations:observations,ads,v_ad_daily:adDaily,appointments,prospects,link_revisions:linkRevisions,sync_runs:commerce.runs,source_aggregates:commerce.aggregates};
  for(const [table,rows] of Object.entries(additions))tables[table]=[...(tables[table]??[]),...(rows??[])];
  const calls:{table:string;options:SelectOptions}[]=[];
  const db:Database={
@@ -196,7 +196,7 @@ test('filtre tunnel : le quiz ne compte ni les inscriptions ni les visiteurs mas
  assert.deepEqual(rowA.visitors,{quiz:100,masterclass:null});
  assert.equal(rowA.appointmentsBooked,1,'seul le créneau de P9 (entré par le quiz) reste');
  assert.ok(calls.some(c=>c.table==='prospects'&&c.options.in?.id&&c.options.columns?.includes('business')),'prospects lus par lot avec leur classification');
- assert.ok(calls.some(c=>c.table==='ad_daily'&&c.options.gte?.date==='2026-09-01'&&c.options.lt?.date==='2026-10-01'));
+ assert.ok(calls.some(c=>c.table==='v_ad_daily'&&c.options.gte?.date==='2026-09-01'&&c.options.lt?.date==='2026-10-01'));
  await assert.rejects(()=>buildAdFunnel(db,{from:'2026-09-30',to:'2026-09-01',tunnel:'all'},{env}),/AD_FUNNEL_INVALID_PERIOD/);
 });
 
@@ -374,4 +374,33 @@ test('commerce absent : ventes, encaissements et remboursements restent indispon
  const report=await buildAdFunnel(fixture().db,period,{env:{WIX_SITE_ID:SITE},visits,now:NOW});const row=report.rows.find(r=>r.adId===AD_A)!;
  assert.equal(report.coverage.commerce.available,false);assert.ok(report.coverage.commerce.reason);assert.equal(report.coverage.commerce.paidSaleRows,null);assert.equal(report.coverage.commerce.moneyRowsUnavailable,null);
  assert.equal(row.firstSalesConfirmed,null);assert.equal(row.cashMinor,null);assert.equal(row.refundsMinor,null);assert.equal(report.totals.firstSalesConfirmed,null);assert.equal(report.totals.cashMinor,null);assert.equal(report.totals.refundsMinor,null);
+});
+
+
+test('les reprises et les imports incomplets ne sont jamais additionnés aux dépenses publiées',async()=>{
+ const {db,calls}=fixture([],{ad_daily:[{id:'stale-copy',ad_id:'ad-uuid-a',date:'2026-09-03',spend_minor:999999,impressions:999999,outbound_clicks:999999}]});
+ const report=await buildAdFunnel(db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all'},{env});
+ assert.equal(report.rows.find(r=>r.adId===AD_A)?.spendMinor,10000);
+ assert.ok(calls.some(c=>c.table==='v_ad_daily'));
+ assert.ok(!calls.some(c=>c.table==='ad_daily'));
+});
+
+test('une publicité au catalogue sans activité reste visible avec des mesures indisponibles',async()=>{
+ const id='12345678909999';
+ const {db}=fixture([],{ads:[{id:'catalog-only',external_id:id,ad_name:'Sans activité',campaign_id:'12345678908888',creative_id:'12345678907777'}]});
+ const report=await buildAdFunnel(db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all'},{env});
+ const row=report.rows.find(r=>r.adId===id)!;
+ assert.equal(row.label,'Sans activité');assert.equal(row.creativeId,'12345678907777');
+ assert.equal(row.spendMinor,null);assert.equal(row.impressions,null);assert.equal(row.outboundClicks,null);
+ const quiz=await buildAdFunnel(db,{from:'2026-09-01',to:'2026-09-30',tunnel:'quiz'},{env});
+ assert.ok(!quiz.rows.some(r=>r.adId===id),'aucun tunnel inféré du catalogue');
+});
+
+test('une mesure Meta absente ne devient zéro ni dans la ligne ni dans le total',async()=>{
+ const {db}=fixture([],{v_ad_daily:[{id:'missing-measure',ad_id:'ad-uuid-a',date:'2026-09-04',spend_minor:null,impressions:12,outbound_clicks:null}]});
+ const report=await buildAdFunnel(db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all'},{env});
+ const row=report.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(row.spendMinor,null);assert.equal(row.outboundClicks,null);
+ assert.equal(report.totals.spendMinor,null);assert.equal(report.totals.outboundClicks,null);
+ assert.ok(report.notices.some(n=>n.includes('Certaines mesures Meta')));
 });

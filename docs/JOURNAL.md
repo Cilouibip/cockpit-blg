@@ -259,3 +259,10 @@ Le second passage termine Commerce (6 409 lignes lues) et l’antériorité Clie
 Clarification du journal de workflow : les noms `forms` et `quiz_entries` dans le premier passage signifient que l’ordonnanceur a tenté ces unités. Ils ne prouvent pas un import réussi. L’état autoritatif après tentative est zéro ligne lue et écrite, avec refus HTTP 403 pour les deux. Les lecteurs Wix paiements et reçus utilisent des endpoints distincts et ont pu avancer ; leur résultat ne donne aucun droit Forms ou CMS.
 
 État des raccords avant publication : configuration Wix des inscriptions et destination masterclass disponibles dans le fichier privé de déploiement ; profils PostHog explicites et profils Notion supplémentaires absents de ce fichier et donc non inventés. Forms répond, CMS quiz reste refusé par Wix (`WDE0027`) et Meta refuse la lecture complémentaire (code Meta 200). Les derniers rapports conservés restent la référence quand une lecture échoue.
+
+
+## 17 septembre 2026 — filtres, dépenses et catalogue
+
+Conservation des changements locaux puis intégration des deux bornes REST, de la vue des dépenses publiées, du catalogue Meta sans activité, du jour courant dans les imports et des événements question_affichee / clic_vers_bilan. Valeurs Meta absentes laissées indisponibles jusque dans les totaux. Aucun changement des sources Wix/Notion/Meta, ni seconde planification.
+
+Rapprochement réel dépenses validé contre Meta sur une période historique ; répétitions brutes exclues. Catalogue importé et relu. Diagnostic du passage horaire réellement planifié : succès Wix/Meta puis échec Notion ; reprise Notion terminée manuellement. Les preuves privées et identifiants restent dans le centre de contrôle. La cadence reste à observer après publication.

@@ -1,3 +1,17 @@
+# État technique du cockpit
+
+## 17 septembre 2026 — intégration en cours
+
+Ce bloc remplace les états locaux historiques ci-dessous. Référentiel privé courant : `ETAT-ACTUEL.md` puis `DECISIONS-ACTEES.md` du centre de contrôle BLG. Les notes anciennes ne sont pas des instructions de reprise.
+
+Lot préparé : filtres REST cumulés (borne basse et haute), dépenses issues de `v_ad_daily`, mesures absentes conservées à `null`, catalogue Meta complet indépendant de l’activité, import du jour inclus et deux événements de parcours supplémentaires. Catalogue présent sans activité : ligne disponible sans déduire un tunnel du nom de campagne.
+
+Contrôle réel des dépenses sur une période historique : égalité entre Meta et la vue publiée ; les répétitions de la table brute ne sont plus additionnées. Import catalogue complet effectué. Actualisation : ordonnanceur GitHub existant, aucune seconde planification. Dernier passage planifié contrôlé en échec sur Notion après succès Wix/Meta ; reprise Notion terminée manuellement. Cela ne prouve pas une cadence horaire fiable. Publication et contrôle de la nouvelle production restent à réaliser pour ce lot.
+
+Les événements quiz ajoutés à la lecture ne prouvent pas leur émission publique. Première origine 180 jours, parcours croisé réel, exclusions et rapprochements commerciaux restent à contrôler dans le périmètre décidé.
+
+## Historique conservé
+
 # État du cockpit — reprise du 9 septembre 2026
 
 Lire `DECISIONS-ACTEES.md` à chaque reprise. Les preuves, valeurs métier, identifiants et configurations restent privés. La publication GitHub/Vercel est autorisée par Mehdi le 9 septembre 2026 et en cours. La planification automatique reste différée.

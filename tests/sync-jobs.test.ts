@@ -25,7 +25,7 @@ test('an active lease and a failed backoff defer only their own stream',()=>{
 });
 
 const environment={COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion',META_AD_ACCOUNT_ID:'meta'} as unknown as NodeJS.ProcessEnv;
-const stream:Record<SyncJob,[string,string]>={notion:['notion','prospects_business'],meta:['meta','meta_account_daily'],wix:['wix','payments_analytics'],receipts:['wix','receipt_observations'],meta_ads:['meta','ad_daily'],quiz:['posthog','quiz_observations'],masterclass:['posthog','masterclass_observations'],forms:['wix','lead_entries_forms'],quiz_entries:['wix','lead_entries_quiz'],client_history:['notion','lead_entries_client_history'],commerce:['notion','commerce_declared_snapshot']};
+const stream:Record<SyncJob,[string,string]>={notion:['notion','prospects_business'],meta:['meta','meta_account_daily'],wix:['wix','payments_analytics'],receipts:['wix','receipt_observations'],meta_ads:['meta','ad_daily'],meta_catalog:['meta','ad_catalog'],quiz:['posthog','quiz_observations'],masterclass:['posthog','masterclass_observations'],forms:['wix','lead_entries_forms'],quiz_entries:['wix','lead_entries_quiz'],client_history:['notion','lead_entries_client_history'],commerce:['notion','commerce_declared_snapshot']};
 function tickDatabase(rows:Row[]):Database{return {select:async(_table,options)=>rows.filter(row=>Object.entries(options?.eq??{}).every(([key,value])=>key==='query_profile_key'||String(row[key])===value)),upsert:async()=>assert.fail('no aggregate write in scheduler test'),rpc:async()=>assert.fail('no rpc in scheduler test'),probe:async()=>{}};}
 function budget(canStart:(max:number)=>boolean){return {sourceFetch:async()=>new Response('{}'),canStart,dispose:()=>{}};}
 
@@ -66,6 +66,8 @@ const commerceConfig=JSON.stringify({clients:{dataSourceId:'ds-clients'},payment
 const fullEnvironment={COCKPIT_MODE:'live',WIX_SITE_ID:'wix',WIX_API_KEY:'k',WIX_LEAD_ENTRY_CONFIG:leadConfig,NOTION_DATA_SOURCE_ID:'notion',NOTION_CLIENT_DATA_SOURCE_ID:'notion',NOTION_TOKEN:'t',NOTION_COMMERCE_CONFIG:commerceConfig} as unknown as NodeJS.ProcessEnv;
 
 test('les unités inscriptions, antériorité Client et ventes payées ne sont planifiées qu’avec leur configuration',()=>{
+ assert.equal(jobScope('meta_catalog',environment),null,'le catalogue Meta ne se planifie jamais sans jeton serveur');
+ assert.equal(jobScope('meta_catalog',{...environment,META_ACCESS_TOKEN:'synthetic'} as unknown as NodeJS.ProcessEnv)?.profile,'meta-ad-catalog-v1');
  assert.equal(jobScope('forms',environment),null);assert.equal(jobScope('quiz_entries',environment),null);assert.equal(jobScope('client_history',environment),null);assert.equal(jobScope('commerce',environment),null);
  assert.equal(jobScope('forms',fullEnvironment)?.namespace,'wix');assert.match(jobScope('forms',fullEnvironment)!.profile,/-forms-/);assert.match(jobScope('quiz_entries',fullEnvironment)!.profile,/-quiz-/);
  assert.equal(jobScope('client_history',fullEnvironment)?.namespace,'notion');assert.equal(jobScope('commerce',fullEnvironment)?.namespace,'ds-parcours');
@@ -88,7 +90,7 @@ test('une lecture d’inscriptions partielle reprend dans le même tick (au plus
 
 
 test('all configured acquisition and commerce streams are due after one hour, not before',()=>{
- const jobs:SyncJob[]=['notion','meta','wix','receipts','meta_ads','quiz','masterclass','forms','quiz_entries','client_history','commerce'];
+ const jobs:SyncJob[]=['notion','meta','wix','receipts','meta_ads','meta_catalog','quiz','masterclass','forms','quiz_entries','client_history','commerce'];
  for(const job of jobs){const [source,key]=stream[job];
   assert.equal(chooseSyncJob([run(source,key,now-3_599_999)],now,[job]),null,`${job} is not due before the hour`);
   assert.equal(chooseSyncJob([run(source,key,now-3_600_000)],now,[job]),job,`${job} is due at one hour`);

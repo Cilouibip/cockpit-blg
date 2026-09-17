@@ -11,7 +11,7 @@ import type { PostHogConfig } from './posthog';
  */
 export const POSTHOG_ANALYTICS_VERSION = 'posthog-production-aggregates-v2';
 export const POSTHOG_PRODUCTION_HOSTS = ['quizz.blg-studio.fr', 'www.blg-studio.fr'] as const;
-export const POSTHOG_JOURNEY_EVENTS = ['$pageview', 'quiz_demarre', 'question_repondue', 'ecran_coordonnees', 'resultat_affiche', 'coordonnees_envoyees', 'calendrier_affiche', 'enregistrement_ok', 'clic_vers_quiz', 'video_lancee', 'rendezvous_confirme'] as const;
+export const POSTHOG_JOURNEY_EVENTS = ['$pageview', 'quiz_demarre', 'question_affichee', 'question_repondue', 'ecran_coordonnees', 'resultat_affiche', 'clic_vers_bilan', 'coordonnees_envoyees', 'calendrier_affiche', 'enregistrement_ok', 'clic_vers_quiz', 'video_lancee', 'rendezvous_confirme'] as const;
 type EventName = typeof POSTHOG_JOURNEY_EVENTS[number];
 export type ProductionHost = string;
 export interface PostHogDimensionScope {source:'all'|'paid'|'organic'|'unknown';campaignId:string|null}
@@ -122,7 +122,7 @@ export function postHogAggregateQueries(from: string, to: string, schema: PostHo
       countIf(${production} AND ${testTraffic}) AS identifiable_test_events,
       minIf(timestamp, ${eligible}) AS first_observed_at, maxIf(timestamp, ${eligible}) AS last_observed_at
       FROM events WHERE ${interval} LIMIT 2`,
-    byEvent: `SELECT event, ${aggregateSql(schema.sessionIdAvailable)} ${where} GROUP BY event ORDER BY event LIMIT 12`,
+    byEvent: `SELECT event, ${aggregateSql(schema.sessionIdAvailable)} ${where} GROUP BY event ORDER BY event LIMIT 20`,
     byHostEvent: `SELECT ${host} AS host, event, ${aggregateSql(schema.sessionIdAvailable)} ${where} GROUP BY host, event ORDER BY host, event LIMIT ${client.productionHosts.length*POSTHOG_JOURNEY_EVENTS.length+1}`,
     daily: `SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS day, event, ${host} AS host,
       ${aggregateSql(schema.sessionIdAvailable)} ${where} GROUP BY day, event, host ORDER BY day, event, host LIMIT 10000`,
@@ -218,7 +218,7 @@ export async function readPostHogAnalytics(config: PostHogAnalyticsConfig): Prom
       report.coverage.firstObservedAt = Temporal.Instant.from(String(overview[10])).toString(); report.coverage.lastObservedAt = Temporal.Instant.from(String(overview[11])).toString();
     }
     const [eventRows,hostRows,dailyRows,questionRows]=await Promise.all([
-      query('byEvent',['event',...countColumns],12),
+      query('byEvent',['event',...countColumns],20),
       query('byHostEvent',['host','event',...countColumns],client.productionHosts.length*POSTHOG_JOURNEY_EVENTS.length+1),
       query('daily',['day','event','host',...countColumns],10000),
       queries.questions?query('questions',['question_number',...countColumns],102):Promise.resolve([]),
