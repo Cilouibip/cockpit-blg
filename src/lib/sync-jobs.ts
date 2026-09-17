@@ -1,6 +1,8 @@
 import {Temporal} from '@js-temporal/polyfill';
 import {database,type Database,type Row} from './db';
 import {synchronize,synchronizeMetaAds} from './sync';
+import {syncMetaCatalog} from './sync-catalog';
+import {META_CATALOG_PROFILE} from '../connectors/meta-catalog';
 import {synchronizeWix} from './sync-wix';
 import {synchronizeWixTransactionCounts} from './wix-transaction-counts';
 import {postHogPeriod,postHogMasterclassPeriod} from './posthog-dashboard';
@@ -16,7 +18,7 @@ import {notionClientHistoryConfig} from '../connectors/notion-client-history';
 import {notionCommerceConfig,notionCommerceProfile} from '../connectors/notion-commerce';
 import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
-export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce';
+export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce';
 /** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle. */
 const definitions:{id:SyncJob;source:string;stream:string;cadence:number;resumable?:boolean}[]=[
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
@@ -24,6 +26,7 @@ const definitions:{id:SyncJob;source:string;stream:string;cadence:number;resumab
  {id:'wix',source:'wix',stream:'payments_analytics',cadence:3600000},
  {id:'receipts',source:'wix',stream:'receipt_observations',cadence:3600000},
  {id:'meta_ads',source:'meta',stream:'ad_daily',cadence:3600000},
+ {id:'meta_catalog',source:'meta',stream:'ad_catalog',cadence:3600000},
  {id:'quiz',source:'posthog',stream:'quiz_observations',cadence:3600000},
  {id:'masterclass',source:'posthog',stream:'masterclass_observations',cadence:3600000},
  // Inscriptions Wix (masterclass, quiz), antériorité Client (Notion) et ventes payées : mêmes lecteurs que le bouton Actualiser, sans agent.
@@ -45,7 +48,7 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|n
  });
  return due.sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
-const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
+const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>;
 type TickResult={status:string};
 type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string};
@@ -62,6 +65,7 @@ export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;pr
   case 'notion':return scope(env.NOTION_DATA_SOURCE_ID,NOTION_BUSINESS_VERSION);
   case 'meta':return scope(meta,META_ACCOUNT_PROFILE);
   case 'meta_ads':return scope(meta,`${env.META_API_VERSION||'v23.0'}-ad-day-none`);
+  case 'meta_catalog':return scope(meta,META_CATALOG_PROFILE,!!env.META_ACCESS_TOKEN);
   case 'wix':return scope(env.WIX_SITE_ID,WIX_PAYMENTS_ANALYTICS_MAPPING.version);
   case 'receipts':return scope(env.WIX_SITE_ID,WIX_RECEIPTS_PROFILE);
   case 'quiz':return scope(env.POSTHOG_PROJECT_ID,postHogScopeProfile(POSTHOG_DEFAULT_SCOPE,client));
@@ -79,6 +83,7 @@ async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Data
   case 'wix':return synchronizeWix(from,to,options) as Promise<TickResult>;
   case 'receipts':return synchronizeWixTransactionCounts(from,to,options) as Promise<TickResult>;
   case 'meta_ads':return synchronizeMetaAds(undefined,undefined,options) as Promise<TickResult>;
+  case 'meta_catalog':return syncMetaCatalog(options) as Promise<TickResult>;
   case 'quiz':return (await postHogPeriod(from,to,options))??{status:'failed'};
   case 'masterclass':return (await postHogMasterclassPeriod(from,to,options))??{status:'failed'};
   case 'forms':return synchronizeLeadEntries('forms',{db,env,maxPages:3});

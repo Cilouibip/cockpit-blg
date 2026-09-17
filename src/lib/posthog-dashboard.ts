@@ -98,9 +98,9 @@ export function applyPostHogQuiz(data:DashboardResponse,report:DashboardPostHogR
  const get=(event:string)=>events.find(row=>row.event===event);
  const step=(id:string,label:string,event:string):JourneyStep=>({id,label,value:measuredEmpty?0:get(event)?.visitors??null,source:'PostHog',coverage:measuredEmpty?'Rapport complet : aucun événement mesuré dans ce périmètre.':'Visiteurs identifiés distincts sur la période'});
  const quiz={id:'quiz',title:'Quiz',description:'Visiteurs identifiés distincts à chaque étape du quiz ; sélection appliquée aux propriétés UTM observées.',steps:[
-  step('arrival','Page du quiz vue','$pageview'),step('start','Quiz commencé','quiz_demarre'),
+  step('arrival','Page du quiz vue','$pageview'),step('start','Quiz commencé','quiz_demarre'),step('question-view','Questions affichées','question_affichee'),
   step('contacts','Écran coordonnées vu','ecran_coordonnees'),step('sent','Coordonnées envoyées','coordonnees_envoyees'),
-  step('saved','Enregistrement confirmé à l’écran','enregistrement_ok'),step('result','Résultat vu','resultat_affiche'),
+  step('saved','Enregistrement confirmé à l’écran','enregistrement_ok'),step('result','Résultat vu','resultat_affiche'),step('bilan','Clic vers le bilan','clic_vers_bilan'),
   step('calendar','Calendrier ouvert','calendrier_affiche'),
  ]};
  const questionsOnlyOnQuiz=!report.byHostEvent.some(row=>row.event==='question_repondue'&&row.host!==quizHost&&row.events>0);
