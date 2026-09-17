@@ -266,3 +266,15 @@ Clarification du journal de workflow : les noms `forms` et `quiz_entries` dans l
 Conservation des changements locaux puis intégration des deux bornes REST, de la vue des dépenses publiées, du catalogue Meta sans activité, du jour courant dans les imports et des événements question_affichee / clic_vers_bilan. Valeurs Meta absentes laissées indisponibles jusque dans les totaux. Aucun changement des sources Wix/Notion/Meta, ni seconde planification.
 
 Rapprochement réel dépenses validé contre Meta sur une période historique ; répétitions brutes exclues. Catalogue importé et relu. Diagnostic du passage horaire réellement planifié : succès Wix/Meta puis échec Notion ; reprise Notion terminée manuellement. Les preuves privées et identifiants restent dans le centre de contrôle. La cadence reste à observer après publication.
+
+## 17 septembre 2026 — parcours lisibles, vidéo et essais
+
+Lot validé par Mehdi dans la tâche cockpit : intégrer les mesures déjà émises et rendre leurs limites lisibles, en conservant Commercial et les sources. Nouvelle route privée GET `/api/journey`, requêtes PostHog agrégées et bornées, versions séparées, étapes et paires séquentielles dans une même session. Origine et marqueurs d’essai sont consolidés par session avant lecture des étapes. Cache de courte durée séparé par projet, configuration et filtres ; aucune donnée individuelle renvoyée.
+
+Écran Parcours : masterclass active, quiz, essais exclus par défaut, choix de version, taux avec numérateur/dénominateur, paliers vidéo, dernière position observée, durées de contenu et lecture au premier plan distinctes, sections affichées et questions. Courbe accompagnée d’un tableau accessible ; « non disponible » remplace les mesures manquantes. La réservation métier reste distincte de la mesure web et des événements Meta.
+
+Tableau publicitaire : correction des rendez-vous datés par `scheduled_at`, conversion en jour de Paris et repli historique ; exclusion des marqueurs d’essai conservés dans les inscriptions et visites, option explicite pour les inclure. Aucune règle de première attribution modifiée, aucune refonte Commercial.
+
+Validation : 340 tests unitaires ; route authentifiée et entrées invalides contrôlées ; TypeScript ; navigateur local avec données fictives sur ordinateur/mobile, filtres, versions, clavier et absence de débordement. Lectures réelles PostHog confirmées pour la version masterclass actuelle et le quiz, avec et sans essais. Absence de mesures détaillées de vidéo dans la lecture contrôlée ; affichage des questions et clic bilan encore absents du script public du quiz. Cela limite les mesures disponibles, sans prouver une panne du lecteur.
+
+Diagnostic des emails en lecture seule : dernier workflow arrêté après ses 24 tentatives avec lectures encore partielles ; un autre passage présente une erreur Notion. Recommandation de distinguer reprise et vraie erreur ; aucun changement du workflow ni des notifications. Aucun accès au compte Vercel, modification Wix/Meta/Notion, nouveau test d’inscription, réservation ou email. Les preuves privées de publication sont conservées par le centre de contrôle BLG.

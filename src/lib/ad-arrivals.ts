@@ -14,6 +14,7 @@
 import {Temporal} from '@js-temporal/polyfill';
 import {readJson,object} from '../connectors/http';
 import {originKeyFor,type CohortVisitor,type FunnelTunnel,type VisitCounts,type VisitsByOrigin,type VisitorCohort} from './ad-funnel';
+import type {TrafficScope} from './traffic-scope';
 
 const ALLOWED_HOSTS=['https://eu.posthog.com','https://us.posthog.com','https://app.posthog.com'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -42,8 +43,26 @@ export function masterclassPagePaths(env:Record<string,string|undefined>):string
 }
 const url=(param:string)=>`extractURLParameter(coalesce(toString(properties.$current_url),''),'${param}')`;
 const firstOrigin=(key:string)=>`JSONExtractString(coalesce(toString(properties.first_origin),''),'${key}')`;
+const firstTouch=(key:string)=>`JSONExtractString(coalesce(toString(properties.first_touch),''),'${key}')`;
+const current=(key:string)=>`coalesce(nullIf(toString(properties.${key}),''), ${url(key)}, '')`;
+const firstJson=(key:string)=>`coalesce(nullIf(${firstOrigin(`utm_${key}`)},''), nullIf(${firstOrigin(key)},''), nullIf(${firstTouch(`utm_${key}`)},''), nullIf(${firstTouch(key)},''), '')`;
+const quizFirst=(key:string)=>`coalesce(nullIf(toString(properties.premiere_utm_${key}),''), '')`;
+const firstTestFlag=`(lower(${quizFirst('is_test')}) IN ('true','1') OR lower(${firstJson('is_test')}) IN ('true','1') OR
+ match(lower(coalesce(toString(properties.first_origin),'')), '"is_test"[ ]*:[ ]*(true|"true"|"1"|1)') OR match(lower(coalesce(toString(properties.first_touch),'')), '"is_test"[ ]*:[ ]*(true|"true"|"1"|1)'))`;
+/** Même liste fermée de marqueurs que les inscriptions Wix. Aucun indice (nom, IP ou navigateur) ne sert à écarter du trafic. */
+export const POSTHOG_EXPLICIT_TEST_TRAFFIC=`(
+ lower(coalesce(nullIf(toString(properties.is_test),''), ${url('is_test')}, '')) IN ('true','1') OR
+ ${firstTestFlag} OR
+ lower(${current('utm_source')})='test' OR lower(${current('source')})='test' OR
+ lower(${quizFirst('source')})='test' OR lower(${firstJson('source')})='test' OR
+ lower(${current('utm_medium')})='recette' OR lower(${current('medium')})='recette' OR
+ lower(${quizFirst('medium')})='recette' OR lower(${firstJson('medium')})='recette' OR
+ startsWith(lower(${current('utm_campaign')}), 'test-mehdi') OR startsWith(lower(${current('campaign')}), 'test-mehdi') OR
+ startsWith(lower(${quizFirst('campaign')}), 'test-mehdi') OR startsWith(lower(${firstJson('campaign')}), 'test-mehdi')
+)`;
+const trafficWhere=(includeTests:boolean)=>includeTests?'':' AND NOT '+POSTHOG_EXPLICIT_TEST_TRAFFIC;
 /** Lignes brutes (une par événement) : visiteur, identifiant raccordable, première origine A si transmise, arrivée courante. */
-function quizRows(range:string|null,quizHosts:string[]):string {
+function quizRows(range:string|null,quizHosts:string[],includeTests:boolean):string {
  return `SELECT timestamp,
    coalesce(nullIf(toString(properties.visiteur),''), toString(distinct_id)) AS visitor,
    if(match(lower(coalesce(toString(properties.visiteur),'')),'${UUID_HOGQL}'),1,0) AS joinable,
@@ -52,9 +71,9 @@ function quizRows(range:string|null,quizHosts:string[]):string {
    coalesce(nullIf(toString(properties.utm_content),''), ${url('utm_content')}, '') AS a_ad_row,
    coalesce(nullIf(toString(properties.blg_link_id),''), ${url('blg_link_id')}, '') AS a_link_row,
    coalesce(nullIf(toString(properties.utm_source),''), ${url('utm_source')}, '') AS a_source_row
-  FROM events WHERE event='$pageview'${range?' AND '+range:''} AND coalesce(toString(properties.$host),'') IN (${quoteList(quizHosts)})`;
+  FROM events WHERE event='$pageview'${range?' AND '+range:''} AND coalesce(toString(properties.$host),'') IN (${quoteList(quizHosts)})${trafficWhere(includeTests)}`;
 }
-function masterclassRows(range:string|null,paths:string[]):string {
+function masterclassRows(range:string|null,paths:string[],includeTests:boolean):string {
  return `SELECT timestamp,
    coalesce(nullIf(toString(properties.visitor_id),''), toString(distinct_id)) AS visitor,
    if(match(lower(coalesce(toString(properties.visitor_id),'')),'${UUID_HOGQL}'),1,0) AS joinable,
@@ -63,7 +82,7 @@ function masterclassRows(range:string|null,paths:string[]):string {
    coalesce(nullIf(toString(properties.utm_content),''), nullIf(toString(properties.ad_id),''), '') AS a_ad_row,
    coalesce(nullIf(toString(properties.link_id),''), '') AS a_link_row,
    coalesce(nullIf(toString(properties.utm_source),''), '') AS a_source_row
-  FROM events WHERE event='mc_page_view'${range?' AND '+range:''} AND lower(coalesce(toString(properties.environment),''))='production' AND coalesce(toString(properties.page_path),'') IN (${quotePaths(paths)})`;
+  FROM events WHERE event='mc_page_view'${range?' AND '+range:''} AND lower(coalesce(toString(properties.environment),''))='production' AND coalesce(toString(properties.page_path),'') IN (${quotePaths(paths)})${trafficWhere(includeTests)}`;
 }
 /** Par visiteur : première origine A si transmise sur un événement, sinon origine de la première arrivée ; date de première visite. */
 function perVisitor(source:string):string {
@@ -81,19 +100,19 @@ function cohort(source:string,start:string,end:string):string {
  return `SELECT visitor, joinable, first_seen, if(with_first=1, f_ad, a_ad) AS ad, if(with_first=1, f_link, a_link) AS link, if(with_first=1, f_source, a_source) AS source FROM (${perVisitor(source)})
  WHERE first_seen >= toDateTime('${start} 00:00:00','Europe/Paris') AND first_seen < toDateTime('${end} 00:00:00','Europe/Paris') ORDER BY first_seen, visitor LIMIT ${COHORT_LIMIT+1}`;
 }
-export function visitQueries(from:string,to:string,env:Record<string,string|undefined>){
+export function visitQueries(from:string,to:string,env:Record<string,string|undefined>,includeTests=false){
  const start=day(from),end=Temporal.PlainDate.from(day(to)).add({days:1}).toString();
  const quizHosts=(env.POSTHOG_QUIZ_HOST??'quizz.blg-studio.fr').split(',').map(h=>h.trim()).filter(Boolean);
  const range=`timestamp >= toDateTime('${start} 00:00:00','Europe/Paris') AND timestamp < toDateTime('${end} 00:00:00','Europe/Paris')`;
  const paths=masterclassPagePaths(env);
  return {
-  quiz:grouped(quizRows(range,quizHosts)),
-  masterclass:grouped(masterclassRows(range,paths)),
+  quiz:grouped(quizRows(range,quizHosts,includeTests)),
+  masterclass:grouped(masterclassRows(range,paths,includeTests)),
   /** Cohortes d'entrée : première visite mesurée dans la période, toute l'histoire est lue pour dater cette première visite. */
-  quizCohort:cohort(quizRows(null,quizHosts),start,end),
-  masterclassCohort:cohort(masterclassRows(null,paths),start,end),
+  quizCohort:cohort(quizRows(null,quizHosts,includeTests),start,end),
+  masterclassCohort:cohort(masterclassRows(null,paths,includeTests),start,end),
   /** Vues de la masterclass sans adresse mesurée : version publiée antérieure au raccord, comptées à part et jamais dans la page active. */
-  legacyMasterclass:`SELECT count() AS c FROM events WHERE event='mc_page_view' AND ${range} AND lower(coalesce(toString(properties.environment),''))='production' AND coalesce(toString(properties.page_path),'')=''`,
+  legacyMasterclass:`SELECT count() AS c FROM events WHERE event='mc_page_view' AND ${range} AND lower(coalesce(toString(properties.environment),''))='production' AND coalesce(toString(properties.page_path),'')=''${trafficWhere(includeTests)}`,
   pagePath:paths[0],pagePaths:paths,
  };
 }
@@ -103,10 +122,10 @@ const toCohortRow=(row:unknown[]):CohortRow=>[String(row[0]??''),Number(row[1]??
 const empty=():VisitCounts=>({visitors:0,pageviews:0,withFirstOrigin:0});
 const keyOf=(ad:string,link:string,source:string)=>originKeyFor({adId:/^\d{10,30}$/.test(ad)?ad:null,linkId:UUID.test(link)?link.toLowerCase():null,campaignId:null,source:source||null});
 /** Regroupe les lignes (ad, lien, source, visiteurs, pages vues, avec première origine) sous la même clé que les lignes du tableau. */
-export function foldVisits(rows:{quiz:VisitRow[];masterclass:VisitRow[]},extra:{legacyMasterclassViews?:number|null;observedAt?:string|null}={}):VisitsByOrigin{
- const result:VisitsByOrigin={available:true,reason:null,observedAt:extra.observedAt??null,byKey:new Map(),legacyMasterclassViews:extra.legacyMasterclassViews??null};
+export function foldVisits(rows:{quiz:VisitRow[];masterclass:VisitRow[]},extra:{legacyMasterclassViews?:number|null;observedAt?:string|null;scope?:TrafficScope}={}):VisitsByOrigin{
+ const result:VisitsByOrigin={available:true,reason:null,observedAt:extra.observedAt??null,byKey:new Map(),legacyMasterclassViews:extra.legacyMasterclassViews??null,scope:extra.scope};
  for(const tunnel of ['quiz','masterclass'] as const)for(const [ad,link,source,visitors,pageviews,withFirst] of rows[tunnel]){
-  if(![visitors,pageviews,withFirst].every(n=>Number.isSafeInteger(n)&&n>=0))return {available:false,reason:'Lecture PostHog des visites incomplète : compteurs invalides.',observedAt:extra.observedAt??null,byKey:new Map(),legacyMasterclassViews:extra.legacyMasterclassViews??null};
+  if(![visitors,pageviews,withFirst].every(n=>Number.isSafeInteger(n)&&n>=0))return {available:false,reason:'Lecture PostHog des visites incomplète : compteurs invalides.',observedAt:extra.observedAt??null,byKey:new Map(),legacyMasterclassViews:extra.legacyMasterclassViews??null,scope:extra.scope};
   const key=keyOf(ad,link,source);
   const entry=result.byKey.get(key)??{quiz:empty(),masterclass:empty()};
   entry[tunnel].visitors+=visitors;entry[tunnel].pageviews+=pageviews;entry[tunnel].withFirstOrigin+=withFirst;
@@ -123,8 +142,8 @@ function posthogInstant(value:string):string|null {
 /** Jour de Paris d'un horodatage PostHog. */
 export function parisDay(value:string):string|null {const instant=posthogInstant(value);return instant?Temporal.Instant.from(instant).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString():null;}
 /** Cohorte d'entrée : visiteurs raccordables (identifiant de navigateur) datés de leur première visite ; les autres comptés à part. */
-export function foldVisitorCohort(rows:{quiz:CohortRow[];masterclass:CohortRow[]},extra:{observedAt?:string|null}={}):VisitorCohort{
- const result:VisitorCohort={available:true,reason:null,observedAt:extra.observedAt??null,visitors:[],unlinkable:new Map(),truncated:false};
+export function foldVisitorCohort(rows:{quiz:CohortRow[];masterclass:CohortRow[]},extra:{observedAt?:string|null;scope?:TrafficScope}={}):VisitorCohort{
+ const result:VisitorCohort={available:true,reason:null,observedAt:extra.observedAt??null,visitors:[],unlinkable:new Map(),truncated:false,scope:extra.scope};
  for(const tunnel of ['quiz','masterclass'] as const){
   if(rows[tunnel].length>COHORT_LIMIT){result.truncated=true;}
   for(const [visitor,joinable,firstSeen,ad,link,source] of rows[tunnel].slice(0,COHORT_LIMIT)){
@@ -149,26 +168,32 @@ function client(env:Record<string,string|undefined>):{endpoint:URL;projectId:str
 function runner(c:{endpoint:URL;projectId:string;key:string},fetcher:typeof fetch,name:string){
  return async(query:string)=>{
   const body=object(await readJson(new URL(`/api/projects/${c.projectId}/query/`,c.endpoint.origin),{method:'POST',headers:{Authorization:`Bearer ${c.key}`,'Content-Type':'application/json'},body:JSON.stringify({query:{kind:'HogQLQuery',query},name})},{fetcher}));
-  return Array.isArray(body.results)?body.results.map(row=>Array.isArray(row)?row:[]):[];
+  const queryStatus=body.query_status==null?null:object(body.query_status);
+  if(body.error||body.hasMore===true||body.has_more===true||queryStatus?.complete===false||queryStatus?.error)throw Error('POSTHOG_QUERY_INCOMPLETE');
+  if(!Array.isArray(body.results))throw Error('POSTHOG_QUERY_INVALID');
+  if(body.results.some(row=>!Array.isArray(row)))throw Error('POSTHOG_QUERY_INVALID');
+  return body.results as unknown[][];
  };
 }
-export async function readVisitsByOrigin(from:string,to:string,env:Record<string,string|undefined>=process.env,fetcher:typeof fetch=fetch):Promise<VisitsByOrigin>{
- const unavailable=(reason:string):VisitsByOrigin=>({available:false,reason,observedAt:null,byKey:new Map(),legacyMasterclassViews:null});
+export async function readVisitsByOrigin(from:string,to:string,env:Record<string,string|undefined>=process.env,fetcher:typeof fetch=fetch,includeTests=false):Promise<VisitsByOrigin>{
+ const scope={includeTests};
+ const unavailable=(reason:string):VisitsByOrigin=>({available:false,reason,observedAt:null,byKey:new Map(),legacyMasterclassViews:null,scope});
  const c=client(env);if('reason' in c)return unavailable(c.reason);
- const queries=visitQueries(from,to,env),run=runner(c,fetcher,'BLG visitors by origin');
+ const queries=visitQueries(from,to,env,includeTests),run=runner(c,fetcher,'BLG visitors by origin');
  try{
   const [quiz,masterclass,legacy]=await Promise.all([run(queries.quiz),run(queries.masterclass),run(queries.legacyMasterclass)]);
   const legacyViews=Number(legacy[0]?.[0]??0);
-  return foldVisits({quiz:quiz.map(toVisitRow),masterclass:masterclass.map(toVisitRow)},{legacyMasterclassViews:Number.isFinite(legacyViews)?legacyViews:null,observedAt:new Date().toISOString()});
+  return foldVisits({quiz:quiz.map(toVisitRow),masterclass:masterclass.map(toVisitRow)},{legacyMasterclassViews:Number.isFinite(legacyViews)?legacyViews:null,observedAt:new Date().toISOString(),scope});
  }catch{return unavailable('Lecture PostHog des visiteurs par publicité interrompue ; les autres colonnes restent lisibles.');}
 }
 /** Cohorte d'entrée par tunnel : identifiants lus en mémoire serveur seulement, jamais renvoyés. */
-export async function readVisitorCohort(from:string,to:string,env:Record<string,string|undefined>=process.env,fetcher:typeof fetch=fetch):Promise<VisitorCohort>{
- const unavailable=(reason:string):VisitorCohort=>({available:false,reason,observedAt:null,visitors:[],unlinkable:new Map(),truncated:false});
+export async function readVisitorCohort(from:string,to:string,env:Record<string,string|undefined>=process.env,fetcher:typeof fetch=fetch,includeTests=false):Promise<VisitorCohort>{
+ const scope={includeTests};
+ const unavailable=(reason:string):VisitorCohort=>({available:false,reason,observedAt:null,visitors:[],unlinkable:new Map(),truncated:false,scope});
  const c=client(env);if('reason' in c)return unavailable(c.reason);
- const queries=visitQueries(from,to,env),run=runner(c,fetcher,'BLG visitor cohort');
+ const queries=visitQueries(from,to,env,includeTests),run=runner(c,fetcher,'BLG visitor cohort');
  try{
   const [quiz,masterclass]=await Promise.all([run(queries.quizCohort),run(queries.masterclassCohort)]);
-  return foldVisitorCohort({quiz:quiz.map(toCohortRow),masterclass:masterclass.map(toCohortRow)},{observedAt:new Date().toISOString()});
+  return foldVisitorCohort({quiz:quiz.map(toCohortRow),masterclass:masterclass.map(toCohortRow)},{observedAt:new Date().toISOString(),scope});
  }catch{return unavailable('Lecture PostHog des visiteurs entrés dans la période interrompue : pourcentage d’opt-in indisponible.');}
 }

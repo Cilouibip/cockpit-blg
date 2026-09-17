@@ -1,12 +1,24 @@
 # État technique du cockpit
 
-## 17 septembre 2026 — intégration en cours
+## 17 septembre 2026 — parcours, vidéo et périmètre des essais
+
+Cette révision remplace l’ancien bloc Parcours par une lecture dédiée à la masterclass `/masterclass26` et au quiz : étapes, taux entre deux étapes d’une même visite, sections affichées, réponses par question et mesures du lecteur. Les visites suivies ne sont pas des personnes CRM ; les confirmations web ne remplacent pas les rendez-vous métier de Commercial et les événements Meta ne leur sont jamais additionnés.
+
+La vidéo dispose de paliers, durées distinctes et d’une courbe de dernière position observée avec tableau accessible. Cette courbe inclut pauses et lectures en cours ; elle ne prouve ni abandon définitif ni attention. Les versions de page et vidéos incompatibles restent séparées. Les mesures absentes, tronquées ou interrompues restent indisponibles.
+
+Les essais identifiés sont exclus par défaut dans Parcours et dans le tableau par publicité, avec une option pour les inclure. Les filtres de Parcours sont consolidés par session avant calcul. Le tableau publicitaire lit maintenant les dates de rendez-vous `scheduled_at` en jour de Paris, avec repli sur le jour historique. Commercial est conservé.
+
+Contrôles : 340 tests unitaires, route privée, vérification TypeScript, navigateur local ordinateur/mobile avec données synthétiques ; lectures agrégées réelles PostHog sur les deux parcours et avec/sans essais. La nouvelle masterclass remonte des étapes de page, mais aucune mesure détaillée de vidéo n’est présente dans la lecture contrôlée. Le quiz remonte des réponses ; l’affichage par question et le clic vers le bilan manquent encore dans le script public. Aucune modification des pages sources dans ce lot. Les preuves de publication et les lectures de production sont consignées séparément dans le journal privé BLG.
+
+Notifications : le dernier échec GitHub examiné correspond à la fin de la fenêtre de reprises alors que des unités étaient encore partielles ; un précédent passage a rencontré une erreur Notion. Distinguer « à poursuivre » et « en échec » est une recommandation, non une correction appliquée. Aucun réglage de notification ou d’ordonnanceur modifié.
+
+## Lot précédent — publié avec la PR 11
 
 Ce bloc remplace les états locaux historiques ci-dessous. Référentiel privé courant : `ETAT-ACTUEL.md` puis `DECISIONS-ACTEES.md` du centre de contrôle BLG. Les notes anciennes ne sont pas des instructions de reprise.
 
 Lot préparé : filtres REST cumulés (borne basse et haute), dépenses issues de `v_ad_daily`, mesures absentes conservées à `null`, catalogue Meta complet indépendant de l’activité, import du jour inclus et deux événements de parcours supplémentaires. Catalogue présent sans activité : ligne disponible sans déduire un tunnel du nom de campagne.
 
-Contrôle réel des dépenses sur une période historique : égalité entre Meta et la vue publiée ; les répétitions de la table brute ne sont plus additionnées. Import catalogue complet effectué. Actualisation : ordonnanceur GitHub existant, aucune seconde planification. Dernier passage planifié contrôlé en échec sur Notion après succès Wix/Meta ; reprise Notion terminée manuellement. Cela ne prouve pas une cadence horaire fiable. Publication et contrôle de la nouvelle production restent à réaliser pour ce lot.
+Contrôle réel des dépenses sur une période historique : égalité entre Meta et la vue publiée ; les répétitions de la table brute ne sont plus additionnées. Import catalogue complet effectué. Actualisation : ordonnanceur GitHub existant, aucune seconde planification. Passage planifié contrôlé en échec sur Notion après succès Wix/Meta ; reprise Notion terminée manuellement. Cela ne prouve pas une cadence horaire fiable. PR 11 publiée et production contrôlée dans le périmètre de ce lot.
 
 Les événements quiz ajoutés à la lecture ne prouvent pas leur émission publique. Première origine 180 jours, parcours croisé réel, exclusions et rapprochements commerciaux restent à contrôler dans le périmètre décidé.
 

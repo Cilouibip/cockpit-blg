@@ -189,6 +189,38 @@ test('les dates restent distinctes : visite, inscription, rendez-vous (à venir 
  assert.equal(august.rows.find(r=>r.adId===AD_A)!.uniqueLeads,1,'P7 acquis en août');assert.equal(august.rows.find(r=>r.adId===AD_A)!.spendMinor,999);
 });
 
+test('rendez-vous : scheduled_at sans scheduled_day est lu au jour de Paris, sans inventer une date absente',async()=>{
+ const extra=[obs('quiz-paris-slot','quiz',{person_id:'paris-slot',at:'2026-09-08T09:00:00Z',origin:{ad:AD_H,source:'fb'}})];
+ const additions={appointments:[
+  {id:'appt-paris-slot',prospect_id:'prospect-paris-slot',scheduled_at:'2026-09-09T22:30:00.000Z',scheduled_day:null,status:'unknown'},
+  {id:'appt-undated-slot',prospect_id:'prospect-paris-slot',scheduled_at:null,scheduled_day:null,status:'scheduled'},
+ ],prospects:[{id:'prospect-paris-slot',person_id:'paris-slot',business:business('2026-09-10','show_up')}]};
+ const report=await buildAdFunnel(fixture(extra,additions).db,{from:'2026-09-10',to:'2026-09-10',tunnel:'all'},{env,visits:null,now:NOW});
+ const row=report.rows.find(r=>r.adId===AD_H)!;
+ assert.equal(row.appointmentsBooked,1,'22 h 30 UTC le 9 septembre est le 10 septembre à Paris');assert.equal(row.appointmentsAttended,1,'la présence commerciale reste reliée au même jour Paris');
+ assert.equal(report.coverage.appointments.rows,8,'le créneau sans date reste lu mais ne reçoit pas de jour inventé');
+});
+
+test('recette : les inscriptions explicitement marquées et leurs rendez-vous dérivés sont exclues par défaut',async()=>{
+ const extra=[
+  obs('quiz-test-only','quiz',{person_id:'test-only',at:'2026-09-08T09:00:00Z',origin:{ad:AD_H,source:'test',campaign:'test-mehdi-rdv'}}),
+  obs('quiz-real','quiz',{person_id:'real-after-test',at:'2026-09-08T10:00:00Z',origin:{ad:AD_H,source:'facebook',campaign:'testimonial-septembre'}}),
+ ];
+ const additions={appointments:[
+  {id:'appt-test-only',prospect_id:'prospect-test-only',scheduled_day:'2026-09-10',status:'scheduled'},
+  {id:'appt-real',prospect_id:'prospect-real',scheduled_day:'2026-09-10',status:'scheduled'},
+ ],prospects:[
+  {id:'prospect-test-only',person_id:'test-only',business:business('2026-09-10','scheduled')},
+  {id:'prospect-real',person_id:'real-after-test',business:business('2026-09-10','scheduled')},
+ ]};
+ const hidden=await buildAdFunnel(fixture(extra,additions).db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all'},{env,visits:null,now:NOW});
+ const visible=await buildAdFunnel(fixture(extra,additions).db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all',includeTests:true},{env,visits:null,now:NOW});
+ const hiddenRow=hidden.rows.find(r=>r.adId===AD_H)!,visibleRow=visible.rows.find(r=>r.adId===AD_H)!;
+ assert.equal(hiddenRow.registrations,1);assert.equal(hiddenRow.appointmentsBooked,1,'le rendez-vous du contact de recette ne fuit pas dans le tunnel');
+ assert.equal(hidden.coverage.testing.registrationsExcluded,1);assert.equal(hidden.coverage.testing.appointmentsExcluded,1);assert.equal(hidden.filters.includeTests,false);
+ assert.equal(visibleRow.registrations,2);assert.equal(visibleRow.appointmentsBooked,2);assert.equal(visible.coverage.testing.registrationsExcluded,0);assert.equal(visible.filters.includeTests,true);
+});
+
 test('filtre tunnel : le quiz ne compte ni les inscriptions ni les visiteurs masterclass ; les lectures restent bornées',async()=>{
  const {db,calls}=fixture();const report=await buildAdFunnel(db,{...period,tunnel:'quiz'},{env,visits,now:NOW});
  const rowA=report.rows.find(r=>r.adId===AD_A)!;

@@ -20,6 +20,7 @@ import type {Database,Row} from './db';
 import {commerceReadMemo,readNotionCommerceReport} from './notion-commerce-storage';
 import type {PaidSaleDetail} from './paid-sales';
 import type {SourceFilter,TunnelFilter} from './ui-contract';
+import {DEFAULT_TRAFFIC_SCOPE,isExcludedTestTraffic,type TrafficScope} from './traffic-scope';
 
 export type FunnelTunnel='quiz'|'masterclass';
 export interface AdFunnelOrigin {adId:string|null;campaignId:string|null;adsetId:string|null;linkId:string|null;source:string|null;basis:'first_touch'|'arrival'|'none'}
@@ -45,7 +46,7 @@ export interface AdFunnelRow {
 export type AdFunnelTotals=Omit<AdFunnelRow,'key'|'kind'|'label'|'campaignLabel'|'adId'|'campaignId'|'adsetId'|'creativeId'|'linkIds'|'links'|'tunnels'>;
 export interface AdFunnelReport {
  available:boolean;period:{from:string;to:string;timezone:string};generatedAt:string;
- filters:{tunnel:TunnelFilter;source:SourceFilter;campaign:string};
+ filters:{tunnel:TunnelFilter;source:SourceFilter;campaign:string;includeTests:boolean};
  rows:AdFunnelRow[];totals:AdFunnelTotals;
  coverage:{
   leads:{observedAt:string|null;families:string[];rows:number;withFirstTouch:number;withVisitor:number};
@@ -54,21 +55,22 @@ export interface AdFunnelReport {
 	  commerce:{available:boolean;reason:string|null;observedAt:string|null;paidSaleRows:number|null;clientsLinked:number|null;clientsUnlinked:number|null;moneyRowsUnavailable:number|null};
   visits:{available:boolean;reason:string|null;observedAt:string|null;legacyMasterclassViews:number|null};
   optin:{available:boolean;reason:string|null;observedAt:string|null;entryPeriod:{from:string;to:string};visitorsLinkable:number|null;visitorsUnlinkable:number|null;registrationsInCohort:number;registrationsWithoutVisitor:number;registrationsOutsideCohort:number};
+  testing:{includeTests:boolean;registrationsExcluded:number;appointmentsExcluded:number;salesExcluded:number;visitsScoped:boolean;cohortScoped:boolean};
  };
  definitions:Record<string,string>;notices:string[];
 }
-type Observation={id:string;sourceNamespace:string;family:'forms'|'quiz'|'client_history';externalId:string;personId:string|null;identityState:string;eligible:boolean;occurredAt:string|null;occurredDay:string|null;origin:Record<string,unknown>;firstTouch:Record<string,unknown>|null;publishedAt:string|null};
+type Observation={id:string;sourceNamespace:string;family:'forms'|'quiz'|'client_history';externalId:string;personId:string|null;identityState:string;eligible:boolean;occurredAt:string|null;occurredDay:string|null;origin:Record<string,unknown>;firstTouch:Record<string,unknown>|null;testMarker:Record<string,unknown>;publishedAt:string|null};
 export interface VisitCounts {visitors:number;pageviews:number;withFirstOrigin:number}
 /** Visites mesurées, déjà regroupées par clé d'origine (même clé que les lignes du tableau) et par tunnel. */
-export interface VisitsByOrigin {available:boolean;reason:string|null;observedAt:string|null;byKey:Map<string,{quiz:VisitCounts;masterclass:VisitCounts}>;legacyMasterclassViews:number|null}
+export interface VisitsByOrigin {available:boolean;reason:string|null;observedAt:string|null;byKey:Map<string,{quiz:VisitCounts;masterclass:VisitCounts}>;legacyMasterclassViews:number|null;scope?:TrafficScope}
 /** Un visiteur raccordable entré dans la période sur un tunnel : identifiant, origine A, instant exact et jour Paris de première visite. Lu en mémoire serveur, jamais renvoyé. */
 export interface CohortVisitor {id:string;tunnel:FunnelTunnel;key:string;firstSeen:string;firstDay:string}
-export interface VisitorCohort {available:boolean;reason:string|null;observedAt:string|null;visitors:CohortVisitor[];unlinkable:Map<string,{quiz:number;masterclass:number}>;truncated:boolean}
+export interface VisitorCohort {available:boolean;reason:string|null;observedAt:string|null;visitors:CohortVisitor[];unlinkable:Map<string,{quiz:number;masterclass:number}>;truncated:boolean;scope?:TrafficScope}
 export interface OptinCounts {visitors:number;registered:number}
 export interface OptinAll extends OptinCounts {newLeads:number;knownPeople:number;unresolvedIdentity:number}
 /** Opt-in par cohorte : par tunnel (inscription sur le même tunnel) et total (un visiteur compte une fois, inscription sur l'un des deux tunnels) ; couverture à part. */
 export interface OptinDetail {quiz:OptinCounts|null;masterclass:OptinCounts|null;all:OptinAll|null;unlinkableVisitors:{quiz:number;masterclass:number}|null;registrationsWithoutVisitor:number;registrationsOutsideCohort:number}
-export interface AdFunnelFilters {from:string;to:string;tunnel:TunnelFilter;source?:SourceFilter;campaign?:string}
+export interface AdFunnelFilters {from:string;to:string;tunnel:TunnelFilter;source?:SourceFilter;campaign?:string;includeTests?:boolean}
 export interface AdFunnelOptions {env?:Record<string,string|undefined>;visits?:VisitsByOrigin|null;cohort?:VisitorCohort|null;now?:string}
 
 export const ORGANIC='__organic__',UNATTRIBUTED='__unattributed__',UNRESOLVED='__unresolved__';
@@ -111,9 +113,15 @@ async function pages(db:Database,table:Parameters<Database['select']>[0],options
 function toObservation(r:Row):Observation{
  const p=(r.properties&&typeof r.properties==='object'?r.properties:{}) as Record<string,unknown>;
  const occurredAt=r.occurred_at?Temporal.Instant.from(String(r.occurred_at)).toString():null;
- return {id:String(r.id),sourceNamespace:String(r.source_namespace??''),family:r.family as Observation['family'],externalId:String(r.external_id),personId:r.person_id?String(r.person_id):null,identityState:String(r.identity_state??'unresolved'),eligible:r.eligible===true,occurredAt,occurredDay:r.occurred_day?String(r.occurred_day):occurredAt?Temporal.Instant.from(occurredAt).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString():null,origin:(p.origin&&typeof p.origin==='object'?p.origin:{}) as Record<string,unknown>,firstTouch:(p.firstTouch&&typeof p.firstTouch==='object'?p.firstTouch:null) as Record<string,unknown>|null,publishedAt:r.published_at?String(r.published_at):null};
+ return {id:String(r.id),sourceNamespace:String(r.source_namespace??''),family:r.family as Observation['family'],externalId:String(r.external_id),personId:r.person_id?String(r.person_id):null,identityState:String(r.identity_state??'unresolved'),eligible:r.eligible===true,occurredAt,occurredDay:r.occurred_day?String(r.occurred_day):occurredAt?Temporal.Instant.from(occurredAt).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString():null,origin:(p.origin&&typeof p.origin==='object'?p.origin:{}) as Record<string,unknown>,firstTouch:(p.firstTouch&&typeof p.firstTouch==='object'?p.firstTouch:null) as Record<string,unknown>|null,testMarker:{is_test:p.is_test,isTest:p.isTest},publishedAt:r.published_at?String(r.published_at):null};
 }
 const inPeriod=(day:string|null,from:string,to:string)=>!!day&&day>=from&&day<=to;
+/** Même règle que le suivi commercial : l'instant du rendez-vous prime et devient son jour calendrier Paris ; l'ancien jour seul reste le repli. */
+function appointmentDay(appointment:Row):string|null {
+ if(typeof appointment.scheduled_at==='string')try{return Temporal.Instant.from(appointment.scheduled_at).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString();}catch{/* repli vers le jour historique ci-dessous */}
+ if(typeof appointment.scheduled_day==='string')try{return Temporal.PlainDate.from(appointment.scheduled_day).toString();}catch{/* date absente ou illisible */}
+ return null;
+}
 const rate=(numerator:number|null,denominator:number|null,reason:string):Rate=>numerator===null||denominator===null?{value:null,numerator,denominator,reason}:denominator>0?{value:numerator/denominator,numerator,denominator}:{value:null,numerator,denominator,reason};
 const RATE_REASONS={optin:'Aucun visiteur raccordable entré dans la période sur cette ligne.',cohort:'Visiteurs entrés dans la période non lus : pourcentage d’opt-in indisponible.',booking:'Aucun inscrit unique sur cette ligne pour la période.',attendance:'Aucun rendez-vous passé à issue connue sur cette ligne pour la période.',visits:'Visites non lues : pourcentage d’opt-in indisponible.'};
 const emptyCounts=():TunnelCounts=>({quiz:null,masterclass:null});
@@ -149,7 +157,7 @@ function matchesFilters(row:AdFunnelRow,source:SourceFilter,campaign:string):boo
 
 /** Une lecture bornée par période. Chaque colonne a sa propre date : visite, inscription, rendez-vous, paiement. */
 export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:AdFunnelOptions={}):Promise<AdFunnelReport>{
- const env=options.env??process.env,{from,to}=filters,notices:string[]=[],sourceFilter=filters.source??'all',campaignFilter=filters.campaign??'';
+ const env=options.env??process.env,{from,to}=filters,notices:string[]=[],sourceFilter=filters.source??'all',campaignFilter=filters.campaign??'',testScope:TrafficScope={...DEFAULT_TRAFFIC_SCOPE,includeTests:filters.includeTests===true};
  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||Temporal.PlainDate.from(from).until(Temporal.PlainDate.from(to)).days>366)throw new Error('AD_FUNNEL_INVALID_PERIOD');
  const generatedAt=options.now??new Date().toISOString();
  const today=Temporal.Instant.from(generatedAt).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString();
@@ -157,7 +165,11 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
  // 1. Inscriptions publiées (Wix formulaires + quiz) et antériorités Client (Notion), toutes périodes : l'origine d'une personne dépend de tout son historique.
  const leadRows=await pages(db,'lead_source_observations',{eq:{is_current:'true'},order:'occurred_day,id'});
  const observations=leadRows.map(toObservation).filter(o=>!siteId||o.family==='client_history'||o.sourceNamespace===siteId);
- const requests=observations.filter(o=>(o.family==='forms'||o.family==='quiz')&&o.eligible&&o.occurredDay&&o.occurredAt).sort((a,b)=>a.occurredAt!.localeCompare(b.occurredAt!)||a.id.localeCompare(b.id));
+ const candidateRequests=observations.filter(o=>(o.family==='forms'||o.family==='quiz')&&o.eligible&&o.occurredDay&&o.occurredAt);
+ const excludedTestRequests=candidateRequests.filter(o=>isExcludedTestTraffic(testScope,o.origin,o.firstTouch,o.testMarker));
+ const requests=candidateRequests.filter(o=>!isExcludedTestTraffic(testScope,o.origin,o.firstTouch,o.testMarker)).sort((a,b)=>a.occurredAt!.localeCompare(b.occurredAt!)||a.id.localeCompare(b.id));
+ const excludedTestPeople=new Set(excludedTestRequests.filter(o=>o.personId&&o.identityState==='linked').map(o=>o.personId!));
+ const retainedPeople=new Set(requests.filter(o=>o.personId&&o.identityState==='linked').map(o=>o.personId!));
  const clientHistory=observations.filter(o=>o.family==='client_history');
  const clientById=new Map(clientHistory.map(c=>[c.externalId,c]));
  const earliestClientDay=new Map<string,string>();for(const c of clientHistory)if(c.personId&&c.occurredDay&&(!earliestClientDay.has(c.personId)||c.occurredDay<earliestClientDay.get(c.personId)!))earliestClientDay.set(c.personId,c.occurredDay);
@@ -241,10 +253,11 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
 	  }
  }
  // 6b. Rendez-vous : créneau courant Notion par personne ; issue lue dans la classification du prospect ; futurs et inconnus à part.
- let linkedAppointments=0,attendanceFromBusiness=0;const bookedPersons=new Set<string>();
+ let linkedAppointments=0,attendanceFromBusiness=0,appointmentsExcluded=0;const bookedPersons=new Set<string>();
  for(const a of appointments){
   const prospect=a.prospect_id?prospectById.get(String(a.prospect_id)):undefined,person=prospect?.personId??null;
-  const day=a.scheduled_day?String(a.scheduled_day):null;
+  if(!testScope.includeTests&&person&&excludedTestPeople.has(person)&&!retainedPeople.has(person)){appointmentsExcluded++;continue;}
+  const day=appointmentDay(a);
   const outcome=appointmentOutcome(a,prospect?.business??null,day);
   if(prospect?.business&&day&&prospect.business.scheduledDay===day&&outcome!=='unknown')attendanceFromBusiness++;
 	  if(person&&outcome!=='cancelled'&&outcome!=='rescheduled')bookedPersons.add(person);
@@ -263,11 +276,12 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
  }
  for(const [key,persons] of registeredPersonsByRow){const row=rows.get(key);if(!row)continue;row.uniqueRegistrants=persons.size;for(const p of persons)if(bookedPersons.has(p))row.leadsBooked++;}
  // 6c. Ventes et encaissements de la période, attribués par le Client Notion → personne.
-	 let clientsLinked=0,clientsUnlinked=0,moneyRowsUnavailable=0;const incompleteMoneyKeys=new Set<string>();
+ let clientsLinked=0,clientsUnlinked=0,moneyRowsUnavailable=0,salesExcluded=0;const incompleteMoneyKeys=new Set<string>();
  for(const sale of paidSales){
   if(!inPeriod(sale.day,from,to))continue;
   const client=sale.clientIds.length===1?clientById.get(sale.clientIds[0]):undefined;
   const person=client?.identityState==='linked'?client.personId:null;
+  if(!testScope.includeTests&&person&&excludedTestPeople.has(person)&&!retainedPeople.has(person)){salesExcluded++;continue;}
   if(person)clientsLinked++;else clientsUnlinked++;
   const origin=person?personOrigin.get(person)??null:null;
   if(filters.tunnel!=='all'&&person&&!filterTunnel(personTunnel(person)))continue;
@@ -388,14 +402,15 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
  if(requests.length&&!withFirstTouch)notices.push('Aucune inscription ne porte encore de première origine mesurée : le crédit suit l’arrivée de l’inscription tant que les pages mises à jour ne sont pas installées.');
  if(cohort?.available&&!visitorsLinkable&&visitorsUnlinkable)notices.push(`${visitorsUnlinkable} visiteur${visitorsUnlinkable>1?'s':''} mesuré${visitorsUnlinkable>1?'s':''} sans identifiant de navigateur sur la période : pourcentage d’opt-in indisponible tant que les pages mises à jour ne sont pas installées.`);
  return {
-  available:requests.length>0,period:{from,to,timezone:'Europe/Paris'},generatedAt,filters:{tunnel:filters.tunnel,source:sourceFilter,campaign:campaignFilter},rows:ordered,totals:totalsOnly,
+  available:requests.length>0,period:{from,to,timezone:'Europe/Paris'},generatedAt,filters:{tunnel:filters.tunnel,source:sourceFilter,campaign:campaignFilter,includeTests:testScope.includeTests},rows:ordered,totals:totalsOnly,
   coverage:{
    leads:{observedAt:leadObservedAt,families:[...new Set(requests.map(o=>o.family))],rows:requests.length,withFirstTouch,withVisitor},
    meta:{lastDay:metaLastDay,ads:ads.length,adsWithoutCreative:ads.filter(a=>!a.creative_id).length},
    appointments:{rows:appointments.length,linkedPeople:linkedAppointments,attendanceFromBusiness},
 	   commerce:{available:commerceAvailable,reason:commerceReason,observedAt:commerceAvailable?commerce!.observedAt:null,paidSaleRows:commerceAvailable?paidSales.length:null,clientsLinked:commerceAvailable?clientsLinked:null,clientsUnlinked:commerceAvailable?clientsUnlinked:null,moneyRowsUnavailable:commerceAvailable?moneyRowsUnavailable:null},
    visits:{available:!!visits?.available,reason:visits?.reason??null,observedAt:visits?.observedAt??null,legacyMasterclassViews:visits?.legacyMasterclassViews??null},
-	   optin:{available:!!cohort?.available,reason:cohort?.available?null:cohort?.reason??RATE_REASONS.cohort,observedAt:cohort?.available?generatedAt:null,entryPeriod:{from,to},visitorsLinkable:cohort?.available?visitorsLinkable:null,visitorsUnlinkable:cohort?.available?visitorsUnlinkable:null,registrationsInCohort,registrationsWithoutVisitor:totalsOnly.optin.registrationsWithoutVisitor,registrationsOutsideCohort:totalsOnly.optin.registrationsOutsideCohort},
+   optin:{available:!!cohort?.available,reason:cohort?.available?null:cohort?.reason??RATE_REASONS.cohort,observedAt:cohort?.available?generatedAt:null,entryPeriod:{from,to},visitorsLinkable:cohort?.available?visitorsLinkable:null,visitorsUnlinkable:cohort?.available?visitorsUnlinkable:null,registrationsInCohort,registrationsWithoutVisitor:totalsOnly.optin.registrationsWithoutVisitor,registrationsOutsideCohort:totalsOnly.optin.registrationsOutsideCohort},
+   testing:{includeTests:testScope.includeTests,registrationsExcluded:excludedTestRequests.length,appointmentsExcluded,salesExcluded,visitsScoped:visits?.scope?.includeTests===testScope.includeTests,cohortScoped:cohort?.scope?.includeTests===testScope.includeTests},
   },
   definitions:{
    attribution:'Une personne garde sa première origine mesurée (publicité vue en premier, même avant l’inscription). Sans mémoire, l’arrivée de la première inscription fait foi.',
@@ -409,6 +424,7 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
    sales:'Première vente payée classée par le relevé Notion-commerce (confirmée, rapprochée, en attente), datée du paiement ; trois mensualités = une vente.',
    cash:'Somme des paiements réussis datés dans la période, remboursements à part ; toujours lu par date de paiement.',
    spend:'Dépenses, impressions et clics sortants Meta par publicité ; une publicité à plusieurs assets reste une ligne, jamais une vidéo précise.',
+   testing:'Par défaut, seules les données portant un marqueur de recette explicite sont exclues : source=test, medium=recette, campagne test-mehdi… ou is_test. Les autres données restent incluses.',
   },
   notices,
  };
