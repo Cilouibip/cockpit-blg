@@ -119,8 +119,9 @@ function Campaigns({ data, filters }: { data: DashboardResponse; filters: Dashbo
  * pourcentages validés le 16 septembre 2026 (opt-in, réservation, présence). Lecture à la demande (route /api/ad-funnel).
  * Chaque pourcentage montre son numérateur et son dénominateur ; sans dénominateur mesuré, il reste « — », jamais 0. */
 function AdFunnelTable({ filters }: { filters: DashboardFilters }) {
+  const [includeTests, setIncludeTests] = useState(false);
   const [open, setOpen] = useState(false); const [loaded, setLoaded] = useState<{ query: string; value: AdFunnelReport } | null>(null); const [busyQuery, setBusyQuery] = useState<string | null>(null); const [failure, setFailure] = useState<{ query: string; message: string } | null>(null); const [attempt, setAttempt] = useState(0); const id = useId();
-  const query = filtersQuery(filters);
+  const query = `${filtersQuery(filters)}&includeTests=${includeTests}`;
   const report = loaded?.query === query ? loaded.value : null; const busy = busyQuery === query; const error = failure?.query === query ? failure.message : '';
   useEffect(() => {
     if (!open) return;
@@ -147,6 +148,8 @@ function AdFunnelTable({ filters }: { filters: DashboardFilters }) {
   const tunnelLabel = (row: AdFunnelReport['rows'][number]) => row.tunnels.length === 0 ? '' : row.tunnels.map(t => t === 'quiz' ? 'Quiz' : 'Masterclass').join(' + ');
   return <section className="results-accordion"><h3><button className="a-h-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}><span className="a-h-marker a-luminous-marker">05</span><span className="a-h-copy"><span className="a-h-title">Par publicité, du clic à l’encaissement</span></span><span className="a-h-meta">{report && <span className="a-h-count">{formatNumber(report.rows.length)} lignes</span>}<span className="a-h-chevron"><Arrow /></span></span></button></h3>
     <div id={id} hidden={!open}><div className="results-campaigns" aria-busy={busy}>
+      <label className="blg-traffic-toggle"><input type="checkbox" checked={includeTests} onChange={event => setIncludeTests(event.target.checked)} />Inclure les essais dans ce tableau</label>
+      <p className="a-d-data-note">{includeTests ? 'Visiteurs et inscriptions : essais identifiés inclus.' : 'Visiteurs et inscriptions : essais explicitement identifiés exclus.'} Les dépenses et clics Meta gardent le périmètre publicitaire sélectionné.</p>
       {error && <p className="results-error" role="alert">{error} <button type="button" className="a-button a-secondary" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}{busy && <p role="status">Lecture des publicités, visiteurs, inscriptions, rendez-vous et paiements…</p>}
       {report && <>
         <p className="a-d-data-note">Chaque personne est créditée à la première publicité mesurée, même si elle s’inscrit plus tard par une autre. Visiteurs par date de visite, inscrits par date d’inscription, rendez-vous par date du créneau, ventes et encaissements par date de paiement.</p>
