@@ -48,3 +48,26 @@ test('l’annulation d’une autre lecture interrompt la récupération en cours
   controller.abort();
   await assert.rejects(pending, { message: 'NETWORK_ERROR' });
 });
+
+test('une interruption transitoire au lancement et à la récupération est reprise une seule fois', async () => {
+  let posts = 0, gets = 0;
+  const result = { columns: ['alive'], results: [[1]] };
+  const output = await readPostHogQuery({ ...config(), fetcher: async (_url, init) => {
+    if (init?.method === 'POST') {
+      if (++posts === 1) throw new TypeError('fetch failed');
+      return Response.json({ query_status: { id: 'query-1', complete: false } }, { status: 202 });
+    }
+    if (++gets === 1) return Response.json({}, { status: 503 });
+    return Response.json({ query_status: { id: 'query-1', complete: true, results: result } });
+  } });
+  assert.deepEqual(output, result);
+  assert.deepEqual({ posts, gets }, { posts: 2, gets: 2 });
+});
+
+test('un refus d’accès ne réessaie pas et une panne réseau persistante reste bornée', async () => {
+  for (const status of [403, 503]) {
+    let calls = 0;
+    await assert.rejects(readPostHogQuery({ ...config(), fetcher: async () => { calls++; return Response.json({}, { status }); } }));
+    assert.equal(calls, status === 403 ? 1 : 2);
+  }
+});

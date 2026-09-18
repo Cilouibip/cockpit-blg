@@ -4,9 +4,9 @@
 
 Incident reproduit sur la route publiée : la lecture synchrone PostHog expire avec une erreur amont, y compris pour une requête sans lecture de table. Les mêmes agrégats aboutissent par la voie asynchrone documentée ; aucune panne globale du service ni absence de collecte n’est déduite.
 
-Le connecteur Parcours utilise désormais cette voie, attend le résultat complet avec un budget commun et limite la concurrence à deux requêtes. Il ne demande plus les mesures sans objet pour le parcours choisi. Les filtres et calculs restent identiques. L’interface conserve uniquement une lecture réussie du même périmètre, avec sa date en cas d’échec ; aucun panneau vide n’est présenté comme une ancienne mesure.
+Le connecteur Parcours utilise désormais cette voie, attend le résultat complet avec un budget commun et limite la concurrence à deux requêtes. Il ne demande plus les mesures sans objet pour le parcours choisi. Une interruption réseau ou une erreur serveur amont est reprise une seule fois, dans le même budget total ; les refus d’accès et les données invalides ne sont pas relancés. Les filtres et calculs restent identiques. L’interface conserve uniquement une lecture réussie du même périmètre, avec sa date en cas d’échec ; aucun panneau vide n’est présenté comme une ancienne mesure.
 
-Validation avant publication : 345 tests unitaires, TypeScript, construction de production, test navigateur synthétique, relecture indépendante. Les lectures locales des sources réelles réussissent pour la masterclass sur la période du mois et pour les deux parcours sur la journée. Visites et mesures vidéo présentes ; le signal de confirmation d’inscription masterclass et les vues par question du quiz restent des limites distinctes. Publication et recette de production consignées dans le journal privé BLG.
+Validation : 347 tests unitaires, TypeScript, construction de production, test navigateur synthétique, relecture indépendante. Les lectures locales des sources réelles réussissent pour la masterclass sur la période du mois et pour les deux parcours sur la journée. Visites et mesures vidéo présentes ; le signal de confirmation d’inscription masterclass et les vues par question du quiz restent des limites distinctes. Publication et recette de production consignées dans le journal privé BLG.
 
 
 ## 17 septembre 2026 — parcours, vidéo et périmètre des essais
