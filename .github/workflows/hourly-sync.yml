@@ -2,7 +2,9 @@ name: Actualiser le cockpit
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    # GitHub may drop scheduled starts. Extra wakeups resume work; the worker
+    # skips sources already covered for the current hour and retains its lease.
+    - cron: '17,37,57 * * * *'
   workflow_dispatch:
 
 permissions:
