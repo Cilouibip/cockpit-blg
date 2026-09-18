@@ -59,6 +59,12 @@ export interface VisualJourneyReport {
     clicked: VisualJourneyMetric;
     calendar: VisualJourneyMetric;
     booked: VisualJourneyMetric;
+    /** Same people as booked.count; returned only by the authenticated cockpit route. */
+    people?: {
+      name: string;
+      originLabel: string;
+      appointments: { id: string; bookedAt: string | null; scheduledAt: string | null; status: string }[];
+    }[];
     rates: { calendarFromClicked: VisualJourneyRate; bookedFromCalendar: VisualJourneyRate };
   };
   freshness: Record<VisualJourneySource, {

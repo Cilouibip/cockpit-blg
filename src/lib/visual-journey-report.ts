@@ -56,6 +56,8 @@ export interface VisualJourneyAppointmentRow {
   status: string;
   observedAt: string | null;
   explicitTest?: boolean;
+  displayName?: string | null;
+  scheduledAt?: string | null;
 }
 
 export interface VisualJourneyProjectionInput {
@@ -373,6 +375,16 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
     },
     booking: {
       clicked: metric(browserAvailable ? bookingClicked.size : null, browserState), calendar: metric(browserAvailable ? calendarOpened.size : null, browserState), booked: metric(bookedCount, bookingCountState),
+      people: bookingCountState.available ? bookedRegistrations.map(registration => {
+        const appointments = [...new Map((appointmentsByPerson.get(registration.personId!) ?? []).filter(activeAppointment).map(row => [row.id, row])).values()]
+          .sort((a, b) => (a.scheduledAt ?? '').localeCompare(b.scheduledAt ?? '') || a.id.localeCompare(b.id));
+        const ad = input.availableAds?.find(item => item.id === `meta-ad:${registration.originA.ad}`);
+        return {
+          name: appointments.map(row => text(row.displayName)).find(Boolean) ?? 'Nom non renseigné',
+          originLabel: ad?.label ?? (registration.originA.ad ? 'Publicité non renseignée' : registration.originA.source ? 'Source : ' + registration.originA.source : 'Origine non renseignée'),
+          appointments: appointments.map(row => ({ id: row.id, bookedAt: row.bookedAt ?? row.bookedDay ?? null, scheduledAt: row.scheduledAt ?? null, status: row.status })),
+        };
+      }) : [],
       rates: {
         calendarFromClicked: browserAvailable ? rate(browserScoped.filter(row => after(row.bookingOpenAt, row.bookingClickAt)).length, bookingClicked.size, 'Aucun clic de réservation mesuré.') : { numerator: null, denominator: null, rate: null, ...browserState },
         bookedFromCalendar: bookingRateAvailable ? rate(bookingsAfterCalendar, calendarOpened.size, 'Aucune ouverture du calendrier mesurée.') : { numerator: null, denominator: browserAvailable ? calendarOpened.size : null, rate: null, ...unavailable(bookingRateReason) },

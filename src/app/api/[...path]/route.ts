@@ -25,6 +25,7 @@ import { invalidateSourceWindow } from '@/lib/source-snapshots';
 import { Temporal } from '@js-temporal/polyfill';
 import { ingestBrowser, ingestLead } from '@/lib/ingest';
 import { buildAdFunnel } from '@/lib/ad-funnel';
+import { buildBookingResults } from '@/lib/booking-results';
 import { readVisitsByOrigin, readVisitorCohort } from '@/lib/ad-arrivals';
 import { journeyReport } from '@/lib/journey-report';
 import { readVisualJourneyReport } from '@/connectors/visual-journey-analytics';
@@ -104,6 +105,13 @@ async function handle(request:Request){
    const version=z.string().max(200).regex(/^[A-Za-z0-9_.:-]*$/).parse(url.searchParams.get('version')||'');
    await rateLimit(config,'journey','shared',30,60);
    return json(await journeyReport({host:process.env.POSTHOG_HOST,projectId:process.env.POSTHOG_PROJECT_ID,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:filters.from,to:filters.to,tunnel,source:filters.source,campaign:filters.campaign,includeTests,...(version?{version}:{})}));
+  }
+  if(route==='booking-results'&&method==='GET'){
+   const filters=parseFilters(url);
+   const includeTests=z.enum(['true','false']).parse(url.searchParams.get('includeTests')||'false')==='true';
+   if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+   await rateLimit(config,'booking-results','shared',30,60);
+   return json(await buildBookingResults(database(),{...filters,includeTests}));
   }
   if(route==='ad-funnel'&&method==='GET'){
    const filters=parseFilters(url);

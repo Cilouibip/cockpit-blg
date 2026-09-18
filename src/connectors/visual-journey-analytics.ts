@@ -221,6 +221,8 @@ async function readAppointments(db: Database, env: NodeJS.ProcessEnv, prospects:
     const booking = appointmentBooking(row, business);
     return [{ id: String(row.id), personId: row.person_id ? String(row.person_id) : prospect?.person_id ? String(prospect.person_id) : null,
       bookedAt: booking.at, bookedDay: booking.day, status: appointmentOutcome(row, business), observedAt: dbInstant(row.observed_at),
+      displayName: typeof prospect?.display_name === 'string' ? prospect.display_name : null,
+      scheduledAt: dbInstant(row.scheduled_at) ?? (typeof row.scheduled_day === 'string' ? row.scheduled_day : null),
       explicitTest: isExcludedTestTraffic({ includeTests: false }, row, business),
     } satisfies VisualJourneyAppointmentRow];
   });
@@ -269,7 +271,7 @@ export async function readVisualJourneyReport(db: Database, config: VisualJourne
   if (!wixSiteId || wixSiteId.length > 200 || /[\u0000-\u001f\u007f]/.test(wixSiteId)) throw new ConnectorError('INVALID_CONFIGURATION');
   const generatedAt = Temporal.Instant.from(config.now?.() ?? new Date().toISOString()).toString();
   const syncEnv = config.syncEnv ?? process.env;
-  const prospects = pages(db, 'prospects', { columns: ['id','external_id','source','source_namespace','person_id','business','archived'], order: 'id' }, 50_000);
+  const prospects = pages(db, 'prospects', { columns: ['id','external_id','source','source_namespace','person_id','business','archived','display_name'], order: 'id' }, 50_000);
   const browserPromise = readBrowser(config, generatedAt).catch(error => ({ rows: null, error: safeConnectorError(error), firstObservedAt: null, lastObservedAt: null }));
   const [browserRead, registrationRead, appointmentRead, wixRun, appointmentRun] = await Promise.all([
     browserPromise,

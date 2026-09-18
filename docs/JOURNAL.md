@@ -297,3 +297,11 @@ Corrections intégrées : statut HTTP du tick compatible avec le drainage ; erre
 Migration013 appliquée après relecture, PostgreSQL local et vérification du projet cible. Volumes avant/après inchangés, exécution RPC privée maintenue, aucun droit public ajouté. La reprise Notion lit la source et écrit uniquement la copie du cockpit. Les tests locaux ne constituent pas encore une preuve de cadence automatique ni de production. Les contrôles réels et éventuels blocages sont consignés dans le registre privé courant.
 
 Complément de recette : une requête réelle PostHog de63secondes dépassait le budget de lecture. Le helper utilise un identifiant stable et récupère l'accusé perdu, puis reprend par GET avec un jeton de continuation chiffré et lié au périmètre. API202 pendant le calcul ; écran en attente bornée120s, inscriptions/RDV conservés, annulation au changement de filtre. Tests de reprise63s, projet/SQL/identifiant incorrects, expiration et altération du jeton, succès partiel et aucun second POST.432tests, typecheck et build réussis ; relecture indépendante sans finding bloquant. Publication et cadence réelle restent à constater.
+
+## 18 septembre 2026 — visibilité des réservations et personnes
+
+Demande directe : réservés et réalisés dans une même carte Résultats ; noms et dates dans le détail privé, coût publicitaire moyen identifié ; personnes derrière le compteur du Parcours. Le compteur et les listes réutilisent la même sélection. Le filtre de lien partage la logique existante avec le funnel pour ne pas afficher une autre personne arrivée par la même annonce. Les créneaux futurs ne sont plus omis de la colonne Réservés. Les ratios de coût attendent une couverture suffisante ; aucune donnée absente remplacée par zéro.
+
+Validation : 449 tests unitaires, route authentifiée sans cache partagé, typage et compilation ; lecture réelle en mode lecture seule avec correspondance nombre de lignes et compteurs. Recette navigateur et publication vérifiées séparément par le coordinateur. Aucune donnée nominative réelle ni secret ajouté au dépôt.
+
+Recette visuelle du complément RDV : ordinateur/mobile, navigation clavier, listes exactes, filtre sans anciennes personnes, créneau futur conservé dans la colonne réservée ; aucune erreur navigateur ni écriture source.
