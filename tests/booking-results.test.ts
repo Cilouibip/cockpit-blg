@@ -97,6 +97,32 @@ test('une date de réservation sans ligne de créneau reste visible sans invente
  assert.equal(report.rows.length,1);assert.equal(report.rows[0].id,'booking:booking-only');assert.equal(report.rows[0].reservedInPeriod,true);assert.equal(report.rows[0].scheduledInPeriod,false);assert.equal(report.rows[0].scheduledDay,null);assert.equal(report.rows[0].outcome,'unknown');
 });
 
+test('un créneau courant supprimé garde la réservation historique mais affiche son annulation explicite sans coût',async()=>{
+ const p=prospect('cancelled-slot','cancelled-slot','Cas synthétique',{scheduledDay:null,bookedDay:'2026-09-14',dates:{booked:'2026-09-14T08:30:00Z'},attendance:'cancelled'},{source_status:'RDV Annulé'});
+ const removed={...appointment('removed-slot','cancelled-slot','2026-09-20'),scheduled_at:null,scheduled_day:null,status:'unknown',source_status:'RDV Annulé'};
+ const report=await buildBookingResults(database(baseTables({prospects:[p],appointments:[removed],lead_source_observations:[observation('cancelled-slot',{ad:AD})]})),filters,{now:NOW,funnel:fixtureFunnel([funnelRow({appointmentsReserved:1,spendMinor:5000})],{appointmentsReserved:1,spendMinor:5000})});
+ assert.equal(report.summary.booked,1);assert.equal(report.rows.length,1);assert.equal(report.rows[0].reservedInPeriod,true);assert.equal(report.rows[0].scheduledInPeriod,false);assert.equal(report.rows[0].outcome,'cancelled');assert.equal(report.rows[0].effective,false);
+ assert.equal(report.cost.eligibleAttributedBookings,0);assert.equal(report.cost.averagePerBookingMinor,null);
+});
+
+test('le fallback fiche sans appointment restitue annulation ou report explicite, sans classer un état inconnu',async()=>{
+ const cases=[
+  {id:'cancelled-only',status:'RDV Annulé',attendance:'cancelled',expected:'cancelled'},
+  {id:'moved-only',status:'RDV Reporté',attendance:'unknown',expected:'rescheduled'},
+  {id:'unknown-only',status:'À rappeler',attendance:'unknown',expected:'unknown'},
+ ] as const;
+ const prospects=cases.map(item=>prospect(item.id,item.id,'Cas '+item.id,{bookedDay:'2026-09-14',dates:{booked:'2026-09-14'},attendance:item.attendance},{source_status:item.status}));
+ const report=await buildBookingResults(database(baseTables({prospects,lead_source_observations:cases.map(item=>observation(item.id,{ad:AD}))})),filters,{now:NOW,funnel:fixtureFunnel([funnelRow({appointmentsReserved:3,spendMinor:9000})],{appointmentsReserved:3,spendMinor:9000})});
+ for(const item of cases)assert.equal(report.rows.find(row=>row.id==='booking:'+item.id)?.outcome,item.expected);
+ assert.equal(report.rows.find(row=>row.id==='booking:cancelled-only')?.effective,false);assert.equal(report.rows.find(row=>row.id==='booking:moved-only')?.effective,false);assert.equal(report.rows.find(row=>row.id==='booking:unknown-only')?.effective,true);
+});
+
+test('un statut courant de fiche ne se transmet pas à un ancien créneau daté',async()=>{
+ const p=prospect('historical','historical','Ancien créneau',{scheduledDay:null,bookedDay:'2026-09-14',dates:{booked:'2026-09-14'},attendance:'cancelled'},{source_status:'RDV Annulé'}),historical=appointment('historical-slot','historical','2026-09-16','unknown',{identity_basis:'stable_booking',source_status:'RDV Programmé'});
+ const report=await buildBookingResults(database(baseTables({prospects:[p],appointments:[historical],lead_source_observations:[observation('historical',{ad:AD})]})),filters,{now:NOW,funnel:fixtureFunnel([funnelRow({appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1})],{appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1,spendMinor:5000})});
+ assert.equal(report.rows[0].scheduledDay,'2026-09-16');assert.equal(report.rows[0].outcome,'unknown');
+});
+
 test('la lecture pagine au-delà de 1000 lignes et ignore un doublon exact sans tronquer',async()=>{
  const count=1001,prospects:Row[]=[],appointments:Row[]=[],observations:Row[]=[];
  for(let index=0;index<count;index++){

@@ -4,7 +4,7 @@ import {
  buildAdFunnel,canonicalRegistrationOrigins,originKeyFor,originMatchesSelection,UNATTRIBUTED,UNRESOLVED,
  type AdFunnelFilters,type AdFunnelOrigin,type AdFunnelReport,type AdFunnelRow,type FunnelTunnel,
 } from './ad-funnel';
-import {appointmentBooking,appointmentDay,appointmentOutcome,businessDay,isEffectiveAppointment,isUpcomingAppointment,type AppointmentOutcome} from './appointment-semantics';
+import {appointmentBooking,appointmentDay,appointmentOutcome,businessDay,isEffectiveAppointment,type AppointmentOutcome} from './appointment-semantics';
 import {reconcileAcquisitionPeople} from './results-acquisition';
 import {DEFAULT_TRAFFIC_SCOPE,isExcludedTestTraffic,type TrafficScope} from './traffic-scope';
 import {wixLeadEntryConfig} from '../connectors/wix-lead-entries';
@@ -135,6 +135,13 @@ function effectiveWithoutSlot(business:Row,sourceStatus:unknown):boolean {
  return !['cancelled'].includes(String(business.attendance??''))&&!['RDV Annulé','RDV Reporté'].includes(String(sourceStatus??''));
 }
 
+/** Presentation-only fallback for a current Notion slot that was explicitly removed. Never applies a current fiche status to a dated historical slot. */
+function outcomeWithoutCurrentSlot(business:Row,...sourceStatuses:unknown[]):AppointmentOutcome {
+ if(business.attendance==='cancelled'||sourceStatuses.some(status=>status==='RDV Annulé'))return 'cancelled';
+ if(sourceStatuses.some(status=>status==='RDV Reporté'))return 'rescheduled';
+ return 'unknown';
+}
+
 function reportRowFor(personId:string|null,origins:Map<string,{origin:AdFunnelOrigin;at:string}>,visible:Map<string,AdFunnelRow>,filters:AdFunnelFilters,ads:Map<string,Row>,revisions:Map<string,Row>):{key:string;row:AdFunnelRow}|null {
  const origin=personId?origins.get(personId)?.origin??null:null;
  const ad=origin?.adId?ads.get(origin.adId):undefined,revision=origin?.linkId?revisions.get(origin.linkId):undefined;
@@ -180,7 +187,8 @@ export async function buildBookingResults(db:Database,filters:AdFunnelFilters,op
   if(isExcludedTestTraffic(testScope,business,appointment)||!testScope.includeTests&&personId&&request.excludedPeople.has(personId)&&!request.retainedPeople.has(personId)){excludedTests++;continue;}
   if(filters.tunnel!=='all'&&(!personId||request.firstTunnel.get(personId)!==filters.tunnel))continue;
   const attribution=reportRowFor(personId,origins,visible,filters,adsByExternal,revisionsById);if(!attribution)continue;
-  const booking=appointmentBooking(appointment,business),scheduledDay=appointmentDay(appointment),outcome=appointmentOutcome(appointment,business,scheduledDay),effective=isEffectiveAppointment(appointment,business);
+  const booking=appointmentBooking(appointment,business),scheduledDay=appointmentDay(appointment),semanticOutcome=appointmentOutcome(appointment,business,scheduledDay);
+  const outcome=scheduledDay===null&&appointment.identity_basis==='notion_current_slot'&&semanticOutcome==='unknown'?outcomeWithoutCurrentSlot(business,appointment.source_status,prospect.source_status):semanticOutcome,effective=isEffectiveAppointment(appointment,business);
   const row=detail({id,prospect,personId,booking,scheduledAt:typeof appointment.scheduled_at==='string'?appointment.scheduled_at:null,scheduledDay,outcome,effective,reportKey:attribution.key,reportRow:attribution.row,from:filters.from,to:filters.to});
   if(row.reservedInPeriod||row.scheduledInPeriod)rows.push(row);
  }
@@ -192,7 +200,7 @@ export async function buildBookingResults(db:Database,filters:AdFunnelFilters,op
   if(isExcludedTestTraffic(testScope,business)||!testScope.includeTests&&personId&&request.excludedPeople.has(personId)&&!request.retainedPeople.has(personId)){excludedTests++;continue;}
   if(filters.tunnel!=='all'&&(!personId||request.firstTunnel.get(personId)!==filters.tunnel))continue;
   const attribution=reportRowFor(personId,origins,visible,filters,adsByExternal,revisionsById);if(!attribution)continue;
-  rows.push(detail({id:'booking:'+prospect.id,prospect,personId,booking:{at:typeof dates.booked==='string'&&dates.booked.length>10?dates.booked:null,day:bookingDay},scheduledAt:null,scheduledDay:null,outcome:'unknown',effective:effectiveWithoutSlot(business,prospect.source_status),reportKey:attribution.key,reportRow:attribution.row,from:filters.from,to:filters.to}));
+  rows.push(detail({id:'booking:'+prospect.id,prospect,personId,booking:{at:typeof dates.booked==='string'&&dates.booked.length>10?dates.booked:null,day:bookingDay},scheduledAt:null,scheduledDay:null,outcome:outcomeWithoutCurrentSlot(business,prospect.source_status),effective:effectiveWithoutSlot(business,prospect.source_status),reportKey:attribution.key,reportRow:attribution.row,from:filters.from,to:filters.to}));
  }
  rows.sort((a,b)=>(b.bookingAt??b.bookingDay??b.scheduledAt??b.scheduledDay??'').localeCompare(a.bookingAt??a.bookingDay??a.scheduledAt??a.scheduledDay??'')||a.displayName.localeCompare(b.displayName)||a.id.localeCompare(b.id));
 

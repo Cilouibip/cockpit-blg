@@ -135,7 +135,7 @@ export function BookingDetail({ report }: { report: VisualJourneyReport }) {
   const { booking } = report;
   return <>
     <h2>Du clic au rendez-vous</h2>
-    <p className="journey-sub">{metricText(booking.booked)} personnes ont réservé un rendez-vous.</p>
+    <p className="journey-sub">{metricText(booking.booked)} {booking.booked.count === 1 ? 'personne a réservé' : 'personnes ont réservé'} un rendez-vous.</p>
     <div className="journey-small-route"><SmallPoint metric={booking.clicked} label="cliquent pour réserver" /><SmallEdge rate={booking.rates.calendarFromClicked} /><SmallPoint metric={booking.calendar} label="ouvrent le calendrier" /><SmallEdge rate={booking.rates.bookedFromCalendar} /><SmallPoint metric={booking.booked} label="réservent un rendez-vous" /></div>
     {!!booking.people?.length && <div className="journey-bookings"><h3>Qui a réservé ?</h3><ul className="booking-people-list">{booking.people.map((person, index) => <li key={person.appointments[0]?.id ?? index}><div className="booking-person-icon"><Icon name="person" /></div><div className="booking-person-info"><strong>{person.name}</strong><span>{person.originLabel}</span>{person.appointments.map(appointment => <div className="booking-person-slot" key={appointment.id}><b>Rendez-vous {appointment.scheduledAt ? `le ${formatDate(appointment.scheduledAt, appointment.scheduledAt.length > 10)}` : 'à une date non renseignée'}</b><span>{appointment.bookedAt ? `Réservé le ${formatDate(appointment.bookedAt, appointment.bookedAt.length > 10)}` : 'Date de réservation non renseignée'} · {({ scheduled: 'Prévu', attended: 'Réalisé', no_show: 'Absent' } as Record<string,string>)[appointment.status] ?? 'Réservation enregistrée'}</span></div>)}</div></li>)}</ul></div>}
   </>;
