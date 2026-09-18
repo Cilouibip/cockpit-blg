@@ -6,6 +6,8 @@ PR18 publiée et recette réelle passée : compteurs et personnes visibles, date
 
 # État technique du cockpit
 
+Contrôle complémentaire du 18 septembre : deux premières ouvertures de Résultats ont rencontré une erreur de lecture. Correction préparée : quatre lectures de base simultanées maximum par requête, comparaison incluse, identité du cache existant et invalidation conservées. Les 459 tests, le typage et le build passent. La vérification du premier chargement en production reste nécessaire ; le code exact des deux incidents antérieurs n’a pas été récupéré.
+
 ## 18 septembre 2026 — livraison coordonnée du parcours et des actualisations
 
 Publication PR15 (fusion6ae4296) : contrôles GitHub réussis, recette production en cours. Une lecture réelle du Parcours retrouve253 visites suivies,35 ouvertures,20 inscrits,12 démarrages vidéo et2 inscrits ayant réservé. Ces nombres sont un relevé daté du18/09, pas des valeurs fixes.
