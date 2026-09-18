@@ -24,7 +24,7 @@ test('an active lease and a failed backoff defer only their own stream',()=>{
  assert.equal(chooseSyncJob(rows,now,[...enabled]),'wix');
 });
 
-const environment={COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion',META_AD_ACCOUNT_ID:'meta'} as unknown as NodeJS.ProcessEnv;
+const environment={COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion',META_AD_ACCOUNT_ID:'meta'} as unknown as unknown as NodeJS.ProcessEnv;
 const stream:Record<SyncJob,[string,string]>={notion:['notion','prospects_business'],meta:['meta','meta_account_daily'],wix:['wix','payments_analytics'],receipts:['wix','receipt_observations'],meta_ads:['meta','ad_daily'],meta_catalog:['meta','ad_catalog'],quiz:['posthog','quiz_observations'],masterclass:['posthog','masterclass_observations'],forms:['wix','lead_entries_forms'],quiz_entries:['wix','lead_entries_quiz'],client_history:['notion','lead_entries_client_history'],commerce:['notion','commerce_declared_snapshot']};
 function tickDatabase(rows:Row[]):Database{return {select:async(_table,options)=>rows.filter(row=>Object.entries(options?.eq??{}).every(([key,value])=>key==='query_profile_key'||String(row[key])===value)),upsert:async()=>assert.fail('no aggregate write in scheduler test'),rpc:async()=>assert.fail('no rpc in scheduler test'),probe:async()=>{}};}
 function budget(canStart:(max:number)=>boolean){return {sourceFetch:async()=>new Response('{}'),canStart,dispose:()=>{}};}
@@ -37,13 +37,13 @@ test('one budgeted tick progresses several Notion chunks and serves another due 
 
 test('a spent budget starts no further unit',async()=>{
  const rows=[{...run('notion','prospects_business',now-7_200_000,'running'),lease_until:new Date(now-1).toISOString()}],jobs:SyncJob[]=[];let checks=0;
- await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>checks++===0),execute:async job=>{jobs.push(job);return {status:'partial'};}});
+ await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>checks++===0),execute:async job=>{jobs.push(job);return {status:'partial'};}});
  assert.deepEqual(jobs,['notion']);assert.equal(checks,2);
 });
 
 test('a due unit that does not fit returns partial without claiming the tick is current',async()=>{
  const rows=[{...run('notion','prospects_business',now-7_200_000,'running'),lease_until:new Date(now-1).toISOString()}],jobs:SyncJob[]=[];
- const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false),execute:async job=>{jobs.push(job);return {status:'partial'};}});
+ const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false),execute:async job=>{jobs.push(job);return {status:'partial'};}});
  assert.equal(result.status,'partial');assert.equal(result.units,0);assert.deepEqual(jobs,[]);
 });
 
@@ -57,22 +57,22 @@ test('a failed source is skipped so another due stream still progresses',async()
  const rows:Row[]=[{...run('notion','prospects_business',now-7_200_000,'running'),lease_until:new Date(now-7_200_000).toISOString()},{...run('meta','meta_account_daily',now-3_600_000)},{...run('meta','ad_daily',now)}],jobs:SyncJob[]=[];
  const result=await tickSyncJobs(tickDatabase(rows),environment,{now:()=>now,budget:budget(()=>true),execute:async job=>{jobs.push(job);if(job==='notion')throw Error('synthetic');Object.assign(rows[1],{status:'complete',finished_at:new Date(now).toISOString(),started_at:new Date(now).toISOString()});return {status:'complete'};}});
  assert.deepEqual(jobs,['notion','meta']);
- assert.equal(result.status,'partial');assert.deepEqual(result.unitResults,[{job:'notion',status:'failed'},{job:'meta',status:'complete'}]);
+ assert.equal(result.status,'failed');assert.deepEqual(result.unitResults,[{job:'notion',status:'failed'},{job:'meta',status:'complete'}]);
 });
 
 // Inscriptions Wix, antériorité Client et ventes payées : planifiées seulement quand leur configuration existe ; une lecture partielle reprend dans le même tick, un échec reste visible.
 const leadConfig=JSON.stringify({formIds:['form-1'],quiz:{collectionId:'QuizRepondants',originFields:{ad:'publicite'}}});
 const commerceConfig=JSON.stringify({clients:{dataSourceId:'ds-clients'},payments:{dataSourceId:'ds-payments'},schedule:{dataSourceId:'ds-schedule'},parcours:{dataSourceId:'ds-parcours'}});
-const fullEnvironment={COCKPIT_MODE:'live',WIX_SITE_ID:'wix',WIX_API_KEY:'k',WIX_LEAD_ENTRY_CONFIG:leadConfig,NOTION_DATA_SOURCE_ID:'notion',NOTION_CLIENT_DATA_SOURCE_ID:'notion',NOTION_TOKEN:'t',NOTION_COMMERCE_CONFIG:commerceConfig} as unknown as NodeJS.ProcessEnv;
+const fullEnvironment={COCKPIT_MODE:'live',WIX_SITE_ID:'wix',WIX_API_KEY:'k',WIX_LEAD_ENTRY_CONFIG:leadConfig,NOTION_DATA_SOURCE_ID:'notion',NOTION_CLIENT_DATA_SOURCE_ID:'notion',NOTION_TOKEN:'t',NOTION_COMMERCE_CONFIG:commerceConfig} as unknown as unknown as NodeJS.ProcessEnv;
 
 test('les unités inscriptions, antériorité Client et ventes payées ne sont planifiées qu’avec leur configuration',()=>{
  assert.equal(jobScope('meta_catalog',environment),null,'le catalogue Meta ne se planifie jamais sans jeton serveur');
- assert.equal(jobScope('meta_catalog',{...environment,META_ACCESS_TOKEN:'synthetic'} as unknown as NodeJS.ProcessEnv)?.profile,'meta-ad-catalog-v1');
+ assert.equal(jobScope('meta_catalog',{...environment,META_ACCESS_TOKEN:'synthetic'} as unknown as unknown as NodeJS.ProcessEnv)?.profile,'meta-ad-catalog-v1');
  assert.equal(jobScope('forms',environment),null);assert.equal(jobScope('quiz_entries',environment),null);assert.equal(jobScope('client_history',environment),null);assert.equal(jobScope('commerce',environment),null);
  assert.equal(jobScope('forms',fullEnvironment)?.namespace,'wix');assert.match(jobScope('forms',fullEnvironment)!.profile,/-forms-/);assert.match(jobScope('quiz_entries',fullEnvironment)!.profile,/-quiz-/);
  assert.equal(jobScope('client_history',fullEnvironment)?.namespace,'notion');assert.equal(jobScope('commerce',fullEnvironment)?.namespace,'ds-parcours');
- assert.equal(jobScope('forms',{...fullEnvironment,WIX_API_KEY:undefined} as unknown as NodeJS.ProcessEnv),null,'sans clé serveur, la lecture des inscriptions n’est pas planifiée : l’import supervisé reste la voie');
- assert.equal(jobScope('commerce',{...fullEnvironment,NOTION_COMMERCE_CONFIG:JSON.stringify({clients:{dataSourceId:'a'},payments:{dataSourceId:'b'},parcours:{dataSourceId:'c'}})} as unknown as NodeJS.ProcessEnv),null,'sans échéancier configuré, le rapprochement des ventes n’est pas planifié');
+ assert.equal(jobScope('forms',{...fullEnvironment,WIX_API_KEY:undefined} as unknown as unknown as NodeJS.ProcessEnv),null,'sans clé serveur, la lecture des inscriptions n’est pas planifiée : l’import supervisé reste la voie');
+ assert.equal(jobScope('commerce',{...fullEnvironment,NOTION_COMMERCE_CONFIG:JSON.stringify({clients:{dataSourceId:'a'},payments:{dataSourceId:'b'},parcours:{dataSourceId:'c'}})} as unknown as unknown as NodeJS.ProcessEnv),null,'sans échéancier configuré, le rapprochement des ventes n’est pas planifié');
 });
 
 test('une lecture d’inscriptions partielle reprend dans le même tick (au plus quatre unités) et un échec Wix reste visible',async()=>{
@@ -89,17 +89,17 @@ test('une lecture d’inscriptions partielle reprend dans le même tick (au plus
 });
 
 
-test('all configured acquisition and commerce streams are due after one hour, not before',()=>{
+test('all configured streams are due in a new hourly slot and remain current inside that slot',()=>{
  const jobs:SyncJob[]=['notion','meta','wix','receipts','meta_ads','meta_catalog','quiz','masterclass','forms','quiz_entries','client_history','commerce'];
  for(const job of jobs){const [source,key]=stream[job];
-  assert.equal(chooseSyncJob([run(source,key,now-3_599_999)],now,[job]),null,`${job} is not due before the hour`);
+  assert.equal(chooseSyncJob([run(source,key,now-60000)],now,[job]),null,`${job} is current inside the hourly slot`);
   assert.equal(chooseSyncJob([run(source,key,now-3_600_000)],now,[job]),job,`${job} is due at one hour`);
  }
 });
 
 test('a successful non-resumable source does not make the tick partial',async()=>{
  const rows:Row[]=[run('meta','meta_account_daily',now-3_600_000),run('meta','ad_daily',now)];
- const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',META_AD_ACCOUNT_ID:'meta'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>true),execute:async job=>{
+ const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',META_AD_ACCOUNT_ID:'meta'} as unknown as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>true),execute:async job=>{
   assert.equal(job,'meta');Object.assign(rows[0],run('meta','meta_account_daily',now));return {status:'complete'};
  }});
  assert.equal(result.status,'complete');assert.deepEqual(result.unitResults,[{job:'meta',status:'complete'}]);
@@ -117,8 +117,66 @@ test('unfinished resumable work stays partial even when the last source complete
 
 test('resumable chunks that finish in the same tick are complete',async()=>{
  const rows:Row[]=[];let chunks=0;
- const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>true),execute:async()=>{
+ const result=await tickSyncJobs(tickDatabase(rows),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>true),execute:async()=>{
   if(++chunks<3)return {status:'partial'};rows.push(run('notion','prospects_business',now));return {status:'complete'};
  }});
  assert.equal(result.units,3);assert.equal(result.status,'complete');
+});
+
+
+test('an active lease is waiting, a recent failure is failed, never complete',async()=>{
+ for(const kind of ['lease','failure'] as const){
+  const row=run('notion','prospects_business',now-60000,kind==='lease'?'running':'failed');
+  if(kind==='lease')row.lease_until=new Date(now+60000).toISOString();
+  const result=await tickSyncJobs(tickDatabase([row]),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>true),execute:async()=>assert.fail('cooldown/lease must not run')});
+  assert.equal(result.status,kind==='lease'?'waiting':'failed');assert.equal(result.streams?.[0].stale,true);
+ }
+});
+test('Masterclass failure does not prevent healthy Notion and Wix publications',async()=>{
+ const rows:Row[]=[];const jobs:SyncJob[]=[];
+ const env={COCKPIT_MODE:'live',POSTHOG_PROJECT_ID:'123',NOTION_DATA_SOURCE_ID:'notion',WIX_SITE_ID:'wix'} as unknown as NodeJS.ProcessEnv;
+ const result=await tickSyncJobs(tickDatabase(rows),env,{now:()=>now,budget:budget(()=>true),execute:async job=>{
+  jobs.push(job);const [source,key]=stream[job];const row=run(source,key,now,job==='masterclass'?'failed':'complete');if(source==='posthog')row.source_namespace='123';rows.push(row);return{status:String(row.status)};
+ }});
+ assert.ok(jobs.includes('notion'));assert.ok(jobs.includes('wix'));assert.ok(jobs.includes('masterclass'));assert.equal(result.status,'failed');
+ const next=await tickSyncJobs(tickDatabase(rows),env,{now:()=>now,budget:budget(()=>true),execute:async()=>assert.fail('failure cooldown')});
+ assert.equal(next.status,'failed');
+});
+test('expired lease and interrupted resumable checkpoint become due again',()=>{
+ assert.equal(chooseSyncJob([{...run('notion','prospects_business',now-500000,'running'),lease_until:new Date(now-1).toISOString()}],now,['notion']),'notion');
+});
+
+
+test('fresh publication of an old Notion bound is still stale and due',async()=>{
+ const row:Row={...run('notion','prospects_business',now),started_at:new Date(now-7200000).toISOString(),period_to:new Date(now-7200000).toISOString()};
+ const result=await tickSyncJobs(tickDatabase([row]),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false)});
+ assert.equal(result.status,'partial');assert.equal(result.streams?.[0].stale,true);assert.equal(result.streams?.[0].lastSuccessAt,row.finished_at);assert.equal(result.streams?.[0].dataAsOf,row.period_to);assert.ok(result.schedulerMeasurements!.dbReads>0);
+});
+test('last valid publication is retrieved after more than five failed attempts',async()=>{
+ const good:Row={...run('notion','prospects_business',now-90000),id:'good',pagination_complete:true};
+ const bad=Array.from({length:5},(_,i)=>({...run('notion','prospects_business',now-i*1000,'failed'),id:`failed-${i}`}));
+ let active=0,maxActive=0;
+ const db:Database={...tickDatabase([]),select:async(_table,options)=>{active++;maxActive=Math.max(active,maxActive);await new Promise(resolve=>setImmediate(resolve));active--;return options?.in?.status?[good]:bad;}};
+ const result=await tickSyncJobs(db,{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false)});
+ assert.equal(result.streams?.[0].lastSuccessAt,good.finished_at);assert.equal(result.status,'failed');assert.equal(maxActive,2);
+});
+
+
+test('a future query bound never reports data fresher than the snapshot start',async()=>{
+ const row:Row={...run('notion','prospects_business',now),started_at:new Date(now-60000).toISOString(),period_to:new Date(now+7200000).toISOString()};
+ const result=await tickSyncJobs(tickDatabase([row]),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false)});
+ assert.equal(result.streams?.[0].dataAsOf,row.started_at);
+});
+
+
+test('hourly runner jitter cannot defer a stream for a second hour',()=>{
+ const earlier=Date.parse('2026-09-18T01:17:30Z'),next=Date.parse('2026-09-18T02:17:05Z');
+ assert.equal(chooseSyncJob([run('notion','prospects_business',earlier)],next,['notion']),'notion');
+});
+
+
+test('all future dates are unavailable and due, never replaced with a fresh now',async()=>{
+ const row=run('notion','prospects_business',now+3600000);
+ const result=await tickSyncJobs(tickDatabase([row]),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false)});
+ assert.equal(result.status,'partial');assert.equal(result.streams?.[0].dataAsOf,null);assert.equal(result.streams?.[0].stale,true);
 });

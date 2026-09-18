@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Temporal } from '@js-temporal/polyfill';
 import { ConnectorError, object, readJson, safeConnectorError } from './http';
+import {readPostHogQuery} from './posthog-query';
 import type { PostHogConfig } from './posthog';
 
 /** Embedded, aggregate-only use of Query; never EventsQuery or raw exports.
@@ -296,10 +297,12 @@ export async function readPostHogMasterclassAnalytics(config:PostHogAnalyticsCon
   if(!['https://eu.posthog.com','https://us.posthog.com','https://app.posthog.com'].includes(endpoint.origin)||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!['','/'].includes(endpoint.pathname)||!/^\d+$/.test(config.projectId))throw new ConnectorError('INVALID_CONFIGURATION');
   if(config.scope&&(config.scope.source!=='all'||config.scope.campaignId))throw new ConnectorError('POSTHOG_SCOPE_UNAVAILABLE');
   const sql=postHogMasterclassQuery(config.from,config.to,client),headers={Authorization:`Bearer ${config.personalApiKey}`,'Content-Type':'application/json'};
-  const options={...config,attempts:1,timeoutMs:20_000};
+  const deadline=Date.now()+30_000,signal=AbortSignal.timeout(30_000);
+  const fetcher:typeof fetch=(input,init)=> (config.fetcher??fetch)(input,{...init,signal:AbortSignal.any([signal,...(init?.signal?[init.signal]:[])])});
+  const options={...config,fetcher,attempts:1,timeoutMs:20_000};
   const project=object(await readJson(new URL(`/api/projects/${config.projectId}/`,endpoint.origin),{method:'GET',headers},options));
   if(String(project.id)!==config.projectId)throw new ConnectorError('PROJECT_IDENTITY_MISMATCH');
-  const result=await readJson(new URL(`/api/projects/${config.projectId}/query/`,endpoint.origin),{method:'POST',headers,body:JSON.stringify({query:{kind:'HogQLQuery',query:sql},refresh:'force_blocking',name:'Masterclass aggregate observations'})},options);
+  const result=await readPostHogQuery({endpoint,projectId:config.projectId,headers,query:sql,name:'Masterclass aggregate observations',deadline,signal,fetcher,sleep:config.sleep});
   report.byEvent=rows(result,['event','events','visitors','kit_sessions','events_with_visitor_id','events_with_kit_session_id','verified_host_events','unlocated_events','excluded_events'],POSTHOG_MASTERCLASS_EVENTS.length+1).map(row=>{
    if(!POSTHOG_MASTERCLASS_EVENTS.includes(row[0] as MasterclassObservation['event']))throw new ConnectorError('UNEXPECTED_POSTHOG_EVENT');
    const c=counts(row.slice(1,6),true),[verifiedHostEvents,unlocatedEvents,excludedEvents]=row.slice(6).map(count);

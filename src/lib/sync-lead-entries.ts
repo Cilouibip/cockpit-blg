@@ -8,7 +8,7 @@ interface Claim {busy:boolean;blocked?:boolean;reason?:string;runId:string;lease
 interface Result {status:'complete'|'empty'|'failed';counts:{read:number;observations:number;changed:number;unchanged:number;stale:number;rejected:number;ignored:number};reason?:string}
 export type LeadPageReader=(args:{family:LeadEntryFamily;from:string;to:string;cursor:string|null})=>Promise<EntryPage>;
 /** Bounded worker; source reads never happen inside dashboard GET requests. */
-export async function synchronizeLeadEntries(family:LeadEntryFamily,options:{db?:Database;env?:Record<string,string|undefined>;reader?:LeadPageReader;maxPages?:number;from?:string}={}) {
+export async function synchronizeLeadEntries(family:LeadEntryFamily,options:{db?:Database;env?:Record<string,string|undefined>;reader?:LeadPageReader;fetcher?:typeof fetch;maxPages?:number;from?:string}={}) {
  const env=options.env??process.env,db=options.db??database();
  if(env.COCKPIT_MODE==='demo')throw new AppError('La synchronisation réelle est désactivée en démonstration.',409,'demo_mode');
  const secret=env.IDENTITY_HMAC_SECRET;if(!secret||secret.length<32)throw new AppError('La clé privée de rapprochement doit être configurée.',503,'identity_key_missing');
@@ -24,7 +24,7 @@ export async function synchronizeLeadEntries(family:LeadEntryFamily,options:{db?
  if(claim.blocked)return {status:'failed',runId:claim.runId,reason:claim.reason,counts:{read:0,pages:0},coverage:{complete:false,reason:'Le nouveau mapping ne permet pas de reconstituer une ancienne inscription conservée. La dernière publication reste disponible ; une reprise ciblée doit être revue.'}};
  if(claim.busy)return {status:'partial',runId:claim.runId,counts:{read:0,pages:0},coverage:{complete:false,reason:'Une lecture de cette source est déjà en cours.'}};
  const checkpoint={...claim.checkpoint};let pages=0,read=claim.rowsRead;
- const reader:LeadPageReader=options.reader??(args=>args.family==='client_history'?readNotionClientHistoryPage({config:client!,token:env.NOTION_TOKEN!,identitySecret:secret,from:args.from,to:args.to,cursor:args.cursor}):readWixLeadEntryPage({family:args.family,config:wix!,siteId:namespace,apiKey:env.WIX_API_KEY!,identitySecret:secret,from:args.from,to:args.to,cursor:args.cursor}));
+ const reader:LeadPageReader=options.reader??(args=>args.family==='client_history'?readNotionClientHistoryPage({config:client!,token:env.NOTION_TOKEN!,identitySecret:secret,from:args.from,to:args.to,cursor:args.cursor,fetcher:options.fetcher}):readWixLeadEntryPage({family:args.family,config:wix!,siteId:namespace,apiKey:env.WIX_API_KEY!,identitySecret:secret,from:args.from,to:args.to,cursor:args.cursor,fetcher:options.fetcher}));
  try{
   while(!checkpoint.done&&pages<Math.min(options.maxPages??3,5)){
    const page=await reader({family,from:checkpoint.from,to:checkpoint.to,cursor:checkpoint.cursor});

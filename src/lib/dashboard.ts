@@ -1,3 +1,5 @@
+import {buildAdFunnel,type AdFunnelReport} from './ad-funnel';
+import {resultsDetails,applyResultsAcquisition} from './results-details';
 import { Temporal } from '@js-temporal/polyfill';
 import { z } from 'zod';
 import { allRows, type Database, type Row } from './db';
@@ -146,24 +148,35 @@ export function buildDashboard(data:Dataset,filters:DashboardFilters,mode:DataMo
  }
  return response;
 }
-export async function dashboardDetails(db:Database,filters:DashboardFilters,page=0){
- return db.rpc<DetailsResponse&{campaigns:DashboardResponse['campaigns']}>('cockpit_dashboard_lists',{p_from:filters.from,p_to:Temporal.PlainDate.from(filters.to).add({days:1}).toString(),p_source:filters.source,p_tunnel:filters.tunnel,p_campaign:filters.campaign==='all'?'':filters.campaign,p_page:page,p_page_size:50});
+export async function dashboardDetails(db:Database,filters:DashboardFilters,page=0,report?:AdFunnelReport|null){
+ if(report)return resultsDetails(report,page);
+ if(process.env.WIX_SITE_ID&&report!==null){
+  try{return resultsDetails(await buildAdFunnel(db,filters,{includeCommerce:false}),page);}catch{/* Keep independently published spend readable; never revive legacy lead counts. */}
+ }
+ const lists=await db.rpc<DetailsResponse&{campaigns:DashboardResponse['campaigns']}>('cockpit_dashboard_lists',{p_from:filters.from,p_to:Temporal.PlainDate.from(filters.to).add({days:1}).toString(),p_source:filters.source,p_tunnel:filters.tunnel,p_campaign:filters.campaign==='all'?'':filters.campaign,p_page:page,p_page_size:50});
+ if(process.env.WIX_SITE_ID)lists.details=lists.details.map(row=>({...row,leads:null,appointments:null,clients:null,coverage:'La lecture des inscriptions actuelles est incomplète. Les dépenses publiées restent affichées ; les anciens compteurs ne les remplacent pas.'}));
+ return lists;
 }
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
  const memo=commerceReadMemo();
+ // Current and comparison periods share immutable source reads within this request only.
+ const acquisitionReads=new Map<string,Promise<Row[]>>();
+ const acquisitionDb:Database={...db,select(table,options={}){const key=JSON.stringify([table,options]);let read=acquisitionReads.get(key);if(!read){read=db.select(table,options);acquisitionReads.set(key,read);}return read;}};
  async function view(selected:DashboardFilters,withLists:boolean){
   const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
   // Every read of a period is independent: they all start together, then apply in the historical order.
   const live=mode==='live',all=selected.source==='all'&&selected.tunnel==='all'&&!campaign,scope=postHogScopeFromFilters(selected);
   const readsQuiz=live&&!!scope&&selected.tunnel!=='masterclass',readsMasterclass=live&&selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign;
-  const [rollup,snapshot,lists,wix,business,quiz,masterclass]=await Promise.all([
+  const acquisition=live&&process.env.WIX_SITE_ID?buildAdFunnel(acquisitionDb,selected,{includeCommerce:false}).catch(()=>null):Promise.resolve(null);
+  const [rollup,snapshot,lists,wix,business,quiz,masterclass,funnel]=await Promise.all([
    db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
    db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
-   withLists?dashboardDetails(db,selected):Promise.resolve(null),
+   withLists?acquisition.then(report=>dashboardDetails(db,selected,0,report)):Promise.resolve(null),
    live&&all?readWixReportedPeriod(db,selected.from,to):null,
    live?readStoredBusiness(db,selected,to,memo):null,
    readsQuiz?readPostHogPeriod(db,selected.from,to,{scope:scope!}):null,
    readsMasterclass?readPostHogMasterclassPeriod(db,selected.from,to):null,
+   acquisition,
   ]);
   const skeleton=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[],attributionRuns:snapshot.run?[snapshot.run]:[],attributionResults:snapshot.results},{...selected,compare:false},mode);
   const response=applyDashboardRollup(skeleton,rollup,selected,mode);
@@ -176,6 +189,8 @@ export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMo
   if(lists){response.details=lists.details;response.detailsPagination=lists.pagination;response.campaigns=lists.campaigns;}
   if(readsQuiz)applyPostHogQuiz(response,quiz,selected);
   if(readsMasterclass)applyPostHogMasterclass(response,masterclass,selected);
+  if(funnel)applyResultsAcquisition(response,funnel);
+  else if(live&&process.env.WIX_SITE_ID){const lead=response.metrics.find(m=>m.id==='leads');if(lead)Object.assign(lead,{value:null,unavailableReason:'La lecture des inscriptions actuelles est incomplète. Réessaie après actualisation.'});response.notices.push('Les inscriptions actuelles n’ont pas pu être relues ; les autres sources restent affichées.');}
   return {response,run:snapshot.run};
  }
  const days=Temporal.PlainDate.from(filters.from).until(Temporal.PlainDate.from(filters.to)).days+1;

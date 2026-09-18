@@ -73,3 +73,15 @@ test('Quiz refresh claims its dedicated stream and only coalesces matching in-fl
   release();await Promise.all([first,same,different]);assert.equal(queries,2);assert.equal(starts.length,2);assert.ok(starts.every(r=>r.p_stream==='quiz_observations'));assert.notEqual(starts[0].p_profile,starts[1].p_profile);
  }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
 });
+
+
+test('Masterclass uses asynchronous query execution and polls pending results',async()=>{
+ let polls=0;const methods:string[]=[];
+ const report=await readPostHogMasterclassAnalytics({...mcConfig(),sleep:async()=>{},fetcher:async(url,init)=>{
+  const path=new URL(String(url)).pathname;methods.push(init?.method??'GET');
+  if(path==='/api/projects/123/')return Response.json({id:123});
+  if(init?.method==='POST'){assert.equal(JSON.parse(String(init.body)).refresh,'force_async');return Response.json({query_status:{id:'mc-async',team_id:123,complete:false}},{status:202});}
+  polls++;return Response.json({query_status:{id:'mc-async',team_id:123,complete:true,results:{columns:['event','events','visitors','kit_sessions','events_with_visitor_id','events_with_kit_session_id','verified_host_events','unlocated_events','excluded_events'],results:mcRows}}});
+ }});
+ assert.equal(report.status,'complete');assert.equal(polls,1);assert.deepEqual(methods,['GET','POST','GET']);
+});

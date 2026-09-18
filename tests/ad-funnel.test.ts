@@ -110,6 +110,8 @@ function fixture(extra:Row[]=[],additions:Partial<Record<string,Row[]>>={}){
   sale('pay-6',{clientIds:['client-9'],day:'2026-09-14',amountMinor:15000,state:'reconciled'}),
  ];
  const commerce=commerceRows(sales);
+ adDaily.forEach(row=>Object.assign(row,{currency:'EUR',currency_exponent:2,timezone:'Europe/Paris'}));
+ commerce.runs.push({id:'notion-current',source:'notion',source_namespace:'notion',stream_key:'prospects_business',status:'complete',pagination_complete:true,rows_rejected:0,started_at:NOW,finished_at:NOW,source_as_of:NOW,covered_to:NOW});
  const tables:Record<string,Row[]>={lead_source_observations:observations,ads,v_ad_daily:adDaily,appointments,prospects,link_revisions:linkRevisions,sync_runs:commerce.runs,source_aggregates:commerce.aggregates};
  for(const [table,rows] of Object.entries(additions))tables[table]=[...(tables[table]??[]),...(rows??[])];
  const calls:{table:string;options:SelectOptions}[]=[];
@@ -227,7 +229,7 @@ test('filtre tunnel : le quiz ne compte ni les inscriptions ni les visiteurs mas
  assert.equal(rowA.registrations,2,'réinscription quiz de P1 et première inscription quiz de P9');assert.equal(rowA.uniqueLeads,1,'P9 entre par le quiz ; le lead P1 vient de la masterclass');
  assert.deepEqual(rowA.visitors,{quiz:100,masterclass:null});
  assert.equal(rowA.appointmentsBooked,1,'seul le créneau de P9 (entré par le quiz) reste');
- assert.ok(calls.some(c=>c.table==='prospects'&&c.options.in?.id&&c.options.columns?.includes('business')),'prospects lus par lot avec leur classification');
+ assert.ok(calls.some(c=>c.table==='prospects'&&c.options.limit===1000&&c.options.columns?.includes('business')),'prospects lus par lot avec leur classification');
  assert.ok(calls.some(c=>c.table==='v_ad_daily'&&c.options.gte?.date==='2026-09-01'&&c.options.lt?.date==='2026-10-01'));
  await assert.rejects(()=>buildAdFunnel(db,{from:'2026-09-30',to:'2026-09-01',tunnel:'all'},{env}),/AD_FUNNEL_INVALID_PERIOD/);
 });
@@ -429,7 +431,7 @@ test('une publicité au catalogue sans activité reste visible avec des mesures 
 });
 
 test('une mesure Meta absente ne devient zéro ni dans la ligne ni dans le total',async()=>{
- const {db}=fixture([],{v_ad_daily:[{id:'missing-measure',ad_id:'ad-uuid-a',date:'2026-09-04',spend_minor:null,impressions:12,outbound_clicks:null}]});
+ const {db}=fixture([],{v_ad_daily:[{currency:'EUR',currency_exponent:2,timezone:'Europe/Paris',id:'missing-measure',ad_id:'ad-uuid-a',date:'2026-09-04',spend_minor:null,impressions:12,outbound_clicks:null}]});
  const report=await buildAdFunnel(db,{from:'2026-09-01',to:'2026-09-30',tunnel:'all'},{env});
  const row=report.rows.find(r=>r.adId===AD_A)!;
  assert.equal(row.spendMinor,null);assert.equal(row.outboundClicks,null);

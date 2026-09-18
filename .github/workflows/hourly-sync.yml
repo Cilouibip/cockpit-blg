@@ -22,25 +22,33 @@ jobs:
       - name: Signaler une configuration incomplète
         if: ${{ env.CRON_SECRET == '' }}
         run: |
-          echo "CRON_SECRET absent : actualisation horaire non activée."
+          echo "CRON_SECRET absent : actualisation horaire non activée." >&2
+          exit 1
       - name: Lancer une unité bornée
         if: ${{ env.CRON_SECRET != '' }}
         run: |
-          for attempt in $(seq 1 24); do
-            response="$(curl --silent --show-error --fail-with-body \
-              --max-time 90 \
+          deadline=$((SECONDS + 720))
+          # Drain healthy sources after a failed unit. Persistent errors still fail
+          # this run; one summary replaces repeated per-unit failure annotations.
+          while (( SECONDS < deadline )); do
+            if ! response="$(curl --silent --show-error --fail-with-body \
+              --max-time 90 --retry 2 --retry-delay 2 --retry-max-time 100 \
               --header "Authorization: Bearer $CRON_SECRET" \
-              https://cockpit-blg.vercel.app/api/jobs/tick)"
-            status="$(printf '%s' "$response" | jq -er '.status')"
-            printf '%s' "$response" | jq -c '{status,units,unitResults}'
-            if printf '%s' "$response" | jq -e 'any(.unitResults[]?; .status == "failed")' >/dev/null; then
-              echo "Au moins une source a échoué ; le dernier rapport complet est conservé." >&2
+              https://cockpit-blg.vercel.app/api/jobs/tick)"; then
+              echo "Lecture du tick interrompue ; les checkpoints sont conservés." >&2
               exit 1
             fi
-            if [ "$status" = "complete" ]; then
-              exit 0
-            fi
-            test "$status" = "partial"
+            status="$(printf '%s' "$response" | jq -er '.status')"
+            printf '%s' "$response" | jq -c '{status,units,unitResults,streams,measurements,schedulerMeasurements}'
+            case "$status" in
+              complete) exit 0 ;;
+              partial) sleep 1 ;;
+              waiting) sleep 15 ;;
+              failed)
+                echo "Sources saines traitées ; une source reste en échec. Dernier rapport valide conservé." >&2
+                exit 1 ;;
+              *) echo "Réponse d’actualisation invalide." >&2; exit 1 ;;
+            esac
           done
-          echo "Les unités dues n'ont pas toutes été drainées dans la fenêtre horaire bornée." >&2
+          echo "La fenêtre bornée est terminée avec du travail restant ; reprise persistante au prochain passage." >&2
           exit 1

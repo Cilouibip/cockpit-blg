@@ -16,6 +16,8 @@ import {postHogScopeProfile,postHogMasterclassProfile,postHogClientProfile,POSTH
 import {leadEntryProfile,wixLeadEntryConfig} from '../connectors/wix-lead-entries';
 import {notionClientHistoryConfig} from '../connectors/notion-client-history';
 import {notionCommerceConfig,notionCommerceProfile} from '../connectors/notion-commerce';
+import {invalidateSourceSnapshots} from './source-snapshots';
+import {ConnectorError} from '../connectors/http';
 import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
 export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce';
@@ -37,21 +39,41 @@ const definitions:{id:SyncJob;source:string;stream:string;cadence:number;resumab
 ];
 const RESUMABLE=new Set<SyncJob>(definitions.filter(d=>d.resumable).map(d=>d.id));
 const MAX_CHUNKS=4;
-export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|null {
- const due=definitions.filter(d=>enabled.includes(d.id)).flatMap(d=>{
-  const streamRuns=runs.filter(r=>r.source===d.source&&r.stream_key===d.stream);
-  if(streamRuns.some(r=>r.status==='running'&&Date.parse(String(r.lease_until??r.started_at))>now-(r.lease_until?0:120000)))return [];
-  const latest=[...streamRuns].sort((a,b)=>Date.parse(String(b.lease_until??b.finished_at??b.started_at))-Date.parse(String(a.lease_until??a.finished_at??a.started_at)))[0];
-  const touched=latest?Date.parse(String(latest.lease_until??latest.finished_at??latest.started_at)):0;
-  const cadence=latest?.status==='running'&&RESUMABLE.has(d.id)?0:latest?.status==='failed'?300000:d.cadence;
-  return !latest||now-touched>=cadence?[{id:d.id,touched}]:[];
+export type StreamState={job:SyncJob;state:'due'|'waiting'|'failed'|'complete';retryAt?:string;errorCode?:string;lastSuccessAt:string|null;dataAsOf:string|null;stale:boolean};
+const touchedAt=(r:Row)=>Date.parse(String(r.lease_until??r.finished_at??r.started_at))||0;
+const safeCode=(value:unknown)=>typeof value==='string'&&/^[A-Za-z_][A-Za-z0-9_ ()-]{0,99}$/.test(value)?value:'SYNC_UNIT_FAILED';
+/** Inspect persisted work, including leases and failed cooldowns. No work selected
+ * is not equivalent to a successful publication. */
+export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):StreamState[]{
+ return definitions.filter(d=>enabled.includes(d.id)).map(d=>{
+  const rows=runs.filter(r=>r.source===d.source&&r.stream_key===d.stream).sort((a,b)=>touchedAt(b)-touchedAt(a));
+  const latest=rows[0],success=rows.find(r=>['complete','empty'].includes(String(r.status))&&r.pagination_complete!==false);
+  const lastSuccessAt=success?String(success.finished_at??success.started_at):null;
+  // Publication time and source coverage are different for a long Notion scan.
+  const bounds=success?[success.started_at,success.finished_at,d.id==='notion'?success.period_to:success.source_as_of].map(value=>Date.parse(String(value))).filter(value=>Number.isFinite(value)&&value<=now):[];
+  const dataAsOf=bounds.length?new Date(Math.min(...bounds)).toISOString():null;
+  const base={job:d.id,lastSuccessAt,dataAsOf,stale:!dataAsOf||now-Date.parse(dataAsOf)>=d.cadence};
+  const active=rows.find(r=>r.status==='running'&&(r.lease_until?Date.parse(String(r.lease_until)):Date.parse(String(r.started_at))+600000)>now);
+  if(active)return {...base,state:'waiting' as const,retryAt:new Date(active.lease_until?Date.parse(String(active.lease_until)):Date.parse(String(active.started_at))+600000).toISOString()};
+  if(!latest)return {...base,state:'due' as const};
+  if(latest.status==='failed'||latest.error_code){
+   const retry=touchedAt(latest)+300000;
+   return {...base,state:(now>=retry?'due':'failed') as 'due'|'failed',retryAt:new Date(retry).toISOString(),errorCode:safeCode(latest.error_code)};
+  }
+  if(latest.status==='running')return {...base,state:'due' as const};
+  // Due from the attempt start: finishing a long import must not defer the next hourly run.
+  const started=Date.parse(String(latest.started_at));
+  return {...base,state:(base.stale||now-started>=d.cadence||(d.cadence===3_600_000&&Math.floor(now/d.cadence)>Math.floor(started/d.cadence))?'due':'complete') as 'due'|'complete'};
  });
- return due.sort((a,b)=>a.touched-b.touched)[0]?.id??null;
+}
+export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|null {
+ const due=new Set(syncStreamStates(runs,now,enabled).filter(s=>s.state==='due').map(s=>s.job));
+ return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&r.stream_key===d.stream).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>;
-type TickResult={status:string};
-type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string};
+type TickResult={status:string;safeError?:string};
+export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
 type TickOptions={now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité, tels qu'enregistrés dans sync_runs ; null = unité non configurée (elle n'est pas planifiée, jamais un zéro). */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
@@ -86,9 +108,9 @@ async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Data
   case 'meta_catalog':return syncMetaCatalog(options) as Promise<TickResult>;
   case 'quiz':return (await postHogPeriod(from,to,options))??{status:'failed'};
   case 'masterclass':return (await postHogMasterclassPeriod(from,to,options))??{status:'failed'};
-  case 'forms':return synchronizeLeadEntries('forms',{db,env,maxPages:3});
-  case 'quiz_entries':return synchronizeLeadEntries('quiz',{db,env,maxPages:3});
-  case 'client_history':return synchronizeLeadEntries('client_history',{db,env,maxPages:3});
+  case 'forms':return synchronizeLeadEntries('forms',{db,env,fetcher:options.fetcher,maxPages:3});
+  case 'quiz_entries':return synchronizeLeadEntries('quiz',{db,env,fetcher:options.fetcher,maxPages:3});
+  case 'client_history':return synchronizeLeadEntries('client_history',{db,env,fetcher:options.fetcher,maxPages:3});
   case 'commerce':return refreshNotionCommerce({db,config:notionCommerceConfig(env.NOTION_COMMERCE_CONFIG)!,token:env.NOTION_TOKEN??'',identitySecret:env.IDENTITY_HMAC_SECRET??'',fetcher:options.fetcher,maxPages:3});
  }
 }
@@ -100,24 +122,51 @@ export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=
  const scopes=new Map<SyncJob,{namespace:string;profile:string}>();
  for(const d of definitions){const scope=jobScope(d.id,env);if(scope)scopes.set(d.id,scope);}
  const enabled=definitions.filter(d=>scopes.has(d.id)).map(d=>d.id);
- const loadRuns=async()=>{const runs:Row[]=[];for(const d of definitions.filter(d=>enabled.includes(d.id))){const scope=scopes.get(d.id)!;runs.push(...await db.select('sync_runs',{eq:{source:d.source,source_namespace:scope.namespace,stream_key:d.stream,query_profile_key:scope.profile},order:'started_at',descending:true,limit:5}));}return runs;};
- const budget=options.budget??createSyncExecutionBudget(),now=options.now??Date.now,jobs:SyncJob[]=[],results:TickResult[]=[];const chunks=new Map<SyncJob,number>();let last:TickResult|undefined,budgetStopped=false;const excluded=new Set<SyncJob>();
+ const schedulerMeasurements={dbReads:0,dbMs:0,elapsedMs:0,rowsRead:0};
+ const loadRuns=async()=>{
+  const started=performance.now();
+  const groups=await Promise.all(definitions.filter(d=>enabled.includes(d.id)).map(async d=>{
+   const scope=scopes.get(d.id)!,eq={source:d.source,source_namespace:scope.namespace,stream_key:d.stream,query_profile_key:scope.profile};
+   const select=async(options:Parameters<Database['select']>[1])=>{const at=performance.now();schedulerMeasurements.dbReads++;try{const rows=await db.select('sync_runs',options);schedulerMeasurements.rowsRead+=rows.length;return rows;}finally{schedulerMeasurements.dbMs+=performance.now()-at;}};
+   // A healthy publication remains findable after any number of failed attempts.
+   const [recent,published]=await Promise.all([select({eq,order:'started_at',descending:true,limit:5}),select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1})]);
+   return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id)))];
+  }));
+  schedulerMeasurements.elapsedMs+=performance.now()-started;return groups.flat();
+ };
+ const measurements:NonNullable<TickSummary['measurements']>=[];
+ const budget=options.budget??createSyncExecutionBudget(),now=options.now??Date.now,jobs:SyncJob[]=[],results:TickResult[]=[];const chunks=new Map<SyncJob,number>();let budgetStopped=false;const excluded=new Set<SyncJob>();
+ let finalRuns:Row[]=[];
  const today=Temporal.Now.plainDateISO('Europe/Paris'),to=today.add({days:1}).toString(),from=today.with({day:1}).subtract({months:1}).toString();
  try {
   for(;;){
    const runnable=enabled.filter(id=>!excluded.has(id)&&(chunks.get(id)??0)<(RESUMABLE.has(id)?MAX_CHUNKS:1)),runs=await loadRuns();
+   finalRuns=runs;
    const job=chooseSyncJob(runs,now(),runnable.filter(id=>budget.canStart(sourceTimeoutMs[id])));
    if(!job){if(chooseSyncJob(runs,now(),runnable))budgetStopped=true;break;}
    let result:TickResult;
-   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db,env,fetcher:budget.sourceFetch});}
-   catch {result={status:'failed'};excluded.add(job);}
-   jobs.push(job);results.push(result);last=result;chunks.set(job,(chunks.get(job)??0)+1);
+   const measure={job,elapsedMs:0,sourceRequests:0,sourceMs:0,dbReads:0,dbWrites:0,dbMs:0,rowsSubmitted:0},started=performance.now();
+   const timed=async<T>(fn:()=>Promise<T>)=>{const at=performance.now();try{return await fn();}finally{measure.dbMs+=performance.now()-at;}};
+   const measuredDb:Database={...db,select:(...args)=>{measure.dbReads++;return timed(()=>db.select(...args));},upsert:(...args)=>{measure.dbWrites++;measure.rowsSubmitted+=args[1].length;return timed(()=>db.upsert(...args));},rpc:<T>(name:string,args:Row)=>{measure.dbWrites++;if(Array.isArray(args.p_records))measure.rowsSubmitted+=args.p_records.length;return timed(()=>db.rpc<T>(name,args));}};
+   const fetcher:typeof fetch=async(...args)=>{const at=performance.now();measure.sourceRequests++;try{return await budget.sourceFetch(...args);}finally{measure.sourceMs+=performance.now()-at;}};
+   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher});}
+   catch(error) {result={status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};excluded.add(job);}
+   invalidateSourceSnapshots(db);
+   measure.elapsedMs=Math.round(performance.now()-started);measure.dbMs=Math.round(measure.dbMs);measure.sourceMs=Math.round(measure.sourceMs);measurements.push(measure);
+   jobs.push(job);results.push(result);chunks.set(job,(chunks.get(job)??0)+1);
    if(!RESUMABLE.has(job)||result.status==='failed')excluded.add(job);
   }
   const unitResults=results.map((result,index)=>({job:jobs[index],status:result.status}));
-  if(!last)return {status:budgetStopped?'partial':'complete',job:null,jobs,units:0,unitResults,reason:budgetStopped?'Le budget restant ne permet aucune unité due ; reprise au prochain tick.':'Toutes les lectures prévues sont à jour ou en cours.'};
+  const streams=syncStreamStates(finalRuns,now(),enabled);
   const finalStatuses=new Map(unitResults.map(unit=>[unit.job,unit.status]));
-  const unfinished=[...finalStatuses.values()].some(status=>status!=='complete'&&status!=='empty');
-  return {status:unfinished||budgetStopped?'partial':'complete',job:jobs.at(-1)!,jobs,units:results.length,unitResults,...(budgetStopped?{reason:'Le budget restant ne permet aucune autre unité due ; reprise au prochain tick.'}:{})};
+  for(const state of streams){
+   const result=finalStatuses.get(state.job);
+   if(result==='failed'){state.state='failed';state.errorCode=results.filter((_,index)=>jobs[index]===state.job).at(-1)?.safeError??state.errorCode??'SYNC_UNIT_FAILED';}
+   else if(result==='partial'&&state.state!=='waiting')state.state='due';
+  }
+  const due=streams.some(s=>s.state==='due'),waiting=streams.some(s=>s.state==='waiting'),failed=streams.some(s=>s.state==='failed');
+  const status=due||budgetStopped?'partial':waiting?'waiting':failed?'failed':enabled.length?'complete':'failed';
+  return {status,job:jobs.at(-1)??null,jobs,units:results.length,unitResults,streams,measurements,schedulerMeasurements:Object.fromEntries(Object.entries(schedulerMeasurements).map(([k,v])=>[k,Math.round(v)])) as typeof schedulerMeasurements,
+   reason:status==='complete'?'Toutes les sources configurées ont une publication complète récente.':status==='waiting'?'Une lecture possède encore le verrou ; aucune fin globale annoncée.':status==='failed'?'Une source reste en échec ou aucune source n’est configurée ; le dernier rapport valide est conservé.':'Des lectures restent à terminer ; reprise au point enregistré.'};
  } finally {budget.dispose();}
 }
