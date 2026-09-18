@@ -2,6 +2,10 @@
 
 ## 18 septembre 2026 — livraison coordonnée du parcours et des actualisations
 
+Publication PR15 (fusion6ae4296) : contrôles GitHub réussis, recette production en cours. Une lecture réelle du Parcours retrouve253 visites suivies,35 ouvertures,20 inscrits,12 démarrages vidéo et2 inscrits ayant réservé. Ces nombres sont un relevé daté du18/09, pas des valeurs fixes.
+
+Cadence : les dix déclenchements GitHub observés depuis le16/09 sont séparés de142 à336minutes, alors que les runners démarrent en quelques secondes et finissent en environ dix minutes au maximum. Trois réveils par heure remplacent le réveil unique pour permettre une reprise plus rapide ; le moteur ignore les sources déjà fraîches. Cela atténue les départs manquants, sans garantir une heure tant que plusieurs cycles automatiques ne sont pas observés. Les pannes persistantes restent signalées et peuvent encore produire plusieurs alertes. Aucun nouveau service ni réglage de notifications n'est ajouté.
+
 Le parcours validé présente cinq étapes cliquables, les taux sous les flèches, puis un seul détail à la fois : page, inscription, vidéo ou rendez-vous. Le filtre publicitaire et les dates restent simples ; aucun choix de version technique n'est imposé. Les confirmations Wix et les réservations Notion existantes sont raccordées sans modifier les sources ni additionner les événements Meta aux rendez-vous.
 
 Résultats utilise le même calcul des nouveaux leads que le détail par publicité. Les inscriptions répétées et les personnes déjà connues restent distinctes ; première origine et identités réciproques existantes sont conservées. Une origine absente n'est pas inventée. Les premiers accompagnements ne sont pas remplacés par un décompte de ventes : leur attribution par publicité reste en attente de relation suffisante.
