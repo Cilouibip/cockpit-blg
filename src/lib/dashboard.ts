@@ -11,6 +11,7 @@ import {applyDashboardRollup,type DashboardRollup} from './dashboard-rollup';
 import type {DetailsResponse} from './ui-contract';
 import { readWixReportedPeriod } from './sync-wix';
 import { applyBusinessReads, readStoredBusiness } from './business-dashboard';
+import {limitDatabaseReads} from './database-concurrency';
 import { commerceReadMemo } from './notion-commerce-storage';
 import { readPostHogPeriod, applyPostHogQuiz, postHogScopeFromFilters, readPostHogMasterclassPeriod, applyPostHogMasterclass } from './posthog-dashboard';
 export function parseFilters(url:URL):DashboardFilters {
@@ -159,23 +160,24 @@ export async function dashboardDetails(db:Database,filters:DashboardFilters,page
 }
 export async function dashboard(db:Database,filters:DashboardFilters,mode:DataMode){
  const memo=commerceReadMemo();
+ const requestDb=limitDatabaseReads(db,4);
  // Current and comparison periods share immutable source reads within this request only.
  const acquisitionReads=new Map<string,Promise<Row[]>>();
- const acquisitionDb:Database={...db,select(table,options={}){const key=JSON.stringify([table,options]);let read=acquisitionReads.get(key);if(!read){read=db.select(table,options);acquisitionReads.set(key,read);}return read;}};
+ const acquisitionDb:Database={...requestDb,select(table,options={}){const key=JSON.stringify([table,options]);let read=acquisitionReads.get(key);if(!read){read=requestDb.select(table,options);acquisitionReads.set(key,read);}return read;}};
  async function view(selected:DashboardFilters,withLists:boolean){
   const to=Temporal.PlainDate.from(selected.to).add({days:1}).toString(),period=parisPeriod(selected.from,to),campaign=selected.campaign==='all'?'':selected.campaign;
-  // Every read of a period is independent: they all start together, then apply in the historical order.
+  // Reads are scheduled together through the per-request bound, then applied in the historical order.
   const live=mode==='live',all=selected.source==='all'&&selected.tunnel==='all'&&!campaign,scope=postHogScopeFromFilters(selected);
   const readsQuiz=live&&!!scope&&selected.tunnel!=='masterclass',readsMasterclass=live&&selected.tunnel!=='quiz'&&selected.source==='all'&&!campaign;
   const acquisition=live&&process.env.WIX_SITE_ID?buildAdFunnel(acquisitionDb,selected,{includeCommerce:false}).catch(()=>null):Promise.resolve(null);
   const [rollup,snapshot,lists,wix,business,quiz,masterclass,funnel]=await Promise.all([
-   db.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
-   db.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
-   withLists?acquisition.then(report=>dashboardDetails(db,selected,0,report)):Promise.resolve(null),
-   live&&all?readWixReportedPeriod(db,selected.from,to):null,
-   live?readStoredBusiness(db,selected,to,memo):null,
-   readsQuiz?readPostHogPeriod(db,selected.from,to,{scope:scope!}):null,
-   readsMasterclass?readPostHogMasterclassPeriod(db,selected.from,to):null,
+   requestDb.rpc<DashboardRollup>('cockpit_dashboard_rollup',{p_from:selected.from,p_to:to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
+   requestDb.rpc<{run:Row|null;results:Row[]}>('cockpit_attribution_snapshot',{p_from:period.from,p_to:period.to,p_source:selected.source,p_tunnel:selected.tunnel,p_campaign:campaign}),
+   withLists?acquisition.then(report=>dashboardDetails(requestDb,selected,0,report)):Promise.resolve(null),
+   live&&all?readWixReportedPeriod(requestDb,selected.from,to):null,
+   live?readStoredBusiness(requestDb,selected,to,memo):null,
+   readsQuiz?readPostHogPeriod(requestDb,selected.from,to,{scope:scope!}):null,
+   readsMasterclass?readPostHogMasterclassPeriod(requestDb,selected.from,to):null,
    acquisition,
   ]);
   const skeleton=buildDashboard({leads:[],events:[],payments:[],appointments:[],deals:[],ads:[],revisions:[],runs:[],aggregates:[],attributionRuns:snapshot.run?[snapshot.run]:[],attributionResults:snapshot.results},{...selected,compare:false},mode);

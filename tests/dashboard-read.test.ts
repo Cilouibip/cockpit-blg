@@ -42,7 +42,7 @@ test('changing live filters never calls a source API or writes an import',async(
  }
 });
 
-test('les lectures publiées d’une période partent ensemble au lieu de s’attendre',async()=>{
+test('la période courante et sa comparaison partagent une borne de quatre lectures',async()=>{
  const saved={WIX_SITE_ID:process.env.WIX_SITE_ID,NOTION_DATA_SOURCE_ID:process.env.NOTION_DATA_SOURCE_ID,POSTHOG_PROJECT_ID:process.env.POSTHOG_PROJECT_ID};
  process.env.WIX_SITE_ID='synthetic-site';process.env.NOTION_DATA_SOURCE_ID='synthetic-notion';process.env.POSTHOG_PROJECT_ID='synthetic-project';
  const skeleton=new Set(['cockpit_dashboard_rollup','cockpit_attribution_snapshot','cockpit_dashboard_lists']);
@@ -58,10 +58,11 @@ test('les lectures publiées d’une période partent ensemble au lieu de s’at
  };
  db.select=async()=>[];
  try{
-  const result=await dashboard(db,filters,'live');
+  const result=await dashboard(db,{...filters,compare:true},'live');
   assert.ok(stored.includes('cockpit_business_rollup')&&stored.filter(name=>name==='cockpit_source_window').length>=4,stored.join(','));
-  assert.ok(peak>=4,`lectures simultanées observées : ${peak}`);
+  assert.equal(peak,4,`lectures simultanées observées : ${peak}`);
   assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
+  assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);
  } finally {for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });
 
