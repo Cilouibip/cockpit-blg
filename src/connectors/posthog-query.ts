@@ -23,11 +23,22 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     ...init, signal: AbortSignal.any([options.signal, ...(init?.signal ? [init.signal] : [])]),
   });
   const request = async (path: string, init: RequestInit) => {
-    const remaining = options.deadline - now();
-    if (options.signal.aborted || remaining < 1_000) throw new ConnectorError('POSTHOG_TIME_BUDGET');
-    return object(await readJson(new URL(path, options.endpoint.origin), { ...init, headers: options.headers }, {
-      fetcher, attempts: 1, timeoutMs: Math.min(15_000, remaining),
-    }));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const remaining = options.deadline - now();
+      if (options.signal.aborted || remaining < 1_000) throw new ConnectorError('POSTHOG_TIME_BUDGET');
+      try {
+        return object(await readJson(new URL(path, options.endpoint.origin), { ...init, headers: options.headers }, {
+          fetcher, attempts: 1, timeoutMs: Math.min(20_000, remaining),
+        }));
+      } catch (error) {
+        const transient = error instanceof ConnectorError && (error.code === 'NETWORK_ERROR' || (error.code === 'UPSTREAM_HTTP_ERROR' && (error.status ?? 0) >= 500));
+        // A read-only query or result retrieval can be retried once. All attempts share
+        // the report deadline; cancellation, access errors and invalid data never retry.
+        if (attempt || !transient || options.signal.aborted || options.deadline - now() < 1_500) throw error;
+        await sleep(250);
+      }
+    }
+    throw new ConnectorError('POSTHOG_TIME_BUDGET');
   };
   const path = `/api/projects/${options.projectId}/query/`;
   let payload = await request(path, { method: 'POST', body: JSON.stringify({
