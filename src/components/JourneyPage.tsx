@@ -105,14 +105,18 @@ export default function JourneyPage({ filters, revision, mode }: { filters: Dash
   const [lastTunnel, setLastTunnel] = useState(tunnel);
   if (lastTunnel !== tunnel) { setLastTunnel(tunnel); setVersion(''); }
   const query = new URLSearchParams({ from: filters.from, to: filters.to, tunnel, source: filters.source, campaign: filters.campaign, includeTests: String(includeTests), ...(version ? { version } : {}) }).toString();
-  const report = loaded?.key === query ? loaded.report : null;
+  const report = loaded?.key === query && ['complete', 'empty'].includes(loaded.report.status) ? loaded.report : null;
   const error = failure?.key === query ? failure.message : null;
   const busy = pending === query;
   useEffect(() => {
     if (mode === 'demo') return;
     const controller = new AbortController(); setPending(query); setFailure(null);
     request<JourneyReport>(`/api/journey?${query}`, { signal: controller.signal, timeoutMs: 65_000 })
-      .then(value => { if (!controller.signal.aborted) setLoaded({ key: query, report: value }); })
+      .then(value => {
+        if (controller.signal.aborted) return;
+        if (value.status === 'complete' || value.status === 'empty') setLoaded({ key: query, report: value });
+        else setFailure({ key: query, message: 'Les données de parcours n’ont pas pu être chargées.' });
+      })
       .catch(reason => { if (!controller.signal.aborted) setFailure({ key: query, message: reason instanceof Error ? reason.message : 'Les mesures n’ont pas pu être lues.' }); })
       .finally(() => { if (!controller.signal.aborted) setPending(null); });
     return () => controller.abort();
@@ -122,9 +126,9 @@ export default function JourneyPage({ filters, revision, mode }: { filters: Dash
     <div className="journey-scope"><p><strong>{tunnel === 'masterclass' ? 'Nouvelle masterclass · /masterclass26' : 'Quiz'}</strong><span>{formatDate(filters.from)} — {formatDate(filters.to)} · {includeTests ? 'Essais inclus' : 'Essais identifiés exclus'}</span></p>{report && report.availableVersions.length > 0 && <label key={versionKey}>Version de la page<select value={version} onChange={event => setVersion(event.target.value)}><option value="">{report.availableVersions.length > 1 ? 'Choisir une version' : 'Version détectée automatiquement'}</option>{report.availableVersions.map(value => <option key={value} value={value}>{versionLabel(value)}</option>)}</select></label>}</div>
     {report && !version && report.availableVersions.length > 1 && <p className="journey-message">La page a changé pendant cette période. Choisis sa version ci-dessus pour voir les étapes sans mélanger les anciens et les nouveaux parcours.</p>}
     {mode === 'demo' ? <Missing reason="Le détail des parcours se lit dans l’espace connecté. Aucun chiffre de démonstration n’est présenté comme une mesure réelle." /> : <>
-      {busy && <p className="journey-message" role="status">Lecture des étapes et des mesures vidéo…{report ? ' Les valeurs affichées sont celles de la dernière lecture.' : ''}</p>}
-      {error && <p className="blg-inline-error" role="alert">{error} <button className="blg-text-button" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}
-      {report && <><p className="journey-freshness">Dernière lecture : {formatDate(report.observedAt, true)} · Dernier événement : {formatDate(report.coverage.lastObservedAt, true)}</p>{['failed', 'not_configured'].includes(report.status) && <p className="blg-inline-error" role="alert">{report.coverage.reason} <button className="blg-text-button" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}{report.status === 'empty' && <p className="journey-message">Aucune mesure dans ce périmètre. Cela ne prouve pas l’absence de visiteurs ; consulte les dates, la version et l’option des essais.</p>}<JourneyReportView report={report} /></>}
+      {busy && <p className="journey-message" role="status">Lecture des étapes et des mesures vidéo…{report ? ` En attendant, les valeurs affichées datent de la lecture du ${formatDate(report.observedAt, true)}.` : ''}</p>}
+      {error && <p className="blg-inline-error" role="alert">{error}{report ? ` Les valeurs conservées datent de la lecture du ${formatDate(report.observedAt, true)}.` : ''} <button className="blg-text-button" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}
+      {report && <><p className="journey-freshness">Dernière lecture : {formatDate(report.observedAt, true)} · Dernier événement : {formatDate(report.coverage.lastObservedAt, true)}</p>{report.status === 'empty' && <p className="journey-message">Aucune mesure dans ce périmètre. Cela ne prouve pas l’absence de visiteurs ; consulte les dates, la version et l’option des essais.</p>}<JourneyReportView report={report} /></>}
     </>}
   </div>;
 }

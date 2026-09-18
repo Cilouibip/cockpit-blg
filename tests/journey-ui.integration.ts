@@ -15,6 +15,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 1000
 await context.addCookies([{ name: COOKIE_NAME, value: issueSession(getConfig()), url: base, httpOnly: true, sameSite: 'Strict' }]);
 const page = await context.newPage();
 const requests: URL[] = []; const errors: string[] = [];
+let journeyMode: 'complete' | 'failed' | 'not_configured' = 'complete';
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/api/**', async route => {
   const url = new URL(route.request().url());
@@ -25,6 +26,14 @@ await page.route('**/api/**', async route => {
     report.scope = { ...report.scope, from: url.searchParams.get('from')!, to: url.searchParams.get('to')!, tunnel: url.searchParams.get('tunnel') as 'quiz' | 'masterclass', includeTests: url.searchParams.get('includeTests') === 'true', version: url.searchParams.get('version'), source: url.searchParams.get('source') as 'all', campaign: url.searchParams.get('campaign') ?? '' };
     report.coverage.testsIncluded = report.scope.includeTests;
     if (report.scope.includeTests) report.steps[0].count = 14;
+    if (journeyMode !== 'complete') {
+      report.status = journeyMode;
+      report.observedAt = null;
+      report.coverage.reason = journeyMode === 'failed' ? 'Lecture agrégée incomplète ; aucune mesure partielle n’est publiée.' : 'Connexion non configurée.';
+      report.steps = [];
+      report.sections = [];
+      report.questions = [];
+    }
     return route.fulfill({ json: report });
   }
   if (url.pathname === '/api/dashboard') {
@@ -54,6 +63,17 @@ try {
   await page.getByRole('heading', { name: 'Jusqu’où les visiteurs regardent' }).waitFor();
   await page.locator('.journey-chart-point').nth(1).focus();
   await page.getByText('1:00 à 2:00 : 2 visites', { exact: true }).last().waitFor();
+  journeyMode = 'failed';
+  await page.getByRole('button', { name: 'Actualiser', exact: true }).click();
+  const journeyAlert = page.locator('.journey-page .blg-inline-error');
+  await journeyAlert.getByText(/Les données de parcours n’ont pas pu être chargées/).waitFor();
+  assert.doesNotMatch(await journeyAlert.innerText(), /Lecture agrégée incomplète/);
+  assert.match(await journeyAlert.innerText(), /valeurs conservées datent de la lecture du 17 sept\. 2026, 16:00/i);
+  await page.getByRole('heading', { name: 'Le parcours de la masterclass', exact: true }).waitFor();
+  journeyMode = 'not_configured';
+  await page.getByRole('button', { name: 'Quiz', exact: true }).click();
+  await journeyAlert.getByText(/Les données de parcours n’ont pas pu être chargées/).waitFor();
+  assert.equal(await page.locator('.journey-panel').count(), 0, 'Un périmètre sans rapport utilisable ne rend aucun panneau vide');
   for (const [name, width] of [['desktop', 1440], ['mobile', 390]] as const) {
     await page.setViewportSize({ width, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${name} has no page overflow`);

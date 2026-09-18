@@ -1,6 +1,7 @@
 import { Temporal } from '@js-temporal/polyfill';
 import { ConnectorError, object, readJson, safeConnectorError } from './http';
 import type { PostHogConfig } from './posthog';
+import { readPostHogQuery } from './posthog-query';
 import type {
   JourneyAvailability,
   JourneyMetric,
@@ -14,7 +15,7 @@ import type {
   JourneyVideoReport,
 } from '../lib/journey-contract';
 
-export const JOURNEY_ANALYTICS_VERSION = 'posthog-journey-aggregates-v1';
+export const JOURNEY_ANALYTICS_VERSION = 'posthog-journey-aggregates-v2';
 const UNVERSIONED = 'unversioned';
 const HOSTS = ['quizz.blg-studio.fr', 'www.blg-studio.fr'] as const;
 const MASTERCLASS_HOSTS = ['www.blg-studio.fr', 'blg-studio.fr'] as const;
@@ -404,10 +405,18 @@ export async function readJourneyAnalytics(config: JourneyAnalyticsConfig): Prom
     const project = object(await readJson(new URL(`/api/projects/${config.projectId}/`, endpoint.origin), { method: 'GET', headers }, options()));
     if (String(project.id) !== config.projectId) throw new ConnectorError('PROJECT_IDENTITY_MISMATCH');
     const queries = journeyQueries(config);
-    const query = (name: keyof typeof queries) => readJson(new URL(`/api/projects/${config.projectId}/query/`, endpoint.origin), {
-      method: 'POST', headers, body: JSON.stringify({ query: { kind: 'HogQLQuery', query: queries[name] }, refresh: 'force_blocking', name: `BLG journey aggregate ${name}` }),
-    }, options());
-    const [overviewPayload, stepsPayload, questionsPayload, videoPayload, breakdownPayload] = await Promise.all([query('overview'), query('steps'), query('questions'), query('video'), query('breakdown')]);
+    const controller = new AbortController();
+    const query = (name: keyof typeof queries) => readPostHogQuery({
+      endpoint, projectId: config.projectId!, headers, query: queries[name], name: `BLG journey aggregate ${name}`,
+      deadline: started + 55_000, signal: controller.signal, fetcher: config.fetcher, sleep: config.sleep,
+    });
+    let overviewPayload: unknown, stepsPayload: unknown, questionsPayload: unknown, videoPayload: unknown, breakdownPayload: unknown;
+    try {
+      // At most two queries run together; do not request measurements from the other tunnel.
+      [overviewPayload, stepsPayload] = await Promise.all([query('overview'), query('steps')]);
+      if (config.tunnel === 'quiz') questionsPayload = await query('questions');
+      else [videoPayload, breakdownPayload] = await Promise.all([query('video'), query('breakdown')]);
+    } finally { controller.abort(); }
     if (Date.now() - started > 60_000) throw new ConnectorError('POSTHOG_TIME_BUDGET');
     const overviewRows = resultRows(overviewPayload, ['queried_events','included_events','included_sessions','events_with_session_id','events_missing_session_id','identifiable_test_events','unversioned_sessions','first_observed_at','last_observed_at'], 2);
     if (overviewRows.length !== 1) throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
@@ -425,15 +434,15 @@ export async function readJourneyAnalytics(config: JourneyAnalyticsConfig): Prom
     if (stepRows.some(row => !allowedSteps.has(row.event as never) || row.paired > row.eligible || row.paired > row.count)) throw new ConnectorError('INVALID_POSTHOG_ROW');
     report.availableVersions = [...new Set(stepRows.map(row => row.version))].sort();
     if (report.availableVersions.length > 100) throw new ConnectorError('POSTHOG_RESULT_LIMIT');
-    const questionRows = resultRows(questionsPayload, ['journey_version','question_number','reached','answered','abandoned','reached_events','answered_events'], 10001).map(row => ({ version: token(row[0]), number: integer(row[1]), reached: integer(row[2]), answered: integer(row[3]), abandoned: integer(row[4]), reachedEvents: integer(row[5]), answeredEvents: integer(row[6]) }));
+    const questionRows = (config.tunnel === 'quiz' ? resultRows(questionsPayload, ['journey_version','question_number','reached','answered','abandoned','reached_events','answered_events'], 10001) : []).map(row => ({ version: token(row[0]), number: integer(row[1]), reached: integer(row[2]), answered: integer(row[3]), abandoned: integer(row[4]), reachedEvents: integer(row[5]), answeredEvents: integer(row[6]) }));
     if (questionRows.some(row => row.number < 1 || row.number > 100 || row.reached > row.reachedEvents || row.answered > row.answeredEvents || row.abandoned > row.reached)) throw new ConnectorError('INVALID_POSTHOG_ROW');
-    const videoRows = resultRows(videoPayload, ['journey_version','video_id','started_sessions','booked_after_start','duration_seconds','m25','m50','m75','m100','unique_sessions','unique_average','unique_p50','unique_p75','unique_p90','visible_sessions','visible_average','visible_p50','visible_p75','visible_p90'], 1001).map(row => {
+    const videoRows = (config.tunnel === 'masterclass' ? resultRows(videoPayload, ['journey_version','video_id','started_sessions','booked_after_start','duration_seconds','m25','m50','m75','m100','unique_sessions','unique_average','unique_p50','unique_p75','unique_p90','visible_sessions','visible_average','visible_p50','visible_p75','visible_p90'], 1001) : []).map(row => {
       const started = integer(row[2]), uniqueSessions = integer(row[9]), visibleSessions = integer(row[14]);
       const durationValue = decimal(row[4]);
       return { version: token(row[0]), videoId: token(row[1]), started, bookedAfterStart: integer(row[3]), duration: durationValue > 0 ? durationValue : null, m25: integer(row[5]), m50: integer(row[6]), m75: integer(row[7]), m100: integer(row[8]), uniqueSessions, uniqueAverage: optionalDecimal(row[10], uniqueSessions), uniqueP50: optionalDecimal(row[11], uniqueSessions), uniqueP75: optionalDecimal(row[12], uniqueSessions), uniqueP90: optionalDecimal(row[13], uniqueSessions), visibleSessions, visibleAverage: optionalDecimal(row[15], visibleSessions), visibleP50: optionalDecimal(row[16], visibleSessions), visibleP75: optionalDecimal(row[17], visibleSessions), visibleP90: optionalDecimal(row[18], visibleSessions) };
     });
     if (videoRows.some(row => row.bookedAfterStart > row.started || [row.m25,row.m50,row.m75,row.m100,row.uniqueSessions,row.visibleSessions].some(value => value > includedSessions))) throw new ConnectorError('POSTHOG_TOTALS_CHANGED');
-    const breakdownRows = resultRows(breakdownPayload, ['kind','journey_version','item','bucket','sessions'], 10001);
+    const breakdownRows = config.tunnel === 'masterclass' ? resultRows(breakdownPayload, ['kind','journey_version','item','bucket','sessions'], 10001) : [];
     const curves: CurveAggregate[] = [], sections: Array<JourneySection & { version: string }> = [];
     for (const row of breakdownRows) {
       const kind = token(row[0]), version = token(row[1]), item = token(row[2]), bucket = decimal(row[3]), sessions = integer(row[4]);
@@ -464,8 +473,8 @@ export async function readJourneyAnalytics(config: JourneyAnalyticsConfig): Prom
     report.notices.push('Les volumes sont des sessions mesurées, pas des personnes CRM.');
     return report;
   } catch (error) {
-    report.status = 'failed'; report.safeError = safeConnectorError(error); report.coverage.reason = 'Lecture agrégée incomplete ; aucune mesure partielle n’est publiée.';
-    report.steps = []; report.sections = []; report.questions = []; report.video = unavailableVideo(config.tunnel, 'Lecture agrégée incomplete.');
+    report.status = 'failed'; report.safeError = safeConnectorError(error); report.coverage.reason = 'Les données de parcours n’ont pas pu être chargées. Cela ne signifie pas qu’il n’y a eu aucune visite.';
+    report.steps = []; report.sections = []; report.questions = []; report.video = unavailableVideo(config.tunnel, 'Les données n’ont pas pu être chargées.');
     return report;
   }
 }
