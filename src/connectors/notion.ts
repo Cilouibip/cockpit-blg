@@ -82,6 +82,7 @@ export async function syncNotion(config: NotionConfig) {
         try {
           const pageRow = object(raw), id = text(pageRow.id), updatedAt = text(pageRow.last_edited_time), properties = object(pageRow.properties);
           if (!id || !/^[a-fA-F0-9-]{32,36}$/.test(id) || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) throw new ConnectorError('INVALID_ROW');
+          if(Object.values(config.fields).some(name=>field(properties,name)?.has_more===true))throw new ConnectorError('INCOMPLETE_SOURCE_RELATION');
           const nameProperty = field(properties, config.fields.name), sourceStatus = selected(field(properties, config.fields.status));
           const status = sourceStatus ? config.statusMapping?.[sourceStatus] : undefined;
           const record: NotionProspect = { source: 'notion', accountId, externalId: id, connectorVersion: batch.version, observedAt: config.now?.() ?? new Date().toISOString(), sourceUpdatedAt: updatedAt,

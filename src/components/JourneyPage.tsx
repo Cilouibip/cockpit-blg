@@ -1,10 +1,13 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { DashboardFilters, DataMode } from '../lib/ui-contract';
 import type { JourneyMetric, JourneyReport, JourneyTunnel, JourneyVideoReport } from '../lib/journey-contract';
+import type { VisualJourneyReport } from '../lib/visual-journey-contract';
 import { request } from '../lib/cockpit-request';
+import {loadVisualJourney} from '../lib/visual-journey-client';
 import { formatDate, formatNumber } from './ui-format';
+import { VisualJourneyView } from './VisualJourneyView';
 
 const count = (value: number | null | undefined) => value == null ? 'Non disponible' : formatNumber(value);
 const percent = (value: number | null | undefined) => value == null ? 'Non disponible' : formatNumber(value * 100, 'percent');
@@ -91,44 +94,49 @@ export function JourneyReportView({ report }: { report: JourneyReport }) {
   </>;
 }
 
-export default function JourneyPage({ filters, revision, mode }: { filters: DashboardFilters; revision: number; mode: DataMode }) {
+export default function JourneyPage({ filters, revision, mode, onOptionsChange, onTunnelChange }: { filters: DashboardFilters; revision: number; mode: DataMode; onOptionsChange?: (ads: VisualJourneyReport['availableAds']) => void; onTunnelChange?: (tunnel: JourneyTunnel) => void }) {
   const [selected, setSelected] = useState<JourneyTunnel>('masterclass');
   const [includeTests, setIncludeTests] = useState(false);
-  const [version, setVersion] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState<{ key: string; report: JourneyReport } | null>(null);
+  const [visualLoaded, setVisualLoaded] = useState<{ key: string; report: VisualJourneyReport } | null>(null);
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const optionsCallback = useRef(onOptionsChange);
+  optionsCallback.current = onOptionsChange;
   const tunnel = filters.tunnel === 'all' ? selected : filters.tunnel;
-  // A version from one tunnel must never silently filter the other.
-  const versionKey = `${tunnel}:${version}`;
-  const [lastTunnel, setLastTunnel] = useState(tunnel);
-  if (lastTunnel !== tunnel) { setLastTunnel(tunnel); setVersion(''); }
-  const query = new URLSearchParams({ from: filters.from, to: filters.to, tunnel, source: filters.source, campaign: filters.campaign, includeTests: String(includeTests), ...(version ? { version } : {}) }).toString();
+  const query = new URLSearchParams({ from: filters.from, to: filters.to, tunnel, source: filters.source, campaign: filters.campaign, includeTests: String(includeTests) }).toString();
   const report = loaded?.key === query && ['complete', 'empty'].includes(loaded.report.status) ? loaded.report : null;
+  const visualReport = visualLoaded?.key === query && ['complete', 'partial', 'empty', 'not_configured'].includes(visualLoaded.report.status) ? visualLoaded.report : null;
   const error = failure?.key === query ? failure.message : null;
   const busy = pending === query;
+  useEffect(() => { onTunnelChange?.(tunnel); }, [onTunnelChange, tunnel]);
   useEffect(() => {
     if (mode === 'demo') return;
     const controller = new AbortController(); setPending(query); setFailure(null);
-    request<JourneyReport>(`/api/journey?${query}`, { signal: controller.signal, timeoutMs: 65_000 })
-      .then(value => {
-        if (controller.signal.aborted) return;
-        if (value.status === 'complete' || value.status === 'empty') setLoaded({ key: query, report: value });
-        else setFailure({ key: query, message: 'Les données de parcours n’ont pas pu être chargées.' });
-      })
-      .catch(reason => { if (!controller.signal.aborted) setFailure({ key: query, message: reason instanceof Error ? reason.message : 'Les mesures n’ont pas pu être lues.' }); })
-      .finally(() => { if (!controller.signal.aborted) setPending(null); });
+    const endpoint = tunnel === 'masterclass' ? '/api/journey-visual' : '/api/journey';
+    const operation=tunnel==='masterclass'
+      ? loadVisualJourney({url:`${endpoint}?${query}`,signal:controller.signal,transport:(url,signal)=>request<VisualJourneyReport>(url,{signal,timeoutMs:65_000}),onReport:result=>{
+          if(controller.signal.aborted)return;
+          if(['complete','partial','empty','not_configured'].includes(result.status)){setVisualLoaded({key:query,report:result});optionsCallback.current?.(result.availableAds);}
+          else throw new Error(result.safeError||'Les données de parcours n’ont pas pu être chargées.');
+        }})
+      : request<JourneyReport>(`${endpoint}?${query}`,{signal:controller.signal,timeoutMs:65_000}).then(result=>{
+          if(controller.signal.aborted)return;
+          if(result.status==='complete'||result.status==='empty')setLoaded({key:query,report:result});
+          else throw new Error('Les données du quiz n’ont pas pu être chargées.');
+        });
+    operation.catch(reason=>{if(!controller.signal.aborted)setFailure({key:query,message:reason instanceof Error?reason.message:'Les mesures n’ont pas pu être lues.'});})
+      .finally(()=>{if(!controller.signal.aborted)setPending(null);});
     return () => controller.abort();
-  }, [query, revision, attempt, mode]);
+  }, [query, revision, attempt, mode, tunnel]);
   return <div className="journey-page" aria-busy={busy}>
-    <div className="journey-toolbar"><div className="blg-switch" aria-label="Choisir le parcours">{(['masterclass', 'quiz'] as const).filter(value => filters.tunnel === 'all' || filters.tunnel === value).map(value => <button type="button" key={value} aria-pressed={tunnel === value} onClick={() => { setSelected(value); setVersion(''); }}>{value === 'masterclass' ? 'Masterclass' : 'Quiz'}</button>)}</div><label className="blg-traffic-toggle"><input type="checkbox" checked={includeTests} onChange={event => setIncludeTests(event.target.checked)} />Inclure les essais</label></div>
-    <div className="journey-scope"><p><strong>{tunnel === 'masterclass' ? 'Nouvelle masterclass · /masterclass26' : 'Quiz'}</strong><span>{formatDate(filters.from)} — {formatDate(filters.to)} · {includeTests ? 'Essais inclus' : 'Essais identifiés exclus'}</span></p>{report && report.availableVersions.length > 0 && <label key={versionKey}>Version de la page<select value={version} onChange={event => setVersion(event.target.value)}><option value="">{report.availableVersions.length > 1 ? 'Choisir une version' : 'Version détectée automatiquement'}</option>{report.availableVersions.map(value => <option key={value} value={value}>{versionLabel(value)}</option>)}</select></label>}</div>
-    {report && !version && report.availableVersions.length > 1 && <p className="journey-message">La page a changé pendant cette période. Choisis sa version ci-dessus pour voir les étapes sans mélanger les anciens et les nouveaux parcours.</p>}
+    <div className="journey-toolbar"><div className="blg-switch" aria-label="Choisir le parcours">{(['masterclass', 'quiz'] as const).filter(value => filters.tunnel === 'all' || filters.tunnel === value).map(value => <button type="button" key={value} aria-pressed={tunnel === value} onClick={() => setSelected(value)}>{value === 'masterclass' ? 'Masterclass' : 'Quiz'}</button>)}</div><label className="blg-traffic-toggle"><input type="checkbox" checked={includeTests} onChange={event => setIncludeTests(event.target.checked)} />Inclure les essais</label></div>
     {mode === 'demo' ? <Missing reason="Le détail des parcours se lit dans l’espace connecté. Aucun chiffre de démonstration n’est présenté comme une mesure réelle." /> : <>
-      {busy && <p className="journey-message" role="status">Lecture des étapes et des mesures vidéo…{report ? ` En attendant, les valeurs affichées datent de la lecture du ${formatDate(report.observedAt, true)}.` : ''}</p>}
-      {error && <p className="blg-inline-error" role="alert">{error}{report ? ` Les valeurs conservées datent de la lecture du ${formatDate(report.observedAt, true)}.` : ''} <button className="blg-text-button" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}
-      {report && <><p className="journey-freshness">Dernière lecture : {formatDate(report.observedAt, true)} · Dernier événement : {formatDate(report.coverage.lastObservedAt, true)}</p>{report.status === 'empty' && <p className="journey-message">Aucune mesure dans ce périmètre. Cela ne prouve pas l’absence de visiteurs ; consulte les dates, la version et l’option des essais.</p>}<JourneyReportView report={report} /></>}
+      {busy && <p className="journey-message" role="status">{visualReport?.loading ? 'Les visites et la vidéo se chargent…' : 'Lecture du parcours…'}</p>}
+      {error && <p className="blg-inline-error" role="alert">{error} <button className="blg-text-button" onClick={() => setAttempt(value => value + 1)}>Réessayer</button></p>}
+      {tunnel === 'masterclass' && visualReport && <VisualJourneyView report={visualReport} />}
+      {tunnel === 'quiz' && report && <><p className="journey-freshness">Dernière lecture : {formatDate(report.observedAt, true)}</p><JourneyReportView report={report} /></>}
     </>}
   </div>;
 }

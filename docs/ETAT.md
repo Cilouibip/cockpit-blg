@@ -1,5 +1,16 @@
 # État technique du cockpit
 
+## 18 septembre 2026 — livraison coordonnée du parcours et des actualisations
+
+Le parcours validé présente cinq étapes cliquables, les taux sous les flèches, puis un seul détail à la fois : page, inscription, vidéo ou rendez-vous. Le filtre publicitaire et les dates restent simples ; aucun choix de version technique n'est imposé. Les confirmations Wix et les réservations Notion existantes sont raccordées sans modifier les sources ni additionner les événements Meta aux rendez-vous.
+
+Résultats utilise le même calcul des nouveaux leads que le détail par publicité. Les inscriptions répétées et les personnes déjà connues restent distinctes ; première origine et identités réciproques existantes sont conservées. Une origine absente n'est pas inventée. Les premiers accompagnements ne sont pas remplacés par un décompte de ventes : leur attribution par publicité reste en attente de relation suffisante.
+
+Les actualisations reprennent leurs points enregistrés, poursuivent les autres sources après une panne et distinguent attente et fin réelle. La migration additive013, relue et installée, permet de lire les fiches Notion modifiées et de vérifier un inventaire léger des suppressions/dépendances. Les fiches inchangées et l'historique restent conservés. Le dernier relevé valide reste lisible ; un relevé ancien ne prouve pas un zéro récent.
+
+Validation locale intégrée : suite432tests, typage et build ; neuf tests PostgreSQL (dont12050fiches, reprise, suppression, dépendances et permissions) ; navigateur320/390/768/1024/1440 et revue visuelle. Les contre-relectures ont validé les faux zéros, l'origine, les différences de périmètre et la reprise des calculs longs. Le lecteur reprend le même calcul PostHog sur plusieurs appels courts ; la continuation privée est chiffrée, liée aux filtres et expire. Les preuves finales de publication, récupération réelle des sources et cadence restent suivies séparément. GitHub peut retarder ses déclenchements : un passage manuel réussi ne valide pas l'automatique.
+
+
 ## 18 septembre 2026 — rétablir la lecture des parcours
 
 Incident reproduit sur la route publiée : la lecture synchrone PostHog expire avec une erreur amont, y compris pour une requête sans lecture de table. Les mêmes agrégats aboutissent par la voie asynchrone documentée ; aucune panne globale du service ni absence de collecte n’est déduite.

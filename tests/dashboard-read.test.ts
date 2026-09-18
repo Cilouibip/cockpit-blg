@@ -64,3 +64,13 @@ test('les lectures publiées d’une période partent ensemble au lieu de s’at
   assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
  } finally {for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });
+
+test('une lecture acquisition interrompue conserve les autres métriques et ne réactive pas les anciens leads',async()=>{
+ const before=process.env.WIX_SITE_ID;process.env.WIX_SITE_ID='synthetic-site';
+ try{
+  const {db}=stub();db.select=async()=>{throw Error('synthetic read failure');};
+  const result=await dashboard(db,filters,'live');
+  assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);assert.equal(result.metrics.find(m=>m.id==='leads')?.value,null);
+  assert.ok(result.notices.some(n=>n.includes('autres sources restent affichées')));
+ }finally{if(before===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=before;}
+});

@@ -1,19 +1,41 @@
 import type { ConnectionsResponse, Connection } from './ui-contract';
 import { getConfig } from './config';
-import { database } from './db';
-type SyncRun=Record<string,unknown>;
-export function latestConnectionRun(runs:SyncRun[],source:string,streams:string[]):SyncRun|undefined {
-  return runs.filter(run=>run.source===source&&streams.includes(String(run.stream_key))).sort((a,b)=>String(b.started_at).localeCompare(String(a.started_at)))[0];
+import { database, type Database } from './db';
+import { jobScope, type SyncJob } from './sync-jobs';
+import {connectionFreshness, type SyncRun} from './sync-freshness';
+export {latestConnectionRun,connectionFreshness} from './sync-freshness';
+const connectionJobs:{job:SyncJob;source:string;stream:string}[]=[
+  {job:'meta_ads',source:'meta',stream:'ad_daily'},
+  {job:'notion',source:'notion',stream:'prospects_business'},
+  {job:'wix',source:'wix',stream:'payments_analytics'},
+  {job:'forms',source:'wix',stream:'lead_entries_forms'},
+  {job:'quiz_entries',source:'wix',stream:'lead_entries_quiz'},
+  {job:'commerce',source:'notion',stream:'commerce_declared_snapshot'},
+  {job:'quiz',source:'posthog',stream:'quiz_observations'},
+  {job:'masterclass',source:'posthog',stream:'masterclass_observations'},
+];
+export async function readConnectionRuns(db:Database,env:NodeJS.ProcessEnv=process.env):Promise<SyncRun[]> {
+  const results=await Promise.allSettled(connectionJobs.map(async definition=>{
+    const scope=jobScope(definition.job,env);if(!scope)return [];
+    const eq={source:definition.source,source_namespace:scope.namespace,stream_key:definition.stream,query_profile_key:scope.profile};
+    const columns=['source','stream_key','status','started_at','finished_at','period_from','period_to','pagination_complete','rows_read','error_code'];
+    const [attempts,published]=await Promise.all([
+      db.select('sync_runs',{eq,columns,order:'started_at',descending:true,limit:1}),
+      db.select('sync_runs',{eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},columns,order:'finished_at',descending:true,limit:1}),
+    ]);
+    return [...attempts,...published];
+  }));
+  return results.flatMap(result=>result.status==='fulfilled'?result.value:[]);
 }
 export async function connections():Promise<ConnectionsResponse> {
   const config=getConfig();let available=false;let runs:Record<string,unknown>[]=[];let firstParty:{eventAt:string|null;leadAt:string|null}={eventAt:null,leadAt:null};
-  try {const db=database();await db.probe();available=true;const state=await db.rpc<{runs:Record<string,unknown>[];firstParty:typeof firstParty}>('cockpit_connection_status',{});firstParty=state.firstParty;try{runs=await db.select('sync_runs',{order:'started_at',descending:true,limit:1000});}catch{runs=state.runs;}}catch{/* only sanitized state is exposed */}
+  try {const db=database();await db.probe();available=true;const state=await db.rpc<{runs:Record<string,unknown>[];firstParty:typeof firstParty}>('cockpit_connection_status',{});firstParty=state.firstParty;runs=await readConnectionRuns(db);}catch{/* Never replace current-profile data with an unrelated historical stream. */}
   const connection=(id:string,name:string,streams:string[],configured:boolean,limits:string[],syncable=false,source=id):Connection=>{
-    const last=latestConnectionRun(runs,source,streams);const complete=last?.status==='complete';
+    const freshness=connectionFreshness(runs,source,streams),last=freshness.last;const complete=last?.status==='complete';
     const demo=config.mode==='demo';
-    return {id,name,status:demo?'demo':!configured?'missing':last?.status==='failed'?'error':'partial',
-      summary:demo?'Données synthétiques de test.':!configured?'Connexion serveur à renseigner.':!available?'Accès fourni ; base du cockpit à installer.':!last?'Accès configuré ; aucun import de ce flux effectué.':complete?'Dernier import de ce flux enregistré ; accès actuel non retesté.':last.status==='empty'?'Lecture de ce flux réussie, aucune ligne reçue ; accès actuel non retesté.':last.status==='partial'||last.status==='running'?'Lecture de ce flux en cours ou partielle ; reprise enregistrée.':'Dernier import de ce flux en échec.',
-      lastSyncAt:last?.finished_at?String(last.finished_at):null,coverage:last?(id==='notion'?`Miroir commercial : ${last.rows_read||0} lignes lues · ${complete?'lecture complète du périmètre autorisé':'lecture non complète'}. Historique observé depuis le premier import.`:`Période interrogée : ${new Date(String(last.period_from)).toLocaleDateString('fr-FR',{timeZone:'Europe/Paris'})} au ${new Date(String(last.period_to)).toLocaleDateString('fr-FR',{timeZone:'Europe/Paris'})} (fin exclue) · ${last.rows_read||0} lignes lues.`):'Aucune couverture de données établie.',limits,canSync:!demo&&configured&&available&&syncable};
+    return {id,name,status:demo?'demo':!configured?'missing':freshness.failed?'error':freshness.fresh&&!freshness.running?'connected':'partial',
+      summary:demo?'Données synthétiques de test.':!configured?'Connexion à renseigner.':!available?'La base du cockpit ne répond pas.':!last?'La date de la dernière mise à jour est indisponible.':freshness.failed?'La dernière tentative a échoué. Les données déjà enregistrées restent disponibles.':freshness.running?'Une mise à jour est en cours. Les données précédentes restent affichées.':!freshness.allPublished?'Une partie des données attend encore sa première mise à jour complète.':freshness.fresh?'Les données ont été actualisées dans la dernière heure.':'Les données ont plus d’une heure. Une nouvelle mise à jour est nécessaire.',
+      lastSyncAt:freshness.lastSyncAt,lastAttemptAt:freshness.lastAttemptAt,dataAsOf:freshness.dataAsOf,coverage:last?(id==='notion'?`${last.rows_read||0} fiches parcourues pendant la dernière tentative · ${complete?'lecture complète':'lecture à poursuivre'}.`:`Dernière tentative : ${last.rows_read||0} lignes lues.`):'Aucune lecture complète disponible.',limits,canSync:!demo&&configured&&available&&syncable};
   };
   return {mode:config.mode,connections:[
     {id:'database',name:'Base du cockpit',status:config.mode==='demo'?'demo':available?'connected':'missing',summary:available?(config.mode==='demo'?'PostgreSQL local, données synthétiques.':'Tables accessibles dans Supabase.'):'Migration Supabase à installer.',lastSyncAt:null,coverage:available?'Persistance disponible.':'Aucune donnée métier chargée.',limits:config.mode==='demo'?['Ce mode local est interdit sur Vercel.']:['Les données restent dans le projet Supabase du cockpit.'],canSync:false},
@@ -23,7 +45,7 @@ export async function connections():Promise<ConnectionsResponse> {
     connection('wix_inscriptions','Wix · inscriptions (quiz et masterclass)',['lead_entries_forms','lead_entries_quiz'],!!process.env.WIX_API_KEY&&!!process.env.WIX_LEAD_ENTRY_CONFIG,['Inscriptions lues dans les formulaires et la collection du quiz ; une inscription non lue n’est pas une absence.','La clé serveur doit pouvoir lire les formulaires et le contenu du site (CMS) ; sinon l’import supervisé reste la voie.'],true,'wix'),
     connection('notion_commerce','Notion · ventes payées',['commerce_declared_snapshot'],!!process.env.NOTION_TOKEN&&!!process.env.NOTION_COMMERCE_CONFIG,['Paiements, échéanciers et parcours lus en entier ; une vente = premier paiement admissible, trois mensualités = une vente.','Reprise au point enregistré ; la dernière publication reste affichée pendant une lecture.'],true,'notion'),
     connection('posthog_quiz','PostHog · Quiz',['quiz_observations'],!!process.env.POSTHOG_PERSONAL_API_KEY,['Étapes et visiteurs du quiz mesurés pour la période interrogée.','Données agrégées ; inscriptions serveur et rattachement aux ventes distincts.'],false,'posthog'),
-    connection('posthog_masterclass','PostHog · Masterclass',['masterclass_observations'],!!process.env.POSTHOG_PERSONAL_API_KEY,['Rapports Masterclass séparés du quiz.','Le lancement de la nouvelle page et son adresse restent à raccorder.'],false,'posthog'),
+    connection('posthog_masterclass','PostHog · Masterclass',['masterclass_observations'],!!process.env.POSTHOG_PERSONAL_API_KEY,['Rapports de la masterclass26, séparés du quiz.','Une lecture interrompue conserve le dernier rapport complet.'],false,'posthog'),
     firstParty.leadAt?{id:'first_party',name:'Quiz et masterclass',status:config.mode==='demo'?'demo':'partial',summary:'Inscriptions serveur reçues. Couverture de la collecte à valider.',lastSyncAt:firstParty.leadAt,coverage:'Premier raccord observé ; un enregistrement ne prouve pas une couverture exhaustive.',limits:['Observations navigateur et inscriptions serveur distinctes.','Vérifier le parcours réel de bout en bout après installation.'],canSync:false}:connection('first_party','Quiz et masterclass',[],false,['Snippets préparés à transmettre aux responsables des pages.','Installation et premier enregistrement serveur signé à vérifier après déploiement.']),
   ]};
 }

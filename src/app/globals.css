@@ -1,4 +1,5 @@
 @import url('../../public/kit/atelier.css') layer(kit);
+@import url('../components/journey-shell.css');
 @import url('../../public/kit/navigation.css') layer(kit);
 @import url('../../public/kit/lumiere.css') layer(kit);
 @import url('../../public/kit/formulaires.css') layer(kit);

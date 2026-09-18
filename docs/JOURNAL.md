@@ -286,3 +286,14 @@ L’incident utilisateur est reproduit en lecture seule sur l’application publ
 L’interface distingue échec et absence de mesure, garde la dernière réussite du même filtre en la datant explicitement, et retire les panneaux vides lors d’un premier échec. Validation : 345 tests unitaires, TypeScript, build, test navigateur synthétique et relecture indépendante. Les lectures réelles réussissent localement ; publication et contrôles de l’application en ligne restent des preuves séparées dans le journal privé.
 
 La première publication rétablit les agrégats et la courbe dans l’écran de production. La recette révèle aussi une interruption réseau ponctuelle lors d’un changement de filtre ; le même filtre aboutit lors de la relecture. Complément : une reprise automatique par requête sur interruption réseau ou erreur serveur amont, avec le même délai total borné et sans reprise des refus d’accès. Deux tests couvrent récupération et panne persistante. Ce complément ne change ni mesures ni filtres.
+
+
+## 18 septembre 2026 — intégration du rendu validé et des corrections coordonnées
+
+Deux tâches isolées livrent actualisation/reprise et raccord Résultats ; le coordinateur intègre et relit les contrats partagés. Le parcours cliquable validé conserve le kit graphique, les taux et les filtres, sans imposer les versions de page ni exposer le détail technique dans la vue principale.
+
+Corrections intégrées : statut HTTP du tick compatible avec le drainage ; erreurs de source isolées ; inscriptions confirmées conservées quand la mesure navigateur ou le miroir commercial manque ; ancienne lecture distinguée d'un zéro ; première origine commune au formulaire et à la navigation ; rendez-vous datés au jour acceptés sans inventer un horaire. Un test identifié n'exclut pas un retour réel de la même personne.
+
+Migration013 appliquée après relecture, PostgreSQL local et vérification du projet cible. Volumes avant/après inchangés, exécution RPC privée maintenue, aucun droit public ajouté. La reprise Notion lit la source et écrit uniquement la copie du cockpit. Les tests locaux ne constituent pas encore une preuve de cadence automatique ni de production. Les contrôles réels et éventuels blocages sont consignés dans le registre privé courant.
+
+Complément de recette : une requête réelle PostHog de63secondes dépassait le budget de lecture. Le helper utilise un identifiant stable et récupère l'accusé perdu, puis reprend par GET avec un jeton de continuation chiffré et lié au périmètre. API202 pendant le calcul ; écran en attente bornée120s, inscriptions/RDV conservés, annulation au changement de filtre. Tests de reprise63s, projet/SQL/identifiant incorrects, expiration et altération du jeton, succès partiel et aucun second POST.432tests, typecheck et build réussis ; relecture indépendante sans finding bloquant. Publication et cadence réelle restent à constater.

@@ -17,7 +17,7 @@ const versions=async()=>(await db.query('SELECT version FROM cockpit_migrations 
 async function save(destination:'quiz'|'masterclass',env?:{BLG_MASTERCLASS_URL?:string}){const revision=makeRevision({placement:'meta_ad',destination,campaign:'SQL test 012',label:'Synthétique '+randomUUID().slice(0,8)},undefined,1,undefined,undefined,env);await db.query('SELECT save_tracked_link($1,$2,0)',[revision.link_id,JSON.stringify(revision)]);return revision;}
 
 before(async()=>{await admin.connect();await admin.query("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $$");await admin.query(`CREATE DATABASE ${name}`);db=new Client({connectionString:target.href});await db.connect();
- for(const file of migrations.filter(f=>!f.startsWith('012_')))await db.query(sql('supabase/migrations/'+file));});
+ for(const file of migrations.filter(f=>Number(f.split('_')[0])<12))await db.query(sql('supabase/migrations/'+file));});
 after(async()=>{await db?.end();await admin.query(`DROP DATABASE IF EXISTS ${name}`);await admin.end();});
 
 test('état avant : versions 1–11, règle historique à deux adresses ; un lien /masterclass26 est refusé',async()=>{

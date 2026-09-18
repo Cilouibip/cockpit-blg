@@ -27,6 +27,8 @@ import { ingestBrowser, ingestLead } from '@/lib/ingest';
 import { buildAdFunnel } from '@/lib/ad-funnel';
 import { readVisitsByOrigin, readVisitorCohort } from '@/lib/ad-arrivals';
 import { journeyReport } from '@/lib/journey-report';
+import { readVisualJourneyReport } from '@/connectors/visual-journey-analytics';
+import {openJourneyResume,sealJourneyResume,type VisualJourneyContinuation} from '@/lib/visual-journey-resume';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
@@ -54,7 +56,7 @@ async function handle(request:Request){
   if(route.startsWith('jobs/')&&method==='GET'){
    const supplied=request.headers.get('authorization')||'',expected='Bearer '+config.cronSecret;
    if(config.cronSecret.length<32||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError('Accès refusé.',401,'unauthorized');
-   if(route==='jobs/tick'){const result=await tickSyncJobs();return json(result,syncHttpStatus(result.status));}
+   if(route==='jobs/tick'){const result=await tickSyncJobs();return json(result,200);} // Business status is consumed by the drain loop; API failures still use the error handler.
    const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);const result=await syncSource(source);return json(result,syncHttpStatus(result.status));
   }
   requireUser(request,config);
@@ -79,6 +81,20 @@ async function handle(request:Request){
    await rateLimit(config,'report','posthog',24,60);
    const result=await requestPostHogReport(filters,type);
    return json(result,{ready:200,waiting:202,failed:502,unsupported:422}[result.state]);
+  }
+  if(route==='journey-visual'&&method==='GET'){
+   const filters=parseFilters(url);
+   if(config.mode==='demo')throw new AppError('Les parcours détaillés se lisent dans l’espace connecté.',409,'demo_mode');
+   z.literal('masterclass').parse(url.searchParams.get('tunnel')||'masterclass');
+   const includeTests=z.enum(['true','false']).parse(url.searchParams.get('includeTests')||'false')==='true';
+   const scope={host:process.env.POSTHOG_HOST,projectId:process.env.POSTHOG_PROJECT_ID,credential:process.env.POSTHOG_PERSONAL_API_KEY,site:process.env.WIX_SITE_ID,from:filters.from,to:filters.to,source:filters.source,campaign:filters.campaign,includeTests};
+   const resumeToken=url.searchParams.get('resume');
+   const previous=resumeToken?openJourneyResume(resumeToken,scope,config.sessionSecret):null;
+   await rateLimit(config,'journey','shared',30,60);
+   let continuation:VisualJourneyContinuation|null=null;
+   const report=await readVisualJourneyReport(database(),{host:scope.host,projectId:scope.projectId,personalApiKey:scope.credential,wixSiteId:scope.site,from:filters.from,to:filters.to,source:filters.source,campaign:filters.campaign,includeTests,resumeBrowser:previous?.queries,onBrowserContinuation:value=>{continuation=value;}});
+   if(continuation)report.loading={resume:sealJourneyResume({queries:continuation,expiresAt:previous?.expiresAt??Date.now()+300000},scope,config.sessionSecret),retryAfterMs:5000};
+   return json(report,report.loading?202:200);
   }
   if(route==='journey'&&method==='GET'){
    const filters=parseFilters(url);

@@ -1,0 +1,15 @@
+/* Coque du parcours validé : primitives de champs Atelier A, sans altérer le kit. */
+#atelier-a .journey-filter-bar { padding-bottom:23px; margin-bottom:20px; border-bottom:1px solid var(--a-line); }
+#atelier-a .journey-filter-pickers { display:flex; flex-wrap:wrap; gap:12px; max-width:640px; }
+#atelier-a .journey-filter-pickers > .a-field { flex:1; min-width:190px; }
+#atelier-a .journey-custom-period { display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; max-width:640px; margin-top:16px; }
+#atelier-a .journey-custom-period .a-field { flex:1; min-width:160px; }
+#atelier-a .journey-custom-period > p { flex-basis:100%; color:#a23b47; font-size:13px; }
+#atelier-a .blg-app[data-view="journey"] .blg-intro h1 { font-size:29px; font-weight:600; letter-spacing:-.045em; }
+#atelier-a .blg-app[data-view="journey"] .blg-intro > div > .blg-eyebrow { display:none; }
+#atelier-a .blg-app[data-view="journey"] .blg-intro { padding-bottom:0; margin-bottom:23px; }
+@media(max-width:570px) {
+  #atelier-a .journey-filter-pickers > .a-field { flex-basis:100%; min-width:0; }
+  #atelier-a .journey-filter-pickers select { font-size:16px; }
+  #atelier-a .blg-app[data-view="journey"] .blg-intro h1 { font-size:25px; }
+}
