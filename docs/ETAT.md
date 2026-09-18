@@ -1,3 +1,9 @@
+# Rendez-vous visibles — 18 septembre 2026
+
+Complément demandé par Mehdi : même carte Résultats pour réservés et réalisés, détail privé des personnes, date de réservation, date du call, origine et coût publicitaire moyen. Le détail Parcours utilise exactement les personnes de son compteur ; les coordonnées personnelles ne sont pas ajoutées.
+
+Code et tests prêts : 449 tests, typage et compilation réussis. Lecture de la copie réelle confirme que les listes concordent avec les compteurs. La colonne publicitaire RDV réservés utilise maintenant la date de réservation déjà calculée, y compris pour un créneau futur. Coût non calculé si les réservations ou leur attribution attendent une lecture complète. Aucun nouveau tracking, aucune modification des sources. Recette navigateur passée en 1440, 390 et 320 px : liste des personnes, dates, onglets, filtres, clavier et absence de débordement. Publication et recette réelle restent suivies dans le journal de coordination.
+
 # État technique du cockpit
 
 ## 18 septembre 2026 — livraison coordonnée du parcours et des actualisations

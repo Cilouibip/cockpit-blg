@@ -100,6 +100,21 @@ export function observationOrigin(o:Pick<Observation,'origin'|'firstTouch'>):AdF
 export function originKeyFor(o:{adId?:string|null;linkId?:string|null;campaignId?:string|null;source?:string|null;medium?:string|null}):string {
  return o.adId?'ad:'+o.adId:o.linkId?'link:'+o.linkId:o.campaignId?'campaign:'+o.campaignId:['paid','cpc','ppc','paid_social','paid-search'].includes(o.medium??'')?PAID_UNATTRIBUTED:o.source||['organic','social','email','referral','organic_social','organic_video'].includes(o.medium??'')?ORGANIC:UNATTRIBUTED;
 }
+/** Shared classification used by every server projection that follows the Results filters. */
+export function originTrafficSource(origin:AdFunnelOrigin|null,linkMedium:string|null=null):'paid'|'organic'|'unknown' {
+ const medium=origin?.medium??linkMedium;
+ if(origin?.adId||origin?.campaignId||origin?.adsetId||['paid','cpc','ppc','paid_social','paid-search'].includes(medium??''))return 'paid';
+ if(['organic','social','email','referral','organic_social','organic_video'].includes(medium??'')||origin?.source)return 'organic';
+ return 'unknown';
+}
+export function originMatchesSelection(origin:AdFunnelOrigin|null,selection:{source:SourceFilter;campaign:string},context:{linkCampaign?:string|null;linkMedium?:string|null;adCampaignId?:string|null;adCreativeId?:string|null}={}):boolean {
+ if(selection.source!=='all'&&originTrafficSource(origin,context.linkMedium??null)!==selection.source)return false;
+ if(selection.campaign.startsWith('link:'))return !!origin?.linkId&&context.linkCampaign===selection.campaign.slice(5);
+ if(selection.campaign.startsWith('meta-ad:'))return origin?.adId===selection.campaign.slice(8);
+ if(selection.campaign.startsWith('meta:'))return (origin?.campaignId??context.adCampaignId)===selection.campaign.slice(5);
+ if(selection.campaign.startsWith('meta-creative:'))return context.adCreativeId===selection.campaign.slice(14);
+ return true;
+}
 const originKey=(o:AdFunnelOrigin)=>originKeyFor(o);
 /** Horodatage de première origine borné : jamais après l'inscription qui le porte, jamais avant la première mesure possible. */
 function firstTouchInstant(raw:unknown,occurredAt:string):string {
@@ -218,20 +233,10 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
 	 if(!commerceAvailable)notices.push(commerceReason!);
  // 6. Lignes.
  const rows=new Map<string,AdFunnelRow>();
- const originSource=(origin:AdFunnelOrigin|null):'paid'|'organic'|'unknown'=>{
-  const medium=origin?.medium??(origin?.linkId?revisionMedium.get(origin.linkId):null);
-  if(origin?.adId||origin?.campaignId||origin?.adsetId||['paid','cpc','ppc','paid_social','paid-search'].includes(medium??''))return 'paid';
-  if(['organic','social','email','referral','organic_social','organic_video'].includes(medium??'')||origin?.source)return 'organic';
-  return 'unknown';
- };
+ const originSource=(origin:AdFunnelOrigin|null)=>originTrafficSource(origin,origin?.linkId?revisionMedium.get(origin.linkId)??null:null);
  const matchingOrigin=(origin:AdFunnelOrigin|null)=>{
-  if(sourceFilter!=='all'&&originSource(origin)!==sourceFilter)return false;
-  if(campaignFilter.startsWith('link:'))return !!origin?.linkId&&revisionById.get(origin.linkId)?.campaign===campaignFilter.slice(5);
   const ad=origin?.adId?adByExternal.get(origin.adId):undefined;
-  if(campaignFilter.startsWith('meta-ad:'))return origin?.adId===campaignFilter.slice(8);
-  if(campaignFilter.startsWith('meta:'))return (origin?.campaignId??ad?.campaign_id)===campaignFilter.slice(5);
-  if(campaignFilter.startsWith('meta-creative:'))return ad?.creative_id===campaignFilter.slice(14);
-  return true;
+  return originMatchesSelection(origin,{source:sourceFilter,campaign:campaignFilter},{linkCampaign:origin?.linkId?revisionById.get(origin.linkId)?.campaign:null,linkMedium:origin?.linkId?revisionMedium.get(origin.linkId)??null:null,adCampaignId:ad?.campaign_id?String(ad.campaign_id):null,adCreativeId:ad?.creative_id?String(ad.creative_id):null});
  };
  const rowFor=(key:string,origin:AdFunnelOrigin|null)=>{
   let row=rows.get(key);

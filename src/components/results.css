@@ -21,6 +21,29 @@
 #atelier-a .results-error { color:#a23b47; font-size:14px; margin:12px 0 0; }
 #atelier-a .results-pending { font-size:13px; color:var(--a-muted); margin:12px 0 0; }
 #atelier-a .results-kpis { overflow:hidden; }
+#atelier-a .results-appointment-counts { display:flex; gap:24px; margin-top:12px; }
+#atelier-a .results-appointment-counts > div { display:grid; gap:0; }
+#atelier-a .results-appointment-counts strong { font-size:32px; line-height:1.2; font-weight:600; letter-spacing:-1px; }
+#atelier-a .results-appointment-counts span { font-size:12px; color:var(--a-muted); }
+#atelier-a .booking-views { gap:8px; }
+#atelier-a .booking-views strong { margin-left:8px; }
+#atelier-a .booking-period-help { color:var(--a-muted); line-height:1.6; font-size:14px; }
+#atelier-a .booking-cost { display:grid; gap:7px; padding:20px 0; border-block:1px solid var(--a-line); margin:24px 0 8px; }
+#atelier-a .booking-cost > span { font-size:14px; }
+#atelier-a .booking-cost > strong { font-size:30px; line-height:1.2; }
+#atelier-a .booking-cost small { font-size:12px; color:var(--a-muted); line-height:1.6; }
+#atelier-a .booking-cost details { margin-top:8px; font-size:13px; }
+#atelier-a .booking-cost ul { list-style:none; padding:0; }
+#atelier-a .booking-cost li { display:flex; gap:16px; justify-content:space-between; padding:8px 0; }
+#atelier-a .booking-cost li b { white-space:nowrap; }
+#atelier-a .booking-results-list { list-style:none; padding:0; margin:0 0 16px; }
+#atelier-a .booking-results-list li { padding:22px 0; border-bottom:1px solid var(--a-line); overflow-wrap:anywhere; }
+#atelier-a .booking-results-person { display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:space-between; align-items:center; }
+#atelier-a .booking-results-person > strong { font-size:17px; }
+#atelier-a .booking-results-person > span { font-size:12px; padding:3px 8px; border-radius:6px; background:var(--a-wash,#f6f7fa); }
+#atelier-a .booking-results-list p { font-size:13px; color:var(--a-muted); margin:7px 0 14px; }
+#atelier-a .booking-results-dates { display:grid; gap:6px; font-size:13px; }
+#atelier-a .booking-results-dates b { font-weight:500; }
 #atelier-a .results-kpis .a-d-cards { grid-template-columns:repeat(4,minmax(0,1fr)); border-top:0; }
 #atelier-a .results-kpis .a-d-card { padding:20px 24px 12px; min-height:166px; }
 #atelier-a .results-kpis .a-d-card:nth-child(4n+1) { border-left:0; }

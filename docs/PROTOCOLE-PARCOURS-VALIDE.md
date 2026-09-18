@@ -35,7 +35,7 @@ Décision directe de Mehdi, 18 septembre 2026 : « Tu lances les agents comme ç
 - Garder la même population dans chaque taux et identifier la relation réellement prouvée. Le KPI réservation/inscrits existant ne devient pas silencieusement réservation/spectateurs : le taux sous une flèche est local à ce passage.
 - Les inscriptions sans suivi navigateur existent tout de même. Les compter dans les totaux métier appropriés et exposer les limites de raccordement sans fabriquer leur navigation.
 - Dates Europe/Paris, filtres et exclusion des essais explicites identiques partout. Aucun filtrage des personnes par nom/email deviné.
-- Identifiants pseudonymes et rapprochements restent côté serveur ; aucun email/nom ni export CRM dans les réponses publiques, journaux ou tests.
+- Identifiants pseudonymes et rapprochements restent côté serveur ; aucun email/nom ni export CRM dans les réponses publiques, journaux ou tests. **Complément explicite du 18/09 :** Mehdi demande les personnes derrière le compteur RDV. Leur nom et les dates de réservation/rendez-vous sont autorisés dans le détail de l’espace privé authentifié, pour la même sélection ; aucun email ou téléphone ajouté, aucun changement de collecte. Une personne par entrée du compteur, même si plusieurs rendez-vous sont liés.
 - Aucun nouveau tracking ni modification de source. Réutiliser les lecteurs et miroirs existants ; constat d'une source trop ancienne reste explicite.
 
 ## Répartition et validation

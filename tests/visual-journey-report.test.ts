@@ -3,6 +3,27 @@ import assert from 'node:assert/strict';
 import { buildVisualJourneyReport } from '../src/lib/visual-journey-report';
 import { AD_A, AD_B, visualJourneyFixture } from './fixtures/visual-journey';
 
+test('le détail des réservants contient exactement les personnes du compteur et leurs dates futures', () => {
+  const input = visualJourneyFixture();
+  const slot = { ...input.appointments![0], displayName: 'Camille Exemple', bookedAt: '2026-09-18T14:57:00Z', scheduledAt: '2026-09-21T17:00:00Z' };
+  input.appointments = [slot, slot, { ...slot, id: 'cancelled', status: 'cancelled' }, { ...slot, id: 'other-person', personId: 'someone-else', displayName: 'Autre Exemple' }];
+  const result = buildVisualJourneyReport(input);
+  assert.equal(result.booking.people?.length, result.booking.booked.count);
+  assert.deepEqual(result.booking.people, [{ name: 'Camille Exemple', originLabel: 'Publicité A', appointments: [{ id: slot.id, bookedAt: slot.bookedAt, scheduledAt: slot.scheduledAt, status: slot.status }] }]);
+  input.campaign = `meta-ad:${AD_B}`;
+  assert.deepEqual(buildVisualJourneyReport(input).booking.people, []);
+  input.appointments = null;
+  assert.deepEqual(buildVisualJourneyReport(input).booking.people, []);
+});
+
+test('le détail ne devine ni identité ni date et exclut les réservations explicitement test', () => {
+  const input = visualJourneyFixture();
+  assert.equal(buildVisualJourneyReport(input).booking.people?.[0].name, 'Nom non renseigné');
+  assert.equal(buildVisualJourneyReport(input).booking.people?.[0].appointments[0].scheduledAt, null);
+  input.appointments![0].explicitTest = true;
+  assert.deepEqual(buildVisualJourneyReport(input).booking.people, []);
+});
+
 test('le parcours compte des personnes, conserve les retours et les confirmations Wix sans navigateur', () => {
   const report = buildVisualJourneyReport(visualJourneyFixture());
   assert.deepEqual(report.stages.map(stage => [stage.id, stage.count]), [

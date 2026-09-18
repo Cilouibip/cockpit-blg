@@ -71,6 +71,18 @@ test('video detail shows measured percentage and count on its starting populatio
   assert.doesNotMatch(html, /<table|Dernière position/);
 });
 
+test('le détail réservation affiche la personne, son origine et ses deux dates sans tableau', () => {
+  const report = fixture();
+  report.booking.people = [{ name: 'Camille Exemple', originLabel: 'Annonce synthétique', appointments: [{ id: 'slot', bookedAt: '2026-09-18T14:57:00Z', scheduledAt: '2026-09-21T17:00:00Z', status: 'scheduled' }] }];
+  const html = renderToStaticMarkup(createElement(BookingDetail, { report }));
+  assert.match(html, /Qui a réservé/);
+  assert.match(html, /Camille Exemple/);
+  assert.match(html, /Annonce synthétique/);
+  assert.match(html, /21 sept\. 2026, 19:00/);
+  assert.match(html, /Réservé le 18 sept\. 2026, 16:57/);
+  assert.doesNotMatch(html, /<table|person_id|email/);
+});
+
 test('partial data keeps good values and groups the missing explanation', () => {
   const report = fixture();
   report.stages[1] = { ...report.stages[1], count: null, availability: { available: false, reason: 'Ouverture non mesurée sur cette période.' } };
