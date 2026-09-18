@@ -305,3 +305,5 @@ Demande directe : réservés et réalisés dans une même carte Résultats ; nom
 Validation : 449 tests unitaires, route authentifiée sans cache partagé, typage et compilation ; lecture réelle en mode lecture seule avec correspondance nombre de lignes et compteurs. Recette navigateur et publication vérifiées séparément par le coordinateur. Aucune donnée nominative réelle ni secret ajouté au dépôt.
 
 Recette visuelle du complément RDV : ordinateur/mobile, navigation clavier, listes exactes, filtre sans anciennes personnes, créneau futur conservé dans la colonne réservée ; aucune erreur navigateur ni écriture source.
+
+Complément après recette réelle : une annulation Notion explicite dont le créneau a été supprimé était affichée comme non classée dans le détail privé. Le libellé restitue maintenant Annulé/Reporté dans ce seul cas ; compteur historique, anciens créneaux et règles métier conservés. Trois régressions ciblées ajoutées.

@@ -28,13 +28,21 @@ export function checkpointParts(serialized: string, maxBytes = MAX_PART_BYTES): 
   if (!Number.isInteger(maxBytes) || maxBytes < 64) throw new Error('INVALID_CHECKPOINT_LIMIT');
   const result: string[] = [];
   let part = '';
+  const envelopeBytes = Buffer.byteLength(JSON.stringify({ part: '' }), 'utf8');
+  let partBytes = envelopeBytes;
   for (const point of serialized) {
-    const candidate = part + point;
-    if (part && Buffer.byteLength(JSON.stringify({ part: candidate }), 'utf8') > maxBytes) {
+    // JSON escapes each code point independently. Counting only the addition keeps
+    // the same persisted boundaries without serializing the growing prefix twice.
+    const pointBytes = Buffer.byteLength(JSON.stringify(point), 'utf8') - 2;
+    if (envelopeBytes + pointBytes > maxBytes) throw new Error('CHECKPOINT_PART_TOO_LARGE');
+    if (part && partBytes + pointBytes > maxBytes) {
       result.push(part);
-      part = point;
-    } else part = candidate;
-    if (Buffer.byteLength(JSON.stringify({ part }), 'utf8') > maxBytes) throw new Error('CHECKPOINT_PART_TOO_LARGE');
+      if (result.length >= MAX_PARTS) throw new Error('CHECKPOINT_PART_LIMIT');
+      part = '';
+      partBytes = envelopeBytes;
+    }
+    part += point;
+    partBytes += pointBytes;
   }
   if (part) result.push(part);
   if (!result.length || result.length > MAX_PARTS) throw new Error('CHECKPOINT_PART_LIMIT');
