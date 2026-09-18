@@ -22,7 +22,7 @@ import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
 export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce';
 /** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle. */
-const definitions:{id:SyncJob;source:string;stream:string;cadence:number;resumable?:boolean}[]=[
+const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean}[]=[
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
  {id:'meta',source:'meta',stream:'meta_account_daily',cadence:3600000},
  {id:'wix',source:'wix',stream:'payments_analytics',cadence:3600000},
@@ -35,7 +35,7 @@ const definitions:{id:SyncJob;source:string;stream:string;cadence:number;resumab
  {id:'forms',source:'wix',stream:'lead_entries_forms',cadence:3600000,resumable:true},
  {id:'quiz_entries',source:'wix',stream:'lead_entries_quiz',cadence:3600000,resumable:true},
  {id:'client_history',source:'notion',stream:'lead_entries_client_history',cadence:3600000,resumable:true},
- {id:'commerce',source:'notion',stream:'commerce_declared_snapshot',cadence:3600000,resumable:true},
+ {id:'commerce',source:'notion',stream:'commerce_declared_snapshot',workStream:'commerce_reader_checkpoint',cadence:3600000,resumable:true},
 ];
 const RESUMABLE=new Set<SyncJob>(definitions.filter(d=>d.resumable).map(d=>d.id));
 const MAX_CHUNKS=4;
@@ -47,19 +47,24 @@ const safeCode=(value:unknown)=>typeof value==='string'&&/^[A-Za-z_][A-Za-z0-9_ 
 export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):StreamState[]{
  return definitions.filter(d=>enabled.includes(d.id)).map(d=>{
   const rows=runs.filter(r=>r.source===d.source&&r.stream_key===d.stream).sort((a,b)=>touchedAt(b)-touchedAt(a));
+  // A saved Commerce page lives in another stream. It is work evidence only:
+  // never a published snapshot, last success, or data-freshness observation.
+  const work=d.workStream?runs.filter(r=>r.source===d.source&&r.stream_key===d.workStream):[];
+  const attempts=[...rows,...work].sort((a,b)=>touchedAt(b)-touchedAt(a));
+  const latestAttempt=attempts[0];
   const latest=rows[0],success=rows.find(r=>['complete','empty'].includes(String(r.status))&&r.pagination_complete!==false);
   const lastSuccessAt=success?String(success.finished_at??success.started_at):null;
   // Publication time and source coverage are different for a long Notion scan.
   const bounds=success?[success.started_at,success.finished_at,d.id==='notion'?success.period_to:success.source_as_of].map(value=>Date.parse(String(value))).filter(value=>Number.isFinite(value)&&value<=now):[];
   const dataAsOf=bounds.length?new Date(Math.min(...bounds)).toISOString():null;
   const base={job:d.id,lastSuccessAt,dataAsOf,stale:!dataAsOf||now-Date.parse(dataAsOf)>=d.cadence};
-  const active=rows.find(r=>r.status==='running'&&(r.lease_until?Date.parse(String(r.lease_until)):Date.parse(String(r.started_at))+600000)>now);
+  const active=attempts.find(r=>r.status==='running'&&(r.lease_until?Date.parse(String(r.lease_until)):Date.parse(String(r.started_at))+600000)>now);
   if(active)return {...base,state:'waiting' as const,retryAt:new Date(active.lease_until?Date.parse(String(active.lease_until)):Date.parse(String(active.started_at))+600000).toISOString()};
-  if(!latest)return {...base,state:'due' as const};
-  if(latest.status==='failed'||latest.error_code){
-   const retry=touchedAt(latest)+300000;
-   return {...base,state:(now>=retry?'due':'failed') as 'due'|'failed',retryAt:new Date(retry).toISOString(),errorCode:safeCode(latest.error_code)};
+  if(latestAttempt?.status==='failed'||latestAttempt?.error_code){
+   const retry=touchedAt(latestAttempt)+300000;
+   return {...base,state:(now>=retry?'due':'failed') as 'due'|'failed',retryAt:new Date(retry).toISOString(),errorCode:safeCode(latestAttempt.error_code)};
   }
+  if(!latest)return {...base,state:'due' as const};
   if(latest.status==='running')return {...base,state:'due' as const};
   // Due from the attempt start: finishing a long import must not defer the next hourly run.
   const started=Date.parse(String(latest.started_at));
@@ -68,7 +73,7 @@ export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):Stream
 }
 export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|null {
  const due=new Set(syncStreamStates(runs,now,enabled).filter(s=>s.state==='due').map(s=>s.job));
- return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&r.stream_key===d.stream).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
+ return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>;
@@ -129,8 +134,12 @@ export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=
    const scope=scopes.get(d.id)!,eq={source:d.source,source_namespace:scope.namespace,stream_key:d.stream,query_profile_key:scope.profile};
    const select=async(options:Parameters<Database['select']>[1])=>{const at=performance.now();schedulerMeasurements.dbReads++;try{const rows=await db.select('sync_runs',options);schedulerMeasurements.rowsRead+=rows.length;return rows;}finally{schedulerMeasurements.dbMs+=performance.now()-at;}};
    // A healthy publication remains findable after any number of failed attempts.
-   const [recent,published]=await Promise.all([select({eq,order:'started_at',descending:true,limit:5}),select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1})]);
-   return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id)))];
+   const [recent,published,work]=await Promise.all([
+    select({eq,order:'started_at',descending:true,limit:5}),
+    select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1}),
+    d.workStream?select({eq:{...eq,stream_key:d.workStream},columns:['id','source','stream_key','query_profile_key','started_at','finished_at','status','lease_until','error_code'],order:'started_at',descending:true,limit:1}):Promise.resolve([]),
+   ]);
+   return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id))),...work];
   }));
   schedulerMeasurements.elapsedMs+=performance.now()-started;return groups.flat();
  };
