@@ -51,7 +51,7 @@ test('PostHog only queries closed production aggregates with exact distinct coun
 test('PostHog preserves deduplicated whole-period counts without summing visitors across days or steps', async () => {
   const cfg = config(queue(fixtures(), (url, init) => {
     assert.equal(url.origin, 'https://eu.posthog.com'); assert.equal(init.redirect, 'error'); assert.ok(!String(url).includes('synthetic-key'));
-    if (init.method === 'POST') { const body = JSON.parse(String(init.body)); assert.equal(body.query.kind, 'HogQLQuery'); assert.equal(body.refresh, 'force_blocking'); assert.ok(body.name.startsWith('BLG production aggregate')); }
+    if (init.method === 'POST') { const body = JSON.parse(String(init.body)); assert.equal(body.query.kind, 'HogQLQuery'); assert.equal(body.refresh, 'force_async'); assert.ok(body.name.startsWith('BLG production aggregate')); }
   }));
   const report = await readPostHogAnalytics(cfg);
   assert.equal(report.status, 'complete'); assert.equal(report.overview?.visitors, 7); assert.equal(report.byEvent.reduce((n, r) => n + r.visitors!, 0), 9);

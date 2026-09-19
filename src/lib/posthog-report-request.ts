@@ -13,7 +13,7 @@ export interface PostHogReportRequest {
 }
 export interface PostHogReportState {
  key:string;state:'ready'|'waiting'|'failed'|'unsupported';message:string;
- observedAt?:string|null;empty?:boolean;retryAfterMs?:number;
+ observedAt?:string|null;empty?:boolean;retryAfterMs?:number;retryable?:boolean;
 }
 type PublishedReport={status:string;observedAt:string|null;coverage:{queryComplete:boolean}};
 type Options={db?:Database;namespace?:string;client?:PostHogClientProfile;now?:()=>number;
@@ -51,7 +51,7 @@ export async function requestPostHogReport(filters:DashboardFilters,type:PostHog
  const start=options.start??(r=>{configured();return r.type==='quiz'?postHogPeriod(r.from,r.to,{db,scope:r.scope,client:r.client}):postHogMasterclassPeriod(r.from,r.to,{db,client:r.client});});
  const active=async()=>{
   const rows=await db.select('sync_runs',{eq:{source:'posthog',source_namespace:namespace,stream_key:request.stream,query_profile_key:request.profile,status:'running'},order:'started_at',descending:true,limit:1});
-  return rows.some(row=>Number.isFinite(Date.parse(String(row.started_at)))&&Date.parse(String(row.started_at))>(options.now?.()??Date.now())-10*60_000);
+  return rows.some(row=>Number.isFinite(Date.parse(String(row.started_at)))&&(row.lease_until?Date.parse(String(row.lease_until))>(options.now?.()??Date.now()):Date.parse(String(row.started_at))>(options.now?.()??Date.now())-10*60_000));
  };
  const fresh=(report:PublishedReport|null):report is PublishedReport=>{
   if(!published(report))return false;
@@ -75,7 +75,7 @@ export async function requestPostHogReport(filters:DashboardFilters,type:PostHog
    invalidateSourceSnapshots(db);
    const stored=await read(request);if(fresh(stored))return ready(stored);
    // The persistent stream lock also handles a race after our initial probe.
-   if(!published(result)&&await active())return waiting();
+   if(result?.status==='pending'||(!published(result)&&await active()))return waiting();
    return failed();
   }catch{return failed();}
  })();

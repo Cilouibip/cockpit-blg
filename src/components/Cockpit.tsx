@@ -260,7 +260,7 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
       if(filters.tunnel!=='quiz'&&filters.source==='all'&&!filters.campaign)jobs.push({source:'masterclass',work:invoke(`/api/sync/analytics?${query}&type=masterclass`)});
       const tasks=await Promise.allSettled(jobs.map(job=>job.work));
       const sources=tasks.map((r,i)=>({source:jobs[i].source,status:r.status==='rejected'?'failed':r.value.status,detail:r.status==='rejected'&&['notion','commerce'].includes(jobs[i].source)?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
-      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',empty:'aucune mesure retournée',failed:'échec'};
+      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',pending:'lecture en cours, reprise disponible',empty:'aucune mesure retournée',failed:'échec'};
       const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Paiements reçus',commerce:'Ventes payées',meta:'Meta',inscriptions:'Inscriptions Wix'};
       setNotice(sources.map((s:{source:string;status:string;detail?:string})=>`${names[s.source]??s.source} : ${labels[s.status]??'échec'}${s.detail?` — ${s.detail}`:''}`).join(' · '));
       refresh();

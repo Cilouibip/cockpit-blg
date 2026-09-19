@@ -1,11 +1,12 @@
 import {windowFixture} from './helpers/source-window';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {postHogAggregateQueries,postHogScopeProfile,POSTHOG_DEFAULT_CLIENT,postHogMasterclassQuery,readPostHogMasterclassAnalytics,type PostHogAnalyticsConfig} from '../src/connectors/posthog-analytics';
+import {postHogAggregateQueries,postHogScopeProfile,POSTHOG_DEFAULT_CLIENT,postHogMasterclassQuery,readPostHogMasterclassAnalytics,type PostHogAnalyticsConfig,type PreparedPostHogAnalytics,type PostHogMasterclassReport} from '../src/connectors/posthog-analytics';
 import {applyPostHogQuiz,applyPostHogMasterclass,postHogPeriod,postHogScopeFromFilters,readPostHogPeriod,postHogMasterclassPeriod,readPostHogMasterclassPeriod,type DashboardPostHogReport} from '../src/lib/posthog-dashboard';
 import {emptyDashboard} from '../src/lib/dashboard';
 import type {DashboardFilters} from '../src/lib/ui-contract';
 import type {Database,Row} from '../src/lib/db';
+import {postHogSyncMemory,syntheticPostHogEnv} from './helpers/posthog-sync';
 const from='2026-01-01T23:00:00Z',to='2026-01-03T23:00:00Z';
 const scope={source:'paid' as const,campaignId:'12345'},schema={sessionIdAvailable:true,questionNumberProperty:'numero' as const};
 const filters:DashboardFilters={from:'2026-01-02',to:'2026-01-03',source:'paid',tunnel:'quiz',campaign:'meta:12345',compare:false};
@@ -47,31 +48,18 @@ test('Missing identities, wrong coverage and duplicate MC groups never manufactu
  const scoped=await readPostHogMasterclassAnalytics({...mcConfig(),scope});assert.equal(scoped.status,'failed');assert.equal(scoped.safeError,'POSTHOG_SCOPE_UNAVAILABLE');
 });
 test('Masterclass imports publish a separate stream and exact period only, retaining last good report',async()=>{
- const keys=['POSTHOG_HOST','POSTHOG_PROJECT_ID','POSTHOG_PERSONAL_API_KEY'],old=keys.map(k=>process.env[k]);Object.assign(process.env,{POSTHOG_HOST:'https://eu.posthog.com',POSTHOG_PROJECT_ID:'123',POSTHOG_PERSONAL_API_KEY:'SYNTHETIC'});
- try{
-  const store:Record<string,Row[]>={sync_runs:[],source_aggregates:[]};let serial=0;
-  const db:Database={probe:async()=>{},select:async(t,o)=>store[t].filter(r=>Object.entries(o?.eq??{}).every(([k,v])=>String(r[k])===v)).slice(o?.from??0,(o?.from??0)+(o?.limit??1000)),upsert:async(t,r)=>{store[t].push(...r);},rpc:async<T>(name:string,args:Row)=>{
-   if(name==='cockpit_source_window')return windowFixture(store.sync_runs,store.source_aggregates,args) as T;
-   if(name==='begin_sync_stream'){const id=`r${++serial}`;store.sync_runs.push({id,source:'posthog',source_namespace:'123',status:'running',stream_key:args.p_stream,query_profile_key:args.p_profile,period_from:args.p_from,period_to:args.p_to});return id as T;}
-   const run=store.sync_runs.find(r=>r.id===args.p_run)!;Object.assign(run,{status:args.p_status,pagination_complete:args.p_complete,finished_at:to});return true as T;
-  }};
-  await postHogMasterclassPeriod('2026-01-02','2026-01-04',{db,client,reader:()=>readPostHogMasterclassAnalytics(mcConfig())});
-  assert.equal(store.sync_runs[0].stream_key,'masterclass_observations');
-  await postHogMasterclassPeriod('2026-01-02','2026-01-04',{db,client,reader:async()=>{throw Error('SYNTHETIC');}});
-  assert.equal(store.sync_runs[1].status,'failed');assert.equal((await readPostHogMasterclassPeriod(db,'2026-01-02','2026-01-04',{client}))?.byEvent[0].events,4);
-  assert.equal(await readPostHogMasterclassPeriod(db,'2026-01-03','2026-01-04',{client}),null);
- }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+ const memory=postHogSyncMemory();const prepare=async():Promise<PreparedPostHogAnalytics>=>({endpoint:new URL('https://eu.posthog.com'),headers:{},schema:{sessionIdAvailable:false,questionNumberProperty:null},queries:{masterclass:'synthetic'},deadline:Date.now()+20_000,signal:new AbortController().signal});
+ const report=async(config:PostHogAnalyticsConfig):Promise<PostHogMasterclassReport>=>{await config.execution!.save('masterclass',{version:1,id:'mc-scope',origin:'https://eu.posthog.com',projectId:'123',queryHash:'synthetic',startedAt:Date.now()},true);return {source:'posthog',profile:'synthetic',from,to,observedAt:null,status:'complete',byEvent:[{event:'mc_page_view',events:4,visitors:3,kitSessions:2,eventsWithVisitorId:4,eventsWithKitSessionId:4,verifiedHostEvents:4,unlocatedEvents:0,excludedEvents:0}],coverage:{queryComplete:true,hostVerified:true,reason:'synthetic'}};};
+ const imported=await postHogMasterclassPeriod('2026-01-02','2026-01-04',{db:memory.db,client,env:syntheticPostHogEnv,prepare,reader:report});
+ assert.equal(imported?.status,'complete');assert.equal(memory.runs[0].status,'complete');assert.equal(memory.calls[0].args.p_stream,'masterclass_observations');assert.equal(memory.receivedRPCcounts('cockpit_publish_posthog'),1);
 });
 
 test('Quiz refresh claims its dedicated stream and only coalesces matching in-flight scopes',async()=>{
- const keys=['POSTHOG_HOST','POSTHOG_PROJECT_ID','POSTHOG_PERSONAL_API_KEY'],old=keys.map(k=>process.env[k]);Object.assign(process.env,{POSTHOG_HOST:'https://eu.posthog.com',POSTHOG_PROJECT_ID:'123',POSTHOG_PERSONAL_API_KEY:'SYNTHETIC'});
- try{
-  const starts:Row[]=[];let queries=0;let release:()=>void=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});
-  const db:Database={probe:async()=>{},select:async()=>[],upsert:async()=>{},rpc:async<T>(name:string,args:Row)=>{if(name==='begin_sync_stream')starts.push(args);return 'run' as T;}};
-  const reader:typeof import('../src/connectors/posthog-analytics').readPostHogAnalytics=async()=>{queries++;await gate;return {status:'failed',coverage:{queryComplete:false},byEvent:[],byHostEvent:[],questions:[],overview:null} as unknown as import('../src/connectors/posthog-analytics').PostHogAnalyticsReport;};
-  const first=postHogPeriod('2026-01-02','2026-01-04',{db,reader,scope}),same=postHogPeriod('2026-01-02','2026-01-04',{db,reader,scope}),different=postHogPeriod('2026-01-02','2026-01-04',{db,reader});
-  release();await Promise.all([first,same,different]);assert.equal(queries,2);assert.equal(starts.length,2);assert.ok(starts.every(r=>r.p_stream==='quiz_observations'));assert.notEqual(starts[0].p_profile,starts[1].p_profile);
- }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+ const memory=postHogSyncMemory();let queries=0;let release:()=>void=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});
+ const prepare=async():Promise<PreparedPostHogAnalytics>=>({endpoint:new URL('https://eu.posthog.com'),headers:{},schema:{sessionIdAvailable:true,questionNumberProperty:null},queries:{overview:'synthetic'},deadline:Date.now()+20_000,signal:new AbortController().signal});
+ const reader:typeof import('../src/connectors/posthog-analytics').readPostHogAnalytics=async()=>{queries++;await gate;return {status:'failed',coverage:{queryComplete:false},byEvent:[],byHostEvent:[],questions:[],overview:null} as unknown as import('../src/connectors/posthog-analytics').PostHogAnalyticsReport;};
+ const first=postHogPeriod('2026-01-02','2026-01-04',{db:memory.db,env:syntheticPostHogEnv,prepare,reader,scope}),same=postHogPeriod('2026-01-02','2026-01-04',{db:memory.db,env:syntheticPostHogEnv,prepare,reader,scope}),different=postHogPeriod('2026-01-02','2026-01-04',{db:memory.db,env:syntheticPostHogEnv,prepare,reader});
+ release();await Promise.all([first,same,different]);assert.equal(queries,2);const claims=memory.calls.filter(call=>call.name==='cockpit_claim_posthog');assert.equal(claims.length,2);assert.ok(claims.every(call=>call.args.p_stream==='quiz_observations'));assert.notEqual(claims[0].args.p_profile,claims[1].args.p_profile);
 });
 
 

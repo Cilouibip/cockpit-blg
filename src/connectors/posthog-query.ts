@@ -10,6 +10,9 @@ export interface PostHogQueryContinuation {
   projectId: string;
   queryHash: string;
   startedAt: number;
+  /** Recovery GET slots are reserved durably before HTTP until the ID is acknowledged. */
+  lookupAttempts?: number;
+  registered?: boolean;
 }
 
 export class PostHogQueryPending extends ConnectorError {
@@ -34,7 +37,7 @@ interface QueryOptions {
    * of time. Default callers keep the existing bounded-failure contract. */
   resumable?: boolean;
   resume?: PostHogQueryContinuation;
-  onContinuation?: (continuation: PostHogQueryContinuation) => void;
+  onContinuation?: (continuation: PostHogQueryContinuation) => void | Promise<void>;
 }
 
 /** Run a read-only query in PostHog's background worker, then retrieve its complete result.
@@ -50,6 +53,8 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     const resume = options.resume;
     if (!resume || resume.version !== 1 || !validId(resume.id) || resume.origin !== options.endpoint.origin ||
         resume.projectId !== options.projectId || resume.queryHash !== queryHash ||
+        (resume.lookupAttempts !== undefined && (!Number.isInteger(resume.lookupAttempts) || resume.lookupAttempts < 0 || resume.lookupAttempts > 3)) ||
+        (resume.registered !== undefined && typeof resume.registered !== 'boolean') ||
         !Number.isSafeInteger(resume.startedAt) || resume.startedAt > now() || now() - resume.startedAt > 10 * 60_000) {
       throw new ConnectorError('INVALID_POSTHOG_CONTINUATION');
     }
@@ -63,22 +68,35 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
   let transportCode:string|undefined;
   const fetcher: typeof fetch = async (input, init) => {
     const signal=AbortSignal.any([options.signal,...(init?.signal?[init.signal]:[])]);
+    const classifyTransport=(error:unknown,headersReceived=false)=>{
+      // Never retain upstream strings, response bodies or request credentials.
+      const code=(error as {cause?:{code?:string}})?.cause?.code;
+      transportCode=options.signal.aborted?'POSTHOG_CANCELLED':signal.aborted?'POSTHOG_REQUEST_TIMEOUT':
+        !headersReceived&&(code==='ENOTFOUND'||code==='EAI_AGAIN')?'POSTHOG_DNS_ERROR':code==='ECONNRESET'?'POSTHOG_CONNECTION_RESET':'POSTHOG_TRANSPORT_ERROR';
+    };
     try {
       const response=await (options.fetcher??fetch)(input,{...init,signal});
       const retry=response.headers.get('retry-after');
       retryAfterMs=retry&&/^\d+$/.test(retry)?Number(retry)*1000:250;
-      return response;
+      if(!response.ok||!response.body)return response;
+      // fetch resolves at headers. Preserve transport errors from the body too,
+      // before readJson normalizes them. JSON parsing stays outside this stream
+      // and a fully received malformed document remains INVALID_RESPONSE.
+      const reader=response.body.getReader();
+      const body=new ReadableStream<Uint8Array>({
+        async pull(controller){try{const {done,value}=await reader.read();if(done)controller.close();else controller.enqueue(value);}
+          catch(error){classifyTransport(error,true);controller.error(error);}},
+        cancel(reason){return reader.cancel(reason);},
+      });
+      return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
     } catch(error) {
-      // Classify only allowlisted transport metadata; never the error message/URL.
-      const code=(error as {cause?:{code?:string}})?.cause?.code;
-      transportCode=options.signal.aborted?'POSTHOG_CANCELLED':signal.aborted?'POSTHOG_REQUEST_TIMEOUT':
-        code==='ENOTFOUND'||code==='EAI_AGAIN'?'POSTHOG_DNS_ERROR':code==='ECONNRESET'?'POSTHOG_CONNECTION_RESET':'POSTHOG_TRANSPORT_ERROR';
-      throw error;
+      classifyTransport(error);throw error;
     }
   };
   const request = async (path: string, init: RequestInit) => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const remaining = options.deadline - now();
+      if (options.signal.aborted && now() < options.deadline) throw new ConnectorError('POSTHOG_CANCELLED');
       if (options.signal.aborted || remaining < 1_000) throw new ConnectorError('POSTHOG_TIME_BUDGET');
       transportCode=undefined;retryAfterMs=250;
       try {
@@ -86,14 +104,14 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
           fetcher, attempts: 1, timeoutMs: Math.min(20_000, remaining),
         }));
       } catch (error) {
-        const transient = error instanceof ConnectorError && (error.code === 'NETWORK_ERROR' || (error.code === 'UPSTREAM_HTTP_ERROR' && (error.status===429||(error.status ?? 0) >= 500)));
+        const transient = error instanceof ConnectorError && (error.code === 'NETWORK_ERROR' || (error.code === 'INVALID_RESPONSE' && !!transportCode) || (error.code === 'UPSTREAM_HTTP_ERROR' && (error.status===429||(error.status ?? 0) >= 500)));
         // A lost POST acknowledgement may already have started an expensive query.
         // Only DNS failures and explicit rate limiting are safe to resubmit.
         const uncertainSubmission = init.method === 'POST' && transient &&
           transportCode !== 'POSTHOG_DNS_ERROR' && !(error instanceof ConnectorError && error.status === 429);
         // Respect Retry-After; do not issue an early retry if it cannot fit.
         if (attempt || uncertainSubmission || !transient || options.signal.aborted || options.deadline - now() < retryAfterMs+1_000) {
-          if(transportCode)throw new ConnectorError(transportCode);
+          if(transportCode && error instanceof ConnectorError && ['NETWORK_ERROR','INVALID_RESPONSE'].includes(error.code))throw new ConnectorError(transportCode);
           throw error;
         }
         await sleep(retryAfterMs);
@@ -108,14 +126,15 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
   let queryId: string | undefined = continuation?.id;
   let submissionError: ConnectorError | undefined;
   let recoveryDelay = 0;
-  let missingReads = 0;
+  let placeholder = !!continuation;
+
   if (continuation) {
     // Enter the same polling loop without submitting another query. The local
     // placeholder can never be returned as a successful result.
     payload = { query_status: { id: continuation.id, complete: false } };
   } else try {
-    continuation = { version: 1, id: clientQueryId, origin: options.endpoint.origin, projectId: options.projectId, queryHash, startedAt };
-    options.onContinuation?.({ ...continuation });
+    continuation = { version: 1, id: clientQueryId, origin: options.endpoint.origin, projectId: options.projectId, queryHash, startedAt, lookupAttempts:0, registered:false };
+    await options.onContinuation?.({ ...continuation });
     payload = await request(path, { method: 'POST', body: JSON.stringify({
       query: { kind: 'HogQLQuery', query: options.query }, refresh: 'force_async', name: options.name,
       client_query_id: clientQueryId,
@@ -133,6 +152,7 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     queryId = clientQueryId;
     // PostHog accepts client_query_id before running the query. Recover that
     // same job; never infer success from this local pending placeholder.
+    placeholder = true;
     payload = { query_status: { id: clientQueryId, complete: false } };
   }
   for (let poll = 0; poll <= 20; poll++) {
@@ -144,9 +164,9 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     if (status && (status.id !== undefined || queryId || !immediateResult) &&
         (!validId(status.id) || (queryId && queryId !== status.id))) throw new ConnectorError('INVALID_POSTHOG_QUERY_ID');
     if (queryId && !status) throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
-    if (status && validId(status.id) && continuation?.id !== status.id) {
-      continuation = { version: 1, id: status.id as string, origin: options.endpoint.origin, projectId: options.projectId, queryHash, startedAt };
-      options.onContinuation?.({ ...continuation });
+    if (!placeholder && (status && validId(status.id) || immediateResult) && (continuation?.id !== (status?.id ?? clientQueryId) || !continuation?.registered)) {
+      continuation = { ...continuation!, id: (status?.id ?? clientQueryId) as string, registered:true };
+      await options.onContinuation?.({ ...continuation });
     }
     if (immediateResult) return payload;
     if (!status) throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
@@ -161,13 +181,19 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     if (poll === 20 || options.deadline - now() < delay + 1_000) timeBudget();
     await sleep(delay);
     try {
+      if(!continuation!.registered){
+        if((continuation!.lookupAttempts??0)>=3)throw new ConnectorError('POSTHOG_QUERY_MISSING');
+        continuation={...continuation!,lookupAttempts:(continuation!.lookupAttempts??0)+1};
+        await options.onContinuation?.({...continuation});
+      }
       payload = await request(`${path}${queryId}/`, { method: 'GET' });
+      placeholder = false;
       submissionError = undefined;
     } catch (error) {
       // Registration can lag an interrupted submission. Allow three bounded
       // reads of the same ID; an absent job remains a failure, never an empty result.
-      if ((submissionError || options.resume) && error instanceof ConnectorError && error.status === 404) {
-        if (++missingReads < 3) continue;
+      if (!continuation!.registered && error instanceof ConnectorError && error.status === 404) {
+        if ((continuation!.lookupAttempts??0) < 3) continue;
         throw submissionError ?? error;
       }
       if (error instanceof ConnectorError && (error.code === 'POSTHOG_TIME_BUDGET' ||

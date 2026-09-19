@@ -31,7 +31,7 @@ export function createPostHogReportController(options:Options){
     if(result.key!==selection.key)return failed(selection.key);
     if(result.state!=='waiting')return result;
     const delay=Math.min(15000,Math.max(1000,result.retryAfterMs??15000));
-    if(now()+delay>=deadline||attempt+1>=maxAttempts)return failed(selection.key);
+    if(now()+delay>=deadline||attempt+1>=maxAttempts)return {...result,retryable:true,message:'Le calcul est toujours en cours. Reprends le chargement dans un instant.'};
     await untilAbort(sleep(delay));
    }
    return failed(selection.key);

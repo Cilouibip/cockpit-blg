@@ -180,3 +180,14 @@ test('all future dates are unavailable and due, never replaced with a fresh now'
  const result=await tickSyncJobs(tickDatabase([row]),{COCKPIT_MODE:'live',NOTION_DATA_SOURCE_ID:'notion'} as unknown as NodeJS.ProcessEnv,{now:()=>now,budget:budget(()=>false)});
  assert.equal(result.status,'partial');assert.equal(result.streams?.[0].dataAsOf,null);assert.equal(result.streams?.[0].stale,true);
 });
+
+
+test('Quiz and Masterclass released pending work resumes at most four times with the shared budget',async()=>{
+ const rows:Row[]=[],calls:SyncJob[]=[];const env={COCKPIT_MODE:'live',POSTHOG_PROJECT_ID:'123'} as unknown as NodeJS.ProcessEnv;
+ const result=await tickSyncJobs(tickDatabase(rows),env,{now:()=>now,budget:{...budget(()=>true),remainingWorkMs:()=>37000,remainingTotalMs:()=>42000},execute:async(job,ctx)=>{
+  calls.push(job);assert.equal(ctx.budget?.remainingWorkMs(),37000);assert.equal(ctx.budget?.remainingTotalMs(),42000);
+  const [source,key]=stream[job];rows.push({...run(source,key,now,'running'),source_namespace:'123',lease_until:new Date(now-1).toISOString()});return {status:'pending'};
+ }});
+ assert.equal(calls.filter(j=>j==='quiz').length,4);assert.equal(calls.filter(j=>j==='masterclass').length,4);assert.equal(result.status,'partial');
+ assert.ok(result.streams?.every(s=>s.state==='due'));
+});

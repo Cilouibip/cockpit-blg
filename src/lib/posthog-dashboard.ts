@@ -1,3 +1,4 @@
+import {synchronizePostHogReport,type PostHogImportOptions} from './sync-posthog-reports';
 import { readPostHogAnalytics, postHogScopeProfile, postHogClientProfile, POSTHOG_DEFAULT_SCOPE, type PostHogAnalyticsReport, type PostHogDimensionScope, type PostHogClientProfile, readPostHogMasterclassAnalytics, postHogMasterclassProfile, type PostHogMasterclassReport, type MasterclassObservation } from '../connectors/posthog-analytics';
 import { startOfParisDay } from '../domain/dates';
 import { database, type Database, type Row } from './db';
@@ -13,42 +14,12 @@ export function postHogScopeFromFilters(filters:Pick<DashboardFilters,'source'|'
 }
 
 const pending=new Map<string,Promise<PostHogAnalyticsReport|null>>();
-export async function postHogPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogAnalytics;scope?:PostHogDimensionScope;client?:PostHogClientProfile;fetcher?:typeof fetch}={}):Promise<PostHogAnalyticsReport|null> {
- if(!process.env.POSTHOG_PERSONAL_API_KEY||!process.env.POSTHOG_HOST||!process.env.POSTHOG_PROJECT_ID)return null;
- // Explicit refresh must query the source again, including after a failure.
- // Concurrent requests in one instance still share their in-flight work.
- const scope=options.scope??POSTHOG_DEFAULT_SCOPE,client=options.client??postHogClientProfile(),profile=postHogScopeProfile(scope,client);
- const key=`${process.env.POSTHOG_HOST}:${process.env.POSTHOG_PROJECT_ID}:${profile}:${from}:${to}`;
+export async function postHogPeriod(from:string,to:string,options:PostHogImportOptions={}):Promise<PostHogAnalyticsReport|null>{
+ const env=options.env??process.env,scope=options.scope??POSTHOG_DEFAULT_SCOPE,client=options.client??postHogClientProfile(env);
+ const key=JSON.stringify([env.POSTHOG_HOST,env.POSTHOG_PROJECT_ID,postHogScopeProfile(scope,client),from,to,options.resumeRunningPeriod??false]);
  if(pending.has(key))return pending.get(key)!;
- const work=(async()=>{
-  const db=options.db??database(),namespace=process.env.POSTHOG_PROJECT_ID!,start=startOfParisDay(from),end=startOfParisDay(to);
-  let runId:string|undefined;
-  try {
-   runId=await db.rpc<string>('begin_sync_stream',{p_stream:'quiz_observations',p_source:'posthog',p_namespace:namespace,p_from:start,p_to:end,p_profile:profile,p_coverage_kind:'aggregate_period',p_date_from:from,p_date_to:to});
-   const report=await (options.reader??readPostHogAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,scope,client,fetcher:options.fetcher});
-   if(report.coverage.queryComplete){
-    const rows:Row[]=[];
-    const add=(key:string,dimensions:Row,counts:{events:number;visitors:number|null;sessions:number|null})=>{
-     for(const metric of ['events','visitors','sessions'] as const)rows.push({source:'posthog',source_namespace:namespace,metric_key:`posthog_${metric}`,
-      period_from:start,period_to:end,dimensions_key:key,report_profile_key:profile,sync_run_id:runId,
-      timezone:'Europe/Paris',coverage_state:'complete',value:counts[metric],unit:'count',currency:null,currency_exponent:null,tax_basis:'unknown',dimensions,
-      definition_version:profile,source_locator:`posthog:aggregate:${key}`});
-    };
-    if(report.overview)add('all',{scope,client,coverage:report.coverage},report.overview);
-    for(const row of report.byEvent)add(`event:${row.event}`,{event:row.event},row);
-    for(const row of report.byHostEvent)add(`${row.host}:${row.event}`,{host:row.host,event:row.event},{events:row.events,visitors:row.visitors,sessions:row.sessions});
-    for(const row of report.questions)add(`question:${row.questionNumber??'unknown'}`,{questionNumber:row.questionNumber},{events:row.events,visitors:row.visitors,sessions:row.sessions});
-    await db.upsert('source_aggregates',rows,'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');
-   }
-   await db.rpc('finish_sync',{p_run:runId,p_status:report.status==='not_configured'?'failed':report.status,p_read:report.overview?.events??0,p_rejected:0,
-    p_complete:report.coverage.queryComplete,p_error:report.safeError?.replace(/[^A-Za-z0-9_ -]/g,'').slice(0,100)??null});
-   invalidateSourceSnapshots(db);
-   return report;
-  } catch {
-   if(runId)await db.rpc('finish_sync',{p_run:runId,p_status:'failed',p_read:0,p_rejected:0,p_complete:false,p_error:'POSTHOG_IMPORT_FAILED'}).catch(()=>undefined);
-   return null;
-  }
- })();pending.set(key,work);try{return await work;}finally{pending.delete(key);}
+ const work=synchronizePostHogReport('quiz',from,to,{...options,scope,client}) as Promise<PostHogAnalyticsReport|null>;
+ pending.set(key,work);try{return await work;}finally{pending.delete(key);}
 }
 
 type DashboardCounts = {events:number;visitors:number|null;sessions:number|null};
@@ -115,27 +86,12 @@ export function applyPostHogQuiz(data:DashboardResponse,report:DashboardPostHogR
 
 const masterclassPending=new Map<string,Promise<PostHogMasterclassReport|null>>();
 /** Separate bounded import: never chained into the quiz refresh's time budget. */
-export async function postHogMasterclassPeriod(from:string,to:string,options:{db?:Database;reader?:typeof readPostHogMasterclassAnalytics;client?:PostHogClientProfile;fetcher?:typeof fetch}={}):Promise<PostHogMasterclassReport|null>{
- const namespace=process.env.POSTHOG_PROJECT_ID;if(!namespace||!process.env.POSTHOG_HOST||!process.env.POSTHOG_PERSONAL_API_KEY)return null;
- const client=options.client??postHogClientProfile(),profile=postHogMasterclassProfile(client),start=startOfParisDay(from),end=startOfParisDay(to),key=`${namespace}:${profile}:${from}:${to}`;
+export async function postHogMasterclassPeriod(from:string,to:string,options:PostHogImportOptions={}):Promise<PostHogMasterclassReport|null>{
+ const env=options.env??process.env,client=options.client??postHogClientProfile(env);
+ const key=JSON.stringify([env.POSTHOG_HOST,env.POSTHOG_PROJECT_ID,postHogMasterclassProfile(client),from,to,options.resumeRunningPeriod??false]);
  if(masterclassPending.has(key))return masterclassPending.get(key)!;
- const work=(async()=>{
-  const db=options.db??database();let runId:string|undefined;
-  try{
-   runId=await db.rpc<string>('begin_sync_stream',{p_source:'posthog',p_namespace:namespace,p_from:start,p_to:end,p_profile:profile,p_coverage_kind:'aggregate_period',p_stream:'masterclass_observations',p_date_from:from,p_date_to:to});
-   const report=await(options.reader??readPostHogMasterclassAnalytics)({host:process.env.POSTHOG_HOST,projectId:namespace,personalApiKey:process.env.POSTHOG_PERSONAL_API_KEY,from:start,to:end,client,fetcher:options.fetcher});
-   const complete=report.coverage.queryComplete&&['complete','empty'].includes(report.status);
-   if(complete){
-    const base={source:'posthog',source_namespace:namespace,metric_key:'posthog_mc_events',period_from:start,period_to:end,report_profile_key:profile,sync_run_id:runId,timezone:'Europe/Paris',coverage_state:'complete',unit:'count',currency:null,currency_exponent:null,tax_basis:'unknown',definition_version:profile};
-    await db.upsert('source_aggregates',[{...base,dimensions_key:'all',value:report.byEvent.reduce((n,r)=>n+r.events,0),dimensions:{coverage:report.coverage,observedAt:report.observedAt},source_locator:'posthog:masterclass:overview'},...report.byEvent.map(row=>({...base,dimensions_key:`event:${row.event}`,value:row.events,dimensions:{...row},source_locator:`posthog:masterclass:${row.event}`}))],'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');
-   }
-   await db.rpc('finish_sync',{p_run:runId,p_status:complete?'complete':'failed',p_read:report.byEvent.reduce((n,r)=>n+r.events,0),p_rejected:0,p_complete:complete,p_error:report.safeError??null});
-   invalidateSourceSnapshots(db);return report;
-  }catch{
-   if(runId)await db.rpc('finish_sync',{p_run:runId,p_status:'failed',p_read:0,p_rejected:0,p_complete:false,p_error:'POSTHOG_MASTERCLASS_IMPORT_FAILED'}).catch(()=>undefined);
-   return null;
-  }
- })();masterclassPending.set(key,work);try{return await work;}finally{masterclassPending.delete(key);}
+ const work=synchronizePostHogReport('masterclass',from,to,{...options,client}) as Promise<PostHogMasterclassReport|null>;
+ masterclassPending.set(key,work);try{return await work;}finally{masterclassPending.delete(key);}
 }
 export async function readPostHogMasterclassPeriod(db:Database,from:string,to:string,options:{client?:PostHogClientProfile}={}):Promise<PostHogMasterclassReport|null>{
  const namespace=process.env.POSTHOG_PROJECT_ID;if(!namespace)return null;

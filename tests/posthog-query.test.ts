@@ -140,7 +140,7 @@ test('une requête de 63 secondes aboutit par reprises courtes avec un seul POST
     const start = now;
     try {
       output = await readPostHogQuery({ ...config(), resumable: true, resume,
-        onContinuation: c => checkpoints.push(c), clock: () => now, deadline: start + 20_000,
+        onContinuation: c => { checkpoints.push(c); }, clock: () => now, deadline: start + 20_000,
         sleep: async ms => { now += ms; }, fetcher });
       break;
     } catch (error) {
@@ -205,4 +205,48 @@ test('une reprise absente ou renvoyant un autre ID ne lance aucun POST et ne pub
     }), { message: kind === 'missing' ? 'UPSTREAM_HTTP_ERROR' : kind === 'wrong-id' ? 'INVALID_POSTHOG_QUERY_ID' : 'INVALID_POSTHOG_RESPONSE' });
     assert.equal(calls, kind === 'missing' ? 3 : 1);
   }
+});
+
+
+test('persistence completes before POST and a failed checkpoint submits nothing',async()=>{
+ for(const fails of [false,true]){let saved=false,posts=0;
+  const operation=readPostHogQuery({...config(),onContinuation:async()=>{await new Promise(r=>setImmediate(r));if(fails)throw Error('synthetic checkpoint failure');saved=true;},fetcher:async()=>{posts++;assert.equal(saved,true);return Response.json({results:[]});}});
+  if(fails)await assert.rejects(operation,/synthetic checkpoint failure/);else await operation;
+  assert.equal(posts,fails?0:1);
+ }
+});
+test('a deduplicated server ID is persisted before GET and replaces only the query identifier',async()=>{
+ const saved:PostHogQueryContinuation[]=[];
+ await readPostHogQuery({...config(),onContinuation:async c=>{await new Promise(r=>setImmediate(r));saved.push(c);},fetcher:async(url,init)=>{
+  if(init?.method==='POST')return Response.json({query_status:{id:'deduplicated-server-id',complete:false}});
+  assert.equal(saved.at(-1)?.id,'deduplicated-server-id');assert.match(String(url),/deduplicated-server-id/);
+  return Response.json({query_status:{id:'deduplicated-server-id',complete:true,results:{results:[]}}});
+ }});
+ assert.equal(saved.length,2);assert.notEqual(saved[0].id,saved[1].id);
+ assert.deepEqual({...saved[0],id:saved[1].id,registered:true},saved[1]);
+});
+
+
+test('three recovery slots survive two budget expirations and no fourth lookup can run',async()=>{
+ let time=0,gets=0;let resume:PostHogQueryContinuation|undefined={...checkpoint(),startedAt:0};
+ for(let invocation=0;invocation<3;invocation++){
+  const start=time;
+  const read=readPostHogQuery({...config(),resumable:true,resume,clock:()=>time,deadline:start+2500,sleep:async ms=>{time+=ms;},onContinuation:async c=>{resume=c;},fetcher:async(_url,init)=>{assert.equal(init?.method,'GET');gets++;return Response.json({}, {status:404});}});
+  if(invocation<2)await assert.rejects(read,e=>e instanceof PostHogQueryPending);else await assert.rejects(read,{status:404});
+ }
+ assert.equal(gets,3);assert.equal(resume?.lookupAttempts,3);
+ await assert.rejects(readPostHogQuery({...config(),resume,clock:()=>time,deadline:time+5000,sleep:async ms=>{time+=ms;},fetcher:async()=>assert.fail('fourth GET')}),{code:'POSTHOG_QUERY_MISSING'});
+});
+
+
+test('an error after POST headers cannot resubmit even if its body carries DNS metadata',async()=>{
+ let posts=0,gets=0,id='';
+ const result=await readPostHogQuery({...config(),fetcher:async(_url,init)=>{
+  if(init?.method==='POST'){
+   posts++;id=JSON.parse(String(init.body)).client_query_id;
+   return new Response(new ReadableStream({start(controller){controller.error(Object.assign(new Error('synthetic private body failure'),{cause:{code:'EAI_AGAIN'}}));}}),{status:202});
+  }
+  gets++;assert.ok(String(_url).endsWith('/'+id+'/'));return Response.json({query_status:{id,complete:true,results:{results:[[1]]}}});
+ }});
+ assert.deepEqual(result,{results:[[1]]});assert.equal(posts,1);assert.equal(gets,1);
 });
