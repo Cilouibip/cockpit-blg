@@ -288,9 +288,10 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const registrationsFromStarted = registrationsScoped.filter(registration => {
     const browser = browserForRegistration.get(registration.key); return browser && after(registration.occurredAt, browser.formStartAt);
   }).length;
-  const registrationsToVideo = registrationsScoped.filter(registration => {
+  const registrationsWithVideoAfterSignup = registrationsScoped.filter(registration => {
     const browser = browserForRegistration.get(registration.key); return browser && after(browser.videoStartAt, registration.occurredAt);
-  }).length;
+  });
+  const registrationsToVideo = registrationsWithVideoAfterSignup.length;
   const registrationsWithoutNavigation = registrationsScoped.filter(registration => !browserForRegistration.has(registration.key)).length;
   const latestRegistrationPrerequisite = times(browserScoped.flatMap(row => [row.formOpenAt,row.formStartAt]).filter((value): value is string => !!value)).at(-1) ?? null;
   const registrationCoverageComplete = input.freshness.wix.status === 'available' && (!latestRegistrationPrerequisite || after(input.freshness.wix.coveredThrough, latestRegistrationPrerequisite));
@@ -318,7 +319,8 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const bookedCount = bookingCountState.available ? bookedRegistrations.length : null;
   if (input.freshness.appointments.status !== 'available' && input.freshness.appointments.reason) limits.push(input.freshness.appointments.reason);
 
-  const temporalBookings = bookedRegistrations.filter(registration => {
+  // A numerator member must belong to the unchanged signup→video denominator.
+  const temporalBookings = registrationsWithVideoAfterSignup.filter(registration => {
     const browser = browserForRegistration.get(registration.key);
     if (!browser?.videoStartAt || !registration.personId) return false;
     return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, browser.videoStartAt));

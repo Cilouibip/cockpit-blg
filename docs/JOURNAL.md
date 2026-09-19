@@ -1,5 +1,11 @@
 # Journal technique
 
+## 19 septembre 2026 — intersection du numérateur vidéo vers rendez-vous
+
+Complément borné demandé après `76c4c07`. Deux régressions reproduites avant correction : le cas A inscrit→vidéo→RDV, B vidéo→inscription→RDV affiche 2/1 ; si seul B réserve, le taux affiche 1/1 au lieu de 0/1. Le tableau des inscrits ayant démarré la vidéo après inscription est désormais conservé pour calculer à la fois le dénominateur inchangé et son numérateur de réservations. Les grands compteurs, l’autre taux calendrier→RDV, les filtres et les gardes de disponibilité ne changent pas.
+
+32 tests ciblés et 490 tests de la suite complète réussis ; typage et compilation de production Turbopack réussis. Le commit reste séparé de la correction chronologique. Aucune modification de source, migration ni opération distante. Coordinateur seul chargé de la revue, de l’intégration et de la recette réelle ; autorités conservées : ETAT-ACTUEL.md et DECISIONS-ACTEES.md du centre BLG.
+
 ## 19 septembre 2026 — correction locale de l’ordre des instants dans Parcours
 
 Mission bornée déléguée par le coordinateur : partir de `57fb427`, corriger les comparaisons chronologiques dans `visual-journey-report.ts` avec la précision existante. Un seul auteur, branche `codex/parcours-instant-ordering` ; aucun changement de source, calcul métier, cadence ou condition de disponibilité. Le diagnostic indépendant de course de fraîcheur reste séparé.

@@ -1,3 +1,9 @@
+## 19 septembre 2026 — Parcours : intersection vidéo vers rendez-vous (local)
+
+Complément séparé après `76c4c07` : le taux vidéo→RDV pouvait afficher 2/1. Son dénominateur exigeait une vidéo après inscription, mais son numérateur acceptait aussi un réservant ayant regardé avant de s’inscrire. Le numérateur réutilise maintenant exactement les personnes du dénominateur existant, puis leur applique la condition vidéo→RDV déjà présente. Aucun plafonnement artificiel du pourcentage.
+
+Le cas synthétique A inscrit→vidéo→RDV et B vidéo→inscription→RDV donne 1/1 ; les deux personnes restent dans le compteur RDV et dans son détail. Le taux calendrier→RDV conserve sa propre base. Filtres, identité, attribution, dénominateur et toutes les gardes de disponibilité sont inchangés. 32 tests ciblés passent, dont quatre nouveaux couvrant ce cas, un RDV uniquement hors dénominateur, égalité des dates, annulation, absence de RDV/base et conservation de la garde sur une date de réservation manquante. Suite complète : 490 tests réussis ; typage et compilation de production Turbopack réussis. Aucun push, migration ni système distant ; revue et intégration restent au coordinateur.
+
 ## 19 septembre 2026 — Parcours : ordre chronologique des instants (local)
 
 Correction préparée depuis `57fb427` dans `codex/parcours-instant-ordering`. Une couverture `09:26:48.500Z` pouvait être classée avant `09:26:48Z` en comparant les chaînes, ce qui masquait des taux pourtant couverts. Le même défaut concernait l’ordre des étapes, les premiers/derniers événements et la première origine.
