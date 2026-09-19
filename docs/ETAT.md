@@ -1,3 +1,11 @@
+## 19 septembre 2026 — Parcours : ordre chronologique des instants (local)
+
+Correction préparée depuis `57fb427` dans `codex/parcours-instant-ordering`. Une couverture `09:26:48.500Z` pouvait être classée avant `09:26:48Z` en comparant les chaînes, ce qui masquait des taux pourtant couverts. Le même défaut concernait l’ordre des étapes, les premiers/derniers événements et la première origine.
+
+Les comparaisons utilisent désormais `Temporal.Instant`, sans réduction à la milliseconde : les fractions jusqu’à la nanoseconde et les décalages horaires sont conservés. Les règles existantes d’égalité, cohortes, filtres, compteurs, dépendances de couverture et disponibilité restent inchangées. Les instants invalides rencontrés par une comparaison sont refusés ; ils ne valident aucun taux. Les anciens créneaux contenant uniquement une date gardent leur ordre calendaire d’affichage, sans heure inventée et sans servir de date de réservation. Le tri reste cohérent lorsqu’ils sont mélangés à des instants exprimés avec un autre décalage.
+
+Validation ciblée : 28 tests réussis, dont dix nouveaux tests couvrant fractions variables, nanosecondes, instants égaux avec décalages différents, couverture avant/après/égale, minima/maxima, première origine, ordre des étapes, dates invalides et créneaux historiques sans heure. Suite complète : 486 tests réussis ; typage et compilation de production Turbopack réussis. Aucun changement de cadence ni traitement de la course entre lecture des sources ; aucune source, migration ou publication distante. Intégration et recette réelle restent au coordinateur. Autorité : `ETAT-ACTUEL.md` et `DECISIONS-ACTEES.md` du centre BLG.
+
 ## 19 septembre 2026 — C3 : interruption du corps de réponse PostHog
 
 La contre-relecture a reproduit un cas restant après `0df4d18` : les en-têtes HTTP 202 arrivent, puis le corps est interrompu à la limite de temps. La lecture générique masquait cette interruption sous `INVALID_RESPONSE` ; le rapport était déclaré échoué malgré son identifiant sauvegardé.

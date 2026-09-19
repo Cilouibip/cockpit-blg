@@ -1,5 +1,13 @@
 # Journal technique
 
+## 19 septembre 2026 — correction locale de l’ordre des instants dans Parcours
+
+Mission bornée déléguée par le coordinateur : partir de `57fb427`, corriger les comparaisons chronologiques dans `visual-journey-report.ts` avec la précision existante. Un seul auteur, branche `codex/parcours-instant-ordering` ; aucun changement de source, calcul métier, cadence ou condition de disponibilité. Le diagnostic indépendant de course de fraîcheur reste séparé.
+
+Les huit premières régressions reproduisent le défaut avant correction. Les tris et comparaisons portent ensuite sur des instants Temporal, pas sur leur écriture ISO. Les valeurs d’origine sont conservées ; les égalités restent inclusives. Deux tests supplémentaires protègent les rendez-vous historiques avec seulement une date : ordre calendaire conservé, mélange avec instants cohérent, aucune heure ni preuve de réservation inventée. Une date invalide soumise à comparaison est refusée plutôt qu’acceptée comme mesure chronologique.
+
+28 tests ciblés et 486 tests de la suite complète réussis ; typage et compilation de production Turbopack réussis. Revue, intégration et recette réelle restent au coordinateur ; aucun push ni appel distant par cette tâche. Références : `ETAT-ACTUEL.md` et `DECISIONS-ACTEES.md` du centre BLG.
+
 ## 7 septembre 2026 — préparation du chantier
 
 L'utilisateur valide les trois niveaux de KPI et autorise l'organisation d'une relecture indépendante, suivie d'une construction dédiée dans ce dépôt. La LTV est une évolution facultative.
