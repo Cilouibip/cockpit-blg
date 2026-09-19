@@ -1,3 +1,11 @@
+## 19 septembre 2026 — C3 : interruption du corps de réponse PostHog
+
+La contre-relecture a reproduit un cas restant après `0df4d18` : les en-têtes HTTP 202 arrivent, puis le corps est interrompu à la limite de temps. La lecture générique masquait cette interruption sous `INVALID_RESPONSE` ; le rapport était déclaré échoué malgré son identifiant sauvegardé.
+
+Le correctif est limité à `posthog-query.ts`. Il conserve la classification du transport pendant la lecture du flux, avant la normalisation générique ; le parsing JSON reste distinct. `http.ts` et les erreurs des autres connecteurs ne changent pas. Les réponses non-2xx et les limites de taille restent prioritaires. Un corps POST ou GET interrompu au budget devient une continuation en attente ; la reprise récupère le même identifiant sans nouveau POST. Un document entièrement reçu mais invalide reste un échec, y compris à la limite de temps. Le dernier rapport complet reste conservé dans les deux cas.
+
+Validation du complément : reproduction avant/après identique (échec puis attente, checkpoint présent, aucune publication), cinq tests supplémentaires couvrant POST/GET interrompus, JSON invalide POST/GET et refus de réémettre après réception des en-têtes ; 476 tests généraux, typage et compilation Webpack réussis. Les 12 tests PostgreSQL C3 réexécutés réussissent également et vérifient le lecteur contre la persistance réelle. Aucun changement SQL, filtre, calcul, délai ou système distant. La revue finale et l’intégration restent au coordinateur, selon `ETAT-ACTUEL.md` et `DECISIONS-ACTEES.md` du centre BLG.
+
 ## 19 septembre 2026 — C3 : reprise durable des rapports PostHog (local)
 
 Sur la base de production `9d9c016`, la branche `codex/c3-posthog-resume` prépare la correction des expirations Quiz/Masterclass. Elle est indépendante de `codex/c3-native-clock` (`1379dee`) et des migrations 014/015 non installées. Le coordinateur conserve seul intégration, installation et recette réelle ; aucune source ni système distant n’a été modifié ici.

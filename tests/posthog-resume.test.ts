@@ -67,3 +67,46 @@ test('forbidden, truncated and oversized results fail without publication; a los
  const ambiguous=postHogSyncMemory({failPublishAck:true});const report=await synchronizePostHogReport('masterclass',from,to,{db:ambiguous.db,env:syntheticPostHogEnv,prepare:async()=>prepared(['masterclass']),reader:async config=>{await config.execution!.save('masterclass',{version:1,id:'mc-final',origin:'https://eu.posthog.com',projectId:'123',queryHash:'mc',startedAt:Date.now()},true);return mcReport();}});
  assert.equal(report?.status,'complete');assert.equal(ambiguous.receivedRPCcounts('cockpit_publish_posthog'),2);assert.equal(ambiguous.receivedRPCcounts('cockpit_release_posthog'),0);assert.equal(ambiguous.runs[0].status,'complete');
 });
+
+
+for(const interruptedMethod of ['POST','GET'] as const)test(`${interruptedMethod} body aborted at budget stays pending, preserves the last report and resumes the same ID`,async()=>{
+ const originalNow=Date.now;let now=originalNow();Date.now=()=>now;
+ try{
+  const memory=postHogSyncMemory(),previous=[{source:'posthog',value:42}];
+  memory.runs.push({id:'last-complete',lease:'none',status:'complete',checkpoint:{},published:previous});
+  const abort=new AbortController(),deadline=now+20000;let id='',posts=0,gets=0;
+  const first=await synchronizePostHogReport('masterclass',from,to,{db:memory.db,env:syntheticPostHogEnv,prepare:async()=>({...prepared(['masterclass'],deadline),signal:abort.signal}),fetcher:async(_url,init)=>{
+   if(init?.method==='POST'){posts++;id=JSON.parse(String(init.body)).client_query_id;if(interruptedMethod==='GET')return Response.json({query_status:{id,complete:false}},{status:202});}
+   else gets++;
+   assert.equal(init?.method,interruptedMethod);
+   return new Response(new ReadableStream({start(controller){
+    controller.enqueue(new TextEncoder().encode('{"query_status":'));
+    init?.signal?.addEventListener('abort',()=>controller.error(new DOMException('synthetic private body abort','AbortError')),{once:true});
+    setImmediate(()=>{now=deadline;abort.abort();});
+   }}),{status:202});
+  }});
+  assert.equal(first?.status,'pending');assert.equal(first?.safeError,undefined);assert.equal(memory.runs[1].status,'pending');
+  assert.equal(memory.runs[1].error,null);assert.equal(memory.runs[1].checkpoint.masterclass.continuation.id,id);
+  assert.equal(memory.receivedRPCcounts('cockpit_publish_posthog'),0);assert.deepEqual(memory.storedRows(),previous);
+  const second=await synchronizePostHogReport('masterclass',from,to,{db:memory.db,env:syntheticPostHogEnv,prepare:async()=>prepared(['masterclass']),fetcher:async(url,init)=>{
+   assert.equal(init?.method,'GET');assert.ok(String(url).endsWith('/'+id+'/'));gets++;
+   return Response.json({query_status:{id,complete:true,results:{columns:['event','events','visitors','kit_sessions','events_with_visitor_id','events_with_kit_session_id','verified_host_events','unlocated_events','excluded_events'],results:[]}}});
+  }});
+  assert.equal(second?.status,'empty');assert.equal(posts,1);assert.equal(gets,interruptedMethod==='POST'?1:2);
+  assert.equal(memory.receivedRPCcounts('cockpit_publish_posthog'),1);assert.deepEqual(memory.runs[0].published,previous);
+ }finally{Date.now=originalNow;}
+});
+
+for(const invalidMethod of ['POST','GET'] as const)test(`${invalidMethod} fully received invalid JSON fails even at budget expiry and leaves the last complete report untouched`,async()=>{
+ const originalNow=Date.now;let now=originalNow();Date.now=()=>now;
+ try{for(const expire of [false,true]){
+  const memory=postHogSyncMemory(),previous=[{source:'posthog',value:42}],abort=new AbortController(),deadline=now+20000;
+  memory.runs.push({id:'last-complete',lease:'none',status:'complete',checkpoint:{},published:previous});let calls=0;
+  const report=await synchronizePostHogReport('masterclass',from,to,{db:memory.db,env:syntheticPostHogEnv,prepare:async()=>({...prepared(['masterclass'],deadline),signal:abort.signal}),fetcher:async(_url,init)=>{
+   calls++;if(invalidMethod==='GET'&&init?.method==='POST')return Response.json({query_status:{id:JSON.parse(String(init.body)).client_query_id,complete:false}},{status:202});
+   return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{invalid-json'));controller.close();if(expire){now=deadline;abort.abort();}}}),{status:202});
+  }});
+  assert.equal(report?.status,'failed');assert.equal(report?.safeError,'INVALID_RESPONSE');assert.equal(calls,invalidMethod==='POST'?1:2);
+  assert.equal(memory.runs[1].status,'failed');assert.equal(memory.receivedRPCcounts('cockpit_publish_posthog'),0);assert.deepEqual(memory.storedRows(),previous);
+ }}finally{Date.now=originalNow;}
+});

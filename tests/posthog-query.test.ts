@@ -237,3 +237,16 @@ test('three recovery slots survive two budget expirations and no fourth lookup c
  assert.equal(gets,3);assert.equal(resume?.lookupAttempts,3);
  await assert.rejects(readPostHogQuery({...config(),resume,clock:()=>time,deadline:time+5000,sleep:async ms=>{time+=ms;},fetcher:async()=>assert.fail('fourth GET')}),{code:'POSTHOG_QUERY_MISSING'});
 });
+
+
+test('an error after POST headers cannot resubmit even if its body carries DNS metadata',async()=>{
+ let posts=0,gets=0,id='';
+ const result=await readPostHogQuery({...config(),fetcher:async(_url,init)=>{
+  if(init?.method==='POST'){
+   posts++;id=JSON.parse(String(init.body)).client_query_id;
+   return new Response(new ReadableStream({start(controller){controller.error(Object.assign(new Error('synthetic private body failure'),{cause:{code:'EAI_AGAIN'}}));}}),{status:202});
+  }
+  gets++;assert.ok(String(_url).endsWith('/'+id+'/'));return Response.json({query_status:{id,complete:true,results:{results:[[1]]}}});
+ }});
+ assert.deepEqual(result,{results:[[1]]});assert.equal(posts,1);assert.equal(gets,1);
+});

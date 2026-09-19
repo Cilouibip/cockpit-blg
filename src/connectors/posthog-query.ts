@@ -68,17 +68,29 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
   let transportCode:string|undefined;
   const fetcher: typeof fetch = async (input, init) => {
     const signal=AbortSignal.any([options.signal,...(init?.signal?[init.signal]:[])]);
+    const classifyTransport=(error:unknown,headersReceived=false)=>{
+      // Never retain upstream strings, response bodies or request credentials.
+      const code=(error as {cause?:{code?:string}})?.cause?.code;
+      transportCode=options.signal.aborted?'POSTHOG_CANCELLED':signal.aborted?'POSTHOG_REQUEST_TIMEOUT':
+        !headersReceived&&(code==='ENOTFOUND'||code==='EAI_AGAIN')?'POSTHOG_DNS_ERROR':code==='ECONNRESET'?'POSTHOG_CONNECTION_RESET':'POSTHOG_TRANSPORT_ERROR';
+    };
     try {
       const response=await (options.fetcher??fetch)(input,{...init,signal});
       const retry=response.headers.get('retry-after');
       retryAfterMs=retry&&/^\d+$/.test(retry)?Number(retry)*1000:250;
-      return response;
+      if(!response.ok||!response.body)return response;
+      // fetch resolves at headers. Preserve transport errors from the body too,
+      // before readJson normalizes them. JSON parsing stays outside this stream
+      // and a fully received malformed document remains INVALID_RESPONSE.
+      const reader=response.body.getReader();
+      const body=new ReadableStream<Uint8Array>({
+        async pull(controller){try{const {done,value}=await reader.read();if(done)controller.close();else controller.enqueue(value);}
+          catch(error){classifyTransport(error,true);controller.error(error);}},
+        cancel(reason){return reader.cancel(reason);},
+      });
+      return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});
     } catch(error) {
-      // Classify only allowlisted transport metadata; never the error message/URL.
-      const code=(error as {cause?:{code?:string}})?.cause?.code;
-      transportCode=options.signal.aborted?'POSTHOG_CANCELLED':signal.aborted?'POSTHOG_REQUEST_TIMEOUT':
-        code==='ENOTFOUND'||code==='EAI_AGAIN'?'POSTHOG_DNS_ERROR':code==='ECONNRESET'?'POSTHOG_CONNECTION_RESET':'POSTHOG_TRANSPORT_ERROR';
-      throw error;
+      classifyTransport(error);throw error;
     }
   };
   const request = async (path: string, init: RequestInit) => {
@@ -92,14 +104,14 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
           fetcher, attempts: 1, timeoutMs: Math.min(20_000, remaining),
         }));
       } catch (error) {
-        const transient = error instanceof ConnectorError && (error.code === 'NETWORK_ERROR' || (error.code === 'UPSTREAM_HTTP_ERROR' && (error.status===429||(error.status ?? 0) >= 500)));
+        const transient = error instanceof ConnectorError && (error.code === 'NETWORK_ERROR' || (error.code === 'INVALID_RESPONSE' && !!transportCode) || (error.code === 'UPSTREAM_HTTP_ERROR' && (error.status===429||(error.status ?? 0) >= 500)));
         // A lost POST acknowledgement may already have started an expensive query.
         // Only DNS failures and explicit rate limiting are safe to resubmit.
         const uncertainSubmission = init.method === 'POST' && transient &&
           transportCode !== 'POSTHOG_DNS_ERROR' && !(error instanceof ConnectorError && error.status === 429);
         // Respect Retry-After; do not issue an early retry if it cannot fit.
         if (attempt || uncertainSubmission || !transient || options.signal.aborted || options.deadline - now() < retryAfterMs+1_000) {
-          if(transportCode)throw new ConnectorError(transportCode);
+          if(transportCode && error instanceof ConnectorError && ['NETWORK_ERROR','INVALID_RESPONSE'].includes(error.code))throw new ConnectorError(transportCode);
           throw error;
         }
         await sleep(retryAfterMs);
