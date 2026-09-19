@@ -25,3 +25,18 @@ test('les attentes et interruptions de lecture restent identifiables sans expose
   assert.equal(calls,1,'aucun rejeu automatique des opérations de base');
  }
 });
+
+
+test('PostHog persistence RPCs and probes honor the supplied remaining budget',async()=>{
+ const hold=setTimeout(()=>{},1000);
+ try{for(const method of ['select','rpc'] as const){
+  let signal:AbortSignal|undefined;
+  const db=supabaseDatabase(getConfig({SUPABASE_URL:'https://synthetic.supabase.co',SUPABASE_SECRET_KEY:'synthetic'}),async(_url,init)=>{signal=init?.signal as AbortSignal;return new Promise((_resolve,reject)=>signal!.addEventListener('abort',()=>reject(Error('synthetic timeout')),{once:true}));});
+  const at=performance.now();await assert.rejects(method==='select'?db.select('sync_runs',{timeoutMs:25}):db.rpc('cockpit_publish_posthog',{}, {timeoutMs:25}),{code:'database_unavailable'});
+  assert.equal(signal?.aborted,true);assert.ok(performance.now()-at<750);
+ }}finally{clearTimeout(hold);}
+});
+test('an acknowledgement body lost after headers is a recoverable database failure',async()=>{
+ const db=supabaseDatabase(getConfig({SUPABASE_URL:'https://synthetic.supabase.co',SUPABASE_SECRET_KEY:'synthetic'}),async()=>({ok:true,text:async()=>{throw Error('private body timeout');}} as unknown as Response));
+ await assert.rejects(db.rpc('cockpit_publish_posthog',{}),{code:'database_unavailable'});
+});

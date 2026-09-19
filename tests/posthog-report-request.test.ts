@@ -79,3 +79,15 @@ test('Missing timestamps refresh; a report observed before closure gets a final 
  ] as const){let starts=0;const result=await requestPostHogReport({...filters,from,to},'quiz',{db:database(),namespace:'synthetic',now:()=>now,read:async()=>({...report,observedAt}),start:async()=>{starts++;return null;}});
  assert.equal(starts,refresh?1:0);assert.equal(result.state,refresh?'failed':'ready');}
 });
+
+
+test('a saved pending report releases its lease and prepares again without becoming failed',async()=>{
+ const now=Date.parse('2026-09-08T12:00:00Z');let calls=0,stored:typeof report|null=null;
+ const db=database(()=>[{started_at:new Date(now-60000).toISOString(),lease_until:new Date(now-1).toISOString()}]);
+ const options={db,namespace:'synthetic',now:()=>now,read:async()=>stored,start:async()=>{
+  if(++calls===1)return {status:'pending',observedAt:null,coverage:{queryComplete:false}};
+  stored=report;return report;
+ }};
+ assert.equal((await requestPostHogReport(filters,'quiz',options)).state,'waiting');
+ assert.equal((await requestPostHogReport(filters,'quiz',options)).state,'ready');assert.equal(calls,2);
+});

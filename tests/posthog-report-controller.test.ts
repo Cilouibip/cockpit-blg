@@ -19,10 +19,10 @@ test('Failure on B preserves absence on B; it never recycles the earlier ready A
  const seen:ReportLoadingState[]=[];const c=createPostHogReportController({transport:async r=>{if(r.key==='B')throw Error('source failed');return ready(r.key);}});
  await c.select({key:'A',url:'/A'},s=>seen.push(s));await c.select({key:'B',url:'/B'},s=>seen.push(s));assert.equal(seen.at(-1)?.key,'B');assert.equal(seen.at(-1)?.state,'failed');
 });
-test('Waiting resumes within a finite attempt budget and then becomes a retryable failure',async()=>{
+test('Waiting resumes within a finite attempt budget and then remains waiting with a manual retry',async()=>{
  for(const succeeds of [true,false]){let time=0,calls=0;const seen:ReportLoadingState[]=[];
  const c=createPostHogReportController({now:()=>time,sleep:async ms=>{time+=ms;},maxAttempts:3,transport:async r=>++calls===3&&succeeds?ready(r.key):{key:r.key,state:'waiting',message:'Wait',retryAfterMs:1000}});
- await c.select({key:'A',url:'/A'},s=>seen.push(s));assert.equal(calls,3);assert.equal(seen.at(-1)?.state,succeeds?'ready':'failed');}
+ await c.select({key:'A',url:'/A'},s=>seen.push(s));assert.equal(calls,3);assert.equal(seen.at(-1)?.state,succeeds?'ready':'waiting');if(!succeeds)assert.equal((seen.at(-1) as PostHogReportState).retryable,true);}
 });
 test('Comparison owns its status; a missing previous report cannot change the current ready report',async()=>{
  const current:ReportLoadingState[]=[],previous:ReportLoadingState[]=[];

@@ -15,6 +15,9 @@ test('authenticated sync routes accept receipts and forward four annual Meta par
   if(url.hostname==='synthetic.supabase.co'){
    const body=JSON.parse(String(init?.body??'null'));
    if(url.pathname.endsWith('/consume_rate_limit')){const count=(limits.get(body.p_key)??0)+1;limits.set(body.p_key,count);return response(count<=body.p_limit);}
+   if(url.pathname.endsWith('/sync_runs'))return response([]);
+   if(url.pathname.endsWith('/cockpit_claim_posthog')){runs.push(body);return response({busy:false,runId:randomUUID(),lease:randomUUID(),checkpoint:{queries:{}},observedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+600000).toISOString()});}
+   if(['/cockpit_save_posthog_query','/cockpit_release_posthog','/cockpit_publish_posthog'].some(path=>url.pathname.endsWith(path)))return response(true);
    if(url.pathname.endsWith('/begin_sync_stream')){runs.push(body);return response(randomUUID());}
    if(url.pathname.endsWith('/finish_sync'))return response(true);
    if(url.pathname.endsWith('/source_aggregates'))return new Response(null,{status:201});

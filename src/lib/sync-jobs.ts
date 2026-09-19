@@ -29,8 +29,8 @@ const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cad
  {id:'receipts',source:'wix',stream:'receipt_observations',cadence:3600000},
  {id:'meta_ads',source:'meta',stream:'ad_daily',cadence:3600000},
  {id:'meta_catalog',source:'meta',stream:'ad_catalog',cadence:3600000},
- {id:'quiz',source:'posthog',stream:'quiz_observations',cadence:3600000},
- {id:'masterclass',source:'posthog',stream:'masterclass_observations',cadence:3600000},
+ {id:'quiz',source:'posthog',stream:'quiz_observations',cadence:3600000,resumable:true},
+ {id:'masterclass',source:'posthog',stream:'masterclass_observations',cadence:3600000,resumable:true},
  // Inscriptions Wix (masterclass, quiz), antériorité Client (Notion) et ventes payées : mêmes lecteurs que le bouton Actualiser, sans agent.
  {id:'forms',source:'wix',stream:'lead_entries_forms',cadence:3600000,resumable:true},
  {id:'quiz_entries',source:'wix',stream:'lead_entries_quiz',cadence:3600000,resumable:true},
@@ -76,10 +76,10 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|n
  return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
-type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>;
+type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
 export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
-type TickOptions={now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch})=>Promise<TickResult>};
+type TickOptions={now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité, tels qu'enregistrés dans sync_runs ; null = unité non configurée (elle n'est pas planifiée, jamais un zéro). */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
  const client=postHogClientProfile(env);
@@ -103,7 +103,7 @@ export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;pr
   case 'commerce':return scope(commerce?.parcours.dataSourceId,commerce?notionCommerceProfile(commerce):null,!!commerce?.schedule&&!!env.NOTION_TOKEN);
  }
 }
-async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch}):Promise<TickResult>{
+async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget}):Promise<TickResult>{
  const {db,env}=options;
  switch(job){
   case 'notion':case 'meta':return synchronize(job,undefined,undefined,options) as Promise<TickResult>;
@@ -111,8 +111,8 @@ async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Data
   case 'receipts':return synchronizeWixTransactionCounts(from,to,options) as Promise<TickResult>;
   case 'meta_ads':return synchronizeMetaAds(undefined,undefined,options) as Promise<TickResult>;
   case 'meta_catalog':return syncMetaCatalog(options) as Promise<TickResult>;
-  case 'quiz':return (await postHogPeriod(from,to,options))??{status:'failed'};
-  case 'masterclass':return (await postHogMasterclassPeriod(from,to,options))??{status:'failed'};
+  case 'quiz':return (await postHogPeriod(from,to,{...options,resumeRunningPeriod:true}))??{status:'failed'};
+  case 'masterclass':return (await postHogMasterclassPeriod(from,to,{...options,resumeRunningPeriod:true}))??{status:'failed'};
   case 'forms':return synchronizeLeadEntries('forms',{db,env,fetcher:options.fetcher,maxPages:3});
   case 'quiz_entries':return synchronizeLeadEntries('quiz',{db,env,fetcher:options.fetcher,maxPages:3});
   case 'client_history':return synchronizeLeadEntries('client_history',{db,env,fetcher:options.fetcher,maxPages:3});
@@ -156,9 +156,9 @@ export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=
    let result:TickResult;
    const measure={job,elapsedMs:0,sourceRequests:0,sourceMs:0,dbReads:0,dbWrites:0,dbMs:0,rowsSubmitted:0},started=performance.now();
    const timed=async<T>(fn:()=>Promise<T>)=>{const at=performance.now();try{return await fn();}finally{measure.dbMs+=performance.now()-at;}};
-   const measuredDb:Database={...db,select:(...args)=>{measure.dbReads++;return timed(()=>db.select(...args));},upsert:(...args)=>{measure.dbWrites++;measure.rowsSubmitted+=args[1].length;return timed(()=>db.upsert(...args));},rpc:<T>(name:string,args:Row)=>{measure.dbWrites++;if(Array.isArray(args.p_records))measure.rowsSubmitted+=args.p_records.length;return timed(()=>db.rpc<T>(name,args));}};
+   const measuredDb:Database={...db,select:(...args)=>{measure.dbReads++;return timed(()=>db.select(...args));},upsert:(...args)=>{measure.dbWrites++;measure.rowsSubmitted+=args[1].length;return timed(()=>db.upsert(...args));},rpc:<T>(name:string,args:Row,options?:Parameters<Database['rpc']>[2])=>{measure.dbWrites++;if(Array.isArray(args.p_records))measure.rowsSubmitted+=args.p_records.length;return timed(()=>db.rpc<T>(name,args,options));}};
    const fetcher:typeof fetch=async(...args)=>{const at=performance.now();measure.sourceRequests++;try{return await budget.sourceFetch(...args);}finally{measure.sourceMs+=performance.now()-at;}};
-   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher});}
+   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher,...(budget.remainingWorkMs&&budget.remainingTotalMs?{budget:{remainingWorkMs:budget.remainingWorkMs,remainingTotalMs:budget.remainingTotalMs}}:{})});}
    catch(error) {result={status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};excluded.add(job);}
    invalidateSourceSnapshots(db);
    measure.elapsedMs=Math.round(performance.now()-started);measure.dbMs=Math.round(measure.dbMs);measure.sourceMs=Math.round(measure.sourceMs);measurements.push(measure);
@@ -171,7 +171,7 @@ export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=
   for(const state of streams){
    const result=finalStatuses.get(state.job);
    if(result==='failed'){state.state='failed';state.errorCode=results.filter((_,index)=>jobs[index]===state.job).at(-1)?.safeError??state.errorCode??'SYNC_UNIT_FAILED';}
-   else if(result==='partial'&&state.state!=='waiting')state.state='due';
+   else if((result==='partial'||result==='pending')&&state.state!=='waiting')state.state='due';
   }
   const due=streams.some(s=>s.state==='due'),waiting=streams.some(s=>s.state==='waiting'),failed=streams.some(s=>s.state==='failed');
   const status=due||budgetStopped?'partial':waiting?'waiting':failed?'failed':enabled.length?'complete':'failed';

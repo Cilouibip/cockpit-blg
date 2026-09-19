@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Temporal } from '@js-temporal/polyfill';
 import { ConnectorError, object, readJson, safeConnectorError } from './http';
-import {readPostHogQuery} from './posthog-query';
+import {readPostHogQuery,PostHogQueryPending,type PostHogQueryContinuation} from './posthog-query';
 import type { PostHogConfig } from './posthog';
 
 /** Embedded, aggregate-only use of Query; never EventsQuery or raw exports.
@@ -44,10 +44,24 @@ export interface PostHogDailyAggregate extends PostHogAggregateCounts { day: str
 export interface PostHogEventAggregate extends PostHogAggregateCounts { event: EventName }
 export interface PostHogHostEventAggregate extends PostHogEventAggregate { host: ProductionHost }
 export interface PostHogQuestionAggregate extends PostHogAggregateCounts { questionNumber: number | null }
-export interface PostHogAnalyticsConfig extends PostHogConfig { from: string; to: string; now?: () => string; scope?:PostHogDimensionScope;client?:PostHogClientProfile }
+class PostHogReportPending extends ConnectorError {constructor(){super('POSTHOG_QUERY_PENDING');}}
+const pendingQuery=(error:unknown)=>error instanceof PostHogQueryPending||error instanceof PostHogReportPending;
+export type PostHogAggregateQueryName='overview'|'byEvent'|'byHostEvent'|'daily'|'questions'|'masterclass';
+export interface PreparedPostHogAnalytics {
+ endpoint:URL;headers:Record<string,string>;schema:{sessionIdAvailable:boolean;questionNumberProperty:'numero'|null};
+ queries:Partial<Record<PostHogAggregateQueryName,string>>;deadline:number;signal:AbortSignal;
+}
+export interface PostHogReportExecution {
+ resume:Partial<Record<PostHogAggregateQueryName,PostHogQueryContinuation>>;
+ save:(name:PostHogAggregateQueryName,continuation:PostHogQueryContinuation,complete:boolean)=>Promise<void>;
+}
+export interface PostHogAnalyticsConfig extends PostHogConfig {
+ from:string;to:string;now?:()=>string;scope?:PostHogDimensionScope;client?:PostHogClientProfile;
+ deadline?:number;signal?:AbortSignal;prepared?:PreparedPostHogAnalytics;execution?:PostHogReportExecution;
+}
 export interface PostHogAnalyticsReport {
   source: 'posthog'; connectorVersion: string; projectId: string; from: string; to: string; timezone: 'Europe/Paris'; observedAt: string | null;
-  status: 'not_configured' | 'complete' | 'empty' | 'partial' | 'failed'; safeError?: string;
+  status: 'not_configured' | 'complete' | 'empty' | 'partial' | 'pending' | 'failed'; safeError?: string;
   overview: PostHogAggregateCounts | null; daily: PostHogDailyAggregate[]; byEvent: PostHogEventAggregate[]; byHostEvent: PostHogHostEventAggregate[]; questions: PostHogQuestionAggregate[];
   schema: { sessionIdAvailable: boolean; questionNumberProperty: 'numero' | null };
   coverage: { queryComplete: boolean; allTrafficComplete: false; firstObservedAt: string | null; lastObservedAt: string | null;
@@ -172,40 +186,13 @@ export async function readPostHogAnalytics(config: PostHogAnalyticsConfig): Prom
     semantics: { visitorIdentity: 'distinct_id', sessionIdentity: '$session_id', verifiedBackendLeads: false, sequentialFunnel: false } };
   if (!config.host || !config.projectId || !config.personalApiKey) return report;
   try {
-    const endpoint = new URL(config.host);
-    if (!['https://eu.posthog.com', 'https://us.posthog.com', 'https://app.posthog.com'].includes(endpoint.origin) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !['', '/'].includes(endpoint.pathname) || !/^\d+$/.test(config.projectId)) throw new ConnectorError('INVALID_CONFIGURATION');
     report.observedAt = Temporal.Instant.from(config.now?.() ?? new Date().toISOString()).toString();
     const scope=config.scope??POSTHOG_DEFAULT_SCOPE,client=config.client??POSTHOG_DEFAULT_CLIENT;
     report.scope=scope;report.client=client;report.connectorVersion=postHogScopeProfile(scope,client);
-    postHogAggregateQueries(config.from, config.to, report.schema,scope,client);
-    const deadline=Date.now()+45_000;
-    const requestOptions=()=>{const remaining=deadline-Date.now();if(remaining<1_000)throw new ConnectorError('POSTHOG_TIME_BUDGET');return {...config,attempts:1,timeoutMs:Math.min(20_000,remaining)};};
-    const headers = { Authorization: `Bearer ${config.personalApiKey}`, 'Content-Type': 'application/json' };
-    const project = object(await readJson(new URL(`/api/projects/${config.projectId}/`, endpoint.origin), { method: 'GET', headers }, requestOptions()));
-    if (String(project.id) !== config.projectId) throw new ConnectorError('PROJECT_IDENTITY_MISMATCH');
-    const definitions = new Map<string, { type: unknown; numerical: unknown }>(); let offset = 0, completed = false;
-    for (let page = 0; page < 10; page++) {
-      const url = new URL(`/api/projects/${config.projectId}/property_definitions/`, endpoint.origin);
-      url.search = new URLSearchParams({ type: 'event', limit: '100', offset: String(offset) }).toString();
-      const payload = object(await readJson(url, { method: 'GET', headers }, requestOptions()));
-      if (!Array.isArray(payload.results) || payload.results.length > 100 || (payload.next && !payload.results.length)) throw new ConnectorError('INVALID_POSTHOG_SCHEMA');
-      for (const raw of payload.results) {
-        const row = object(raw);
-        if (typeof row.name !== 'string' || definitions.has(row.name)) throw new ConnectorError('POSTHOG_SCHEMA_PAGINATION_CHANGED');
-        definitions.set(row.name, { type: row.property_type, numerical: row.is_numerical });
-      }
-      if (!payload.next) { completed = true; break; }
-      // Follow only our fixed endpoint/offset, never the upstream next URL.
-      offset += payload.results.length;
-    }
-    if (!completed) throw new ConnectorError('POSTHOG_SCHEMA_PAGE_LIMIT');
-    if (definitions.get('$host')?.type !== 'String' || definitions.get('$current_url')?.type !== 'String') throw new ConnectorError('POSTHOG_HOST_SCHEMA_MISSING');
-    report.schema.sessionIdAvailable = definitions.get('$session_id')?.type === 'String';
-    report.schema.questionNumberProperty = definitions.get('numero')?.type === 'Numeric' && definitions.get('numero')?.numerical === true ? 'numero' : null;
-    const queries = postHogAggregateQueries(config.from, config.to, report.schema,scope,client);
-    const query = async (name: keyof typeof queries, columns: string[], limit: number) => rows(await readJson(new URL(`/api/projects/${config.projectId}/query/`, endpoint.origin), {
-      method: 'POST', headers, body: JSON.stringify({ query: { kind: 'HogQLQuery', query: queries[name] }, refresh: 'force_blocking', name: `BLG production aggregate ${name}` }),
-    }, requestOptions()), columns, limit);
+    const prepared=config.prepared??await preparePostHogAnalytics(config,'quiz');
+    report.schema={...prepared.schema};
+    const queries=prepared.queries;
+    const query=(name:PostHogAggregateQueryName,columns:string[],limit:number)=>readAggregateQuery(config,prepared,name,columns,limit);
     const overviewRows = await query('overview', [...countColumns, 'observed_tracked_events', 'missing_host_events', 'conflicting_host_events', 'excluded_host_events', 'identifiable_test_events', 'first_observed_at', 'last_observed_at'], 2);
     if (overviewRows.length !== 1) throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
     const overview = overviewRows[0]; report.overview = counts(overview.slice(0, 5), report.schema.sessionIdAvailable);
@@ -218,12 +205,8 @@ export async function readPostHogAnalytics(config: PostHogAnalyticsConfig): Prom
       }
       report.coverage.firstObservedAt = Temporal.Instant.from(String(overview[10])).toString(); report.coverage.lastObservedAt = Temporal.Instant.from(String(overview[11])).toString();
     }
-    const [eventRows,hostRows,dailyRows,questionRows]=await Promise.all([
-      query('byEvent',['event',...countColumns],20),
-      query('byHostEvent',['host','event',...countColumns],client.productionHosts.length*POSTHOG_JOURNEY_EVENTS.length+1),
-      query('daily',['day','event','host',...countColumns],10000),
-      queries.questions?query('questions',['question_number',...countColumns],102):Promise.resolve([]),
-    ]);
+    const [eventRows,hostRows]=await settleQueries([query('byEvent',['event',...countColumns],20),query('byHostEvent',['host','event',...countColumns],client.productionHosts.length*POSTHOG_JOURNEY_EVENTS.length+1)]);
+    const [dailyRows,questionRows]=await settleQueries([query('daily',['day','event','host',...countColumns],10000),queries.questions?query('questions',['question_number',...countColumns],102):Promise.resolve([])]);
     report.byEvent = eventRows.map(row => ({ event: eventName(row[0]), ...counts(row.slice(1), report.schema.sessionIdAvailable) }));
     report.byHostEvent = hostRows.map(row => {
       if (!client.productionHosts.includes(row[0] as ProductionHost)) throw new ConnectorError('POSTHOG_SCOPE_MISMATCH');
@@ -256,7 +239,7 @@ export async function readPostHogAnalytics(config: PostHogAnalyticsConfig): Prom
     report.status = report.overview.events ? 'complete' : 'empty';
     return report;
   } catch (error) {
-    report.status = report.overview ? 'partial' : 'failed'; report.safeError = safeConnectorError(error);
+    report.status = pendingQuery(error)?'pending':report.overview?'partial':'failed'; report.safeError = pendingQuery(error)?undefined:safeConnectorError(error);
     report.coverage.reason = 'Lecture agrégée incomplète ; ne pas publier de métrique canonique à partir de ce résultat.';
     return report;
   }
@@ -266,7 +249,7 @@ export const POSTHOG_MASTERCLASS_VERSION='posthog-masterclass-observations-v1';
 export const POSTHOG_MASTERCLASS_EVENTS=['mc_page_view','mc_page_exit','mc_visibility_change','mc_optin_recorded','mc_video_start','mc_video_progress','mc_video_heartbeat','mc_booking_confirmed'] as const;
 export type MasterclassObservation={event:typeof POSTHOG_MASTERCLASS_EVENTS[number];events:number;visitors:number|null;kitSessions:number|null;eventsWithVisitorId:number;eventsWithKitSessionId:number;verifiedHostEvents:number;unlocatedEvents:number;excludedEvents:number};
 export interface PostHogMasterclassReport {
- source:'posthog';profile:string;from:string;to:string;observedAt:string|null;status:'not_configured'|'complete'|'empty'|'failed';safeError?:string;
+ source:'posthog';profile:string;from:string;to:string;observedAt:string|null;status:'not_configured'|'complete'|'empty'|'pending'|'failed';safeError?:string;
  byEvent:MasterclassObservation[];coverage:{queryComplete:boolean;hostVerified:boolean;reason:string};
 }
 export function postHogMasterclassProfile(client:PostHogClientProfile=POSTHOG_DEFAULT_CLIENT){return `${POSTHOG_MASTERCLASS_VERSION}:${createHash('sha256').update(JSON.stringify(client)).digest('hex').slice(0,16)}`;}
@@ -293,17 +276,9 @@ export async function readPostHogMasterclassAnalytics(config:PostHogAnalyticsCon
  const report:PostHogMasterclassReport={source:'posthog',profile:postHogMasterclassProfile(client),from:config.from,to:config.to,observedAt:null,status:'not_configured',byEvent:[],coverage:{queryComplete:false,hostVerified:false,reason:'Connexion non configurée.'}};
  if(!config.host||!config.projectId||!config.personalApiKey)return report;
  try {
-  const endpoint=new URL(config.host);
-  if(!['https://eu.posthog.com','https://us.posthog.com','https://app.posthog.com'].includes(endpoint.origin)||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!['','/'].includes(endpoint.pathname)||!/^\d+$/.test(config.projectId))throw new ConnectorError('INVALID_CONFIGURATION');
-  if(config.scope&&(config.scope.source!=='all'||config.scope.campaignId))throw new ConnectorError('POSTHOG_SCOPE_UNAVAILABLE');
-  const sql=postHogMasterclassQuery(config.from,config.to,client),headers={Authorization:`Bearer ${config.personalApiKey}`,'Content-Type':'application/json'};
-  const deadline=Date.now()+30_000,signal=AbortSignal.timeout(30_000);
-  const fetcher:typeof fetch=(input,init)=> (config.fetcher??fetch)(input,{...init,signal:AbortSignal.any([signal,...(init?.signal?[init.signal]:[])])});
-  const options={...config,fetcher,attempts:1,timeoutMs:20_000};
-  const project=object(await readJson(new URL(`/api/projects/${config.projectId}/`,endpoint.origin),{method:'GET',headers},options));
-  if(String(project.id)!==config.projectId)throw new ConnectorError('PROJECT_IDENTITY_MISMATCH');
-  const result=await readPostHogQuery({endpoint,projectId:config.projectId,headers,query:sql,name:'Masterclass aggregate observations',deadline,signal,fetcher,sleep:config.sleep});
-  report.byEvent=rows(result,['event','events','visitors','kit_sessions','events_with_visitor_id','events_with_kit_session_id','verified_host_events','unlocated_events','excluded_events'],POSTHOG_MASTERCLASS_EVENTS.length+1).map(row=>{
+  const prepared=config.prepared??await preparePostHogAnalytics(config,'masterclass');
+  const result=await readAggregateQuery(config,prepared,'masterclass',['event','events','visitors','kit_sessions','events_with_visitor_id','events_with_kit_session_id','verified_host_events','unlocated_events','excluded_events'],POSTHOG_MASTERCLASS_EVENTS.length+1);
+  report.byEvent=result.map(row=>{
    if(!POSTHOG_MASTERCLASS_EVENTS.includes(row[0] as MasterclassObservation['event']))throw new ConnectorError('UNEXPECTED_POSTHOG_EVENT');
    const c=counts(row.slice(1,6),true),[verifiedHostEvents,unlocatedEvents,excludedEvents]=row.slice(6).map(count);
    if(verifiedHostEvents+unlocatedEvents+excludedEvents!==c.events)throw new ConnectorError('POSTHOG_HOST_COVERAGE_MISMATCH');
@@ -313,6 +288,63 @@ export async function readPostHogMasterclassAnalytics(config:PostHogAnalyticsCon
   report.observedAt=Temporal.Instant.from(config.now?.()??new Date().toISOString()).toString();
   report.status=report.byEvent.some(r=>r.events)?'complete':'empty';
   report.coverage={queryComplete:true,hostVerified:report.byEvent.length>0&&report.byEvent.every(r=>r.events===r.verifiedHostEvents),reason:'Observations du kit sur la période entière. page_id et environment ne prouvent pas une URL de production ; sid est une session du kit, distincte de la session SDK. Aucun enregistrement métier ni durée vidéo ne se déduit de ces comptes.'};
- }catch(error){report.status='failed';report.byEvent=[];report.safeError=safeConnectorError(error);report.coverage.reason='Lecture masterclass incomplète.';}
+ }catch(error){report.status=pendingQuery(error)?'pending':'failed';report.byEvent=[];report.safeError=pendingQuery(error)?undefined:safeConnectorError(error);report.coverage.reason='Lecture masterclass incomplète.';}
  return report;
+}
+
+/** Metadata preflight is bounded and contains no event/person export. A caller
+ * can persist its immutable plan before any aggregate query is submitted. */
+export async function preparePostHogAnalytics(config:PostHogAnalyticsConfig,kind:'quiz'|'masterclass'):Promise<PreparedPostHogAnalytics> {
+ const endpoint=new URL(config.host??'');
+ if(!['https://eu.posthog.com','https://us.posthog.com','https://app.posthog.com'].includes(endpoint.origin)||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!['','/'].includes(endpoint.pathname)||!/^\d+$/.test(config.projectId??''))throw new ConnectorError('INVALID_CONFIGURATION');
+ const client=config.client??POSTHOG_DEFAULT_CLIENT,scope=config.scope??POSTHOG_DEFAULT_SCOPE;
+ if(kind==='masterclass'&&(scope.source!=='all'||scope.campaignId))throw new ConnectorError('POSTHOG_SCOPE_UNAVAILABLE');
+ const schema:PreparedPostHogAnalytics['schema']={sessionIdAvailable:false,questionNumberProperty:null};
+ if(kind==='quiz')postHogAggregateQueries(config.from,config.to,schema,scope,client);else postHogMasterclassQuery(config.from,config.to,client);
+ const deadline=config.deadline??Date.now()+(kind==='quiz'?45_000:30_000);
+ const signal=config.signal??AbortSignal.timeout(Math.max(1,deadline-Date.now()));
+ const headers={Authorization:`Bearer ${config.personalApiKey}`,'Content-Type':'application/json'};
+ const fetcher:typeof fetch=(input,init)=>(config.fetcher??fetch)(input,{...init,signal:AbortSignal.any([signal,...(init?.signal?[init.signal]:[])])});
+ const read=async(url:URL)=>{
+  const remaining=deadline-Date.now();if(signal.aborted||remaining<1_000)throw new ConnectorError('POSTHOG_TIME_BUDGET');
+  return object(await readJson(url,{method:'GET',headers},{fetcher,attempts:1,timeoutMs:Math.min(20_000,remaining)}));
+ };
+ const project=await read(new URL(`/api/projects/${config.projectId}/`,endpoint.origin));
+ if(String(project.id)!==config.projectId)throw new ConnectorError('PROJECT_IDENTITY_MISMATCH');
+ if(kind==='quiz'){
+  const definitions=new Map<string,{type:unknown;numerical:unknown}>();let offset=0,completed=false;
+  for(let page=0;page<10;page++){
+   const url=new URL(`/api/projects/${config.projectId}/property_definitions/`,endpoint.origin);
+   url.search=new URLSearchParams({type:'event',limit:'100',offset:String(offset)}).toString();
+   const payload=await read(url);
+   if(!Array.isArray(payload.results)||payload.results.length>100||(payload.next&&!payload.results.length))throw new ConnectorError('INVALID_POSTHOG_SCHEMA');
+   for(const raw of payload.results){const row=object(raw);if(typeof row.name!=='string'||definitions.has(row.name))throw new ConnectorError('POSTHOG_SCHEMA_PAGINATION_CHANGED');definitions.set(row.name,{type:row.property_type,numerical:row.is_numerical});}
+   if(!payload.next){completed=true;break;}offset+=payload.results.length;
+  }
+  if(!completed)throw new ConnectorError('POSTHOG_SCHEMA_PAGE_LIMIT');
+  if(definitions.get('$host')?.type!=='String'||definitions.get('$current_url')?.type!=='String')throw new ConnectorError('POSTHOG_HOST_SCHEMA_MISSING');
+  schema.sessionIdAvailable=definitions.get('$session_id')?.type==='String';
+  schema.questionNumberProperty=definitions.get('numero')?.type==='Numeric'&&definitions.get('numero')?.numerical===true?'numero':null;
+ }
+ const queries=kind==='quiz'?Object.fromEntries(Object.entries(postHogAggregateQueries(config.from,config.to,schema,scope,client)).filter(([,sql])=>sql!==null)):{masterclass:postHogMasterclassQuery(config.from,config.to,client)};
+ return {endpoint,headers,schema,queries,deadline,signal};
+}
+async function readAggregateQuery(config:PostHogAnalyticsConfig,prepared:PreparedPostHogAnalytics,name:PostHogAggregateQueryName,columns:string[],limit:number):Promise<unknown[][]>{
+ const query=prepared.queries[name];if(!query)throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
+ const execution=config.execution;
+ // Reserve the bounded checkpoint write before starting a new remote query.
+ if(execution&&!execution.resume[name]&&prepared.deadline-Date.now()<6_500)throw new PostHogReportPending();
+ const payload=await readPostHogQuery({endpoint:prepared.endpoint,projectId:config.projectId!,headers:prepared.headers,query,name:name==='masterclass'?'Masterclass aggregate observations':`BLG production aggregate ${name}`,deadline:prepared.deadline,signal:prepared.signal,fetcher:config.fetcher,sleep:config.sleep,
+  ...(execution?{resumable:true,resume:execution.resume[name],onContinuation:async(continuation:PostHogQueryContinuation)=>{await execution.save(name,continuation,false);execution.resume[name]=continuation;}}:{}),
+ });
+ const result=rows(payload,columns,limit);
+ if(execution){const continuation=execution.resume[name];if(!continuation)throw new ConnectorError('INVALID_POSTHOG_CONTINUATION');await execution.save(name,continuation,true);}
+ return result;
+}
+
+async function settleQueries<T>(queries:Promise<T>[]):Promise<T[]>{
+ const results=await Promise.allSettled(queries);
+ const errors=results.filter((r):r is PromiseRejectedResult=>r.status==='rejected');
+ if(errors.length)throw (errors.find(r=>!pendingQuery(r.reason))??errors[0]).reason;
+ return results.map(r=>(r as PromiseFulfilledResult<T>).value);
 }
