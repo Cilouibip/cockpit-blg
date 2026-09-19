@@ -103,7 +103,29 @@ const instant = (value: unknown, fallback: string) => {
   if (typeof value !== 'string') return fallback;
   try { return Temporal.Instant.from(value).toString(); } catch { return fallback; }
 };
-const earliest = <T extends { at: string }>(values: T[]) => values.sort((a, b) => a.at.localeCompare(b.at))[0];
+// ISO strings can differ in fractional precision or offset. Compare instants,
+// retaining nanoseconds and the original value. Invalid timestamps are rejected
+// by Temporal rather than treated as an ordered, valid measurement.
+const chronological = <T>(values: T[], at: (value: T) => string) => values
+  .map(value => ({ value, at: Temporal.Instant.from(at(value)) }))
+  .sort((a, b) => Temporal.Instant.compare(a.at, b.at))
+  .map(row => row.value);
+const times = (values: string[]) => chronological(values, value => value);
+const earliest = <T extends { at: string }>(values: T[]) => chronological(values, value => value.at)[0];
+function compareScheduledDates(a: string | null | undefined, b: string | null | undefined) {
+  if (a == null || b == null) return a == null ? b == null ? 0 : -1 : 1;
+  // Legacy scheduled_day is a calendar date, not an instant. Preserve its
+  // existing display order without inventing an appointment time or timezone.
+  const dayOnly = /^\d{4}-\d{2}-\d{2}$/;
+  if (dayOnly.test(a) || dayOnly.test(b)) {
+    // Timed rows are normalized to UTC by the existing source reader. Keep
+    // that calendar ordering even if an equivalent offset reaches this layer.
+    const day = (value: string) => dayOnly.test(value) ? Temporal.PlainDate.from(value)
+      : Temporal.Instant.from(value).toZonedDateTimeISO('UTC').toPlainDate();
+    return Temporal.PlainDate.compare(day(a), day(b)) || (dayOnly.test(a) ? dayOnly.test(b) ? 0 : -1 : 1);
+  }
+  return Temporal.Instant.compare(a, b);
+}
 
 function origin(record: Record<string, unknown> | null, fallbackAt: string): Origin {
   const source = text(record?.source ?? record?.utm_source, 80);
@@ -151,9 +173,9 @@ function combineBrowser(rows: VisualJourneyBrowserRow[]): BrowserPerson[] {
     if (!key) continue;
     const list = groups.get(key) ?? []; list.push(row); groups.set(key, list);
   }
-  const firstTime = (items: VisualJourneyBrowserRow[], field: keyof VisualJourneyBrowserRow) => items.map(item => item[field]).filter((value): value is string => typeof value === 'string').sort()[0] ?? null;
+  const firstTime = (items: VisualJourneyBrowserRow[], field: keyof VisualJourneyBrowserRow) => times(items.map(item => item[field]).filter((value): value is string => typeof value === 'string'))[0] ?? null;
   return [...groups.entries()].map(([key, items]) => {
-    const firstSeenAt = items.map(row => row.firstSeenAt).sort()[0];
+    const firstSeenAt = times(items.map(row => row.firstSeenAt))[0];
     const origins = items.map(row => origin(row.origin, row.firstSeenAt));
     return {
       key,
@@ -162,7 +184,7 @@ function combineBrowser(rows: VisualJourneyBrowserRow[]): BrowserPerson[] {
       sessionId: items.map(row => row.sessionId).find(Boolean) ?? null,
       sessionIds: new Set(items.map(row => row.sessionId).filter((value): value is string => !!value)),
       firstSeenAt,
-      lastSeenAt: items.map(row => row.lastSeenAt).sort().at(-1)!,
+      lastSeenAt: times(items.map(row => row.lastSeenAt)).at(-1)!,
       origin: items.find(row => row.firstSeenAt === firstSeenAt)?.origin ?? {},
       originA: earliest(origins),
       explicitTest: items.some(row => row.explicitTest),
@@ -186,7 +208,7 @@ function combineRegistrations(rows: VisualJourneyRegistrationRow[]): Registratio
     const list = groups.get(key) ?? []; list.push(row); groups.set(key, list);
   }
   return [...groups.entries()].map(([key, items]) => {
-    const occurredAt = items.map(row => row.occurredAt).sort()[0];
+    const occurredAt = times(items.map(row => row.occurredAt))[0];
     return {
       key,
       personId: items.map(row => row.personId).find(Boolean) ?? null,
@@ -256,7 +278,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const videoStarted = new Set(browserScoped.filter(row => row.videoStartAt).map(row => row.key));
   const bookingClicked = new Set(browserScoped.filter(row => row.bookingClickAt).map(row => row.key));
   const calendarOpened = new Set(browserScoped.filter(row => row.bookingOpenAt).map(row => row.key));
-  const after = (later: string | null, earlier: string | null) => !!later && !!earlier && later >= earlier;
+  const after = (later: string | null, earlier: string | null) => !!later && !!earlier && Temporal.Instant.compare(later, earlier) >= 0;
   const pageToForm = browserScoped.filter(row => after(row.formOpenAt, row.pageAt)).length;
   const openToStarted = browserScoped.filter(row => after(row.formStartAt, row.formOpenAt)).length;
 
@@ -266,12 +288,13 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const registrationsFromStarted = registrationsScoped.filter(registration => {
     const browser = browserForRegistration.get(registration.key); return browser && after(registration.occurredAt, browser.formStartAt);
   }).length;
-  const registrationsToVideo = registrationsScoped.filter(registration => {
+  const registrationsWithVideoAfterSignup = registrationsScoped.filter(registration => {
     const browser = browserForRegistration.get(registration.key); return browser && after(browser.videoStartAt, registration.occurredAt);
-  }).length;
+  });
+  const registrationsToVideo = registrationsWithVideoAfterSignup.length;
   const registrationsWithoutNavigation = registrationsScoped.filter(registration => !browserForRegistration.has(registration.key)).length;
-  const latestRegistrationPrerequisite = browserScoped.flatMap(row => [row.formOpenAt,row.formStartAt]).filter((value): value is string => !!value).sort().at(-1) ?? null;
-  const registrationCoverageComplete = input.freshness.wix.status === 'available' && (!latestRegistrationPrerequisite || !!input.freshness.wix.coveredThrough && input.freshness.wix.coveredThrough >= latestRegistrationPrerequisite);
+  const latestRegistrationPrerequisite = times(browserScoped.flatMap(row => [row.formOpenAt,row.formStartAt]).filter((value): value is string => !!value)).at(-1) ?? null;
+  const registrationCoverageComplete = input.freshness.wix.status === 'available' && (!latestRegistrationPrerequisite || after(input.freshness.wix.coveredThrough, latestRegistrationPrerequisite));
   const registrationRatesAvailable = registrationsAvailable && registrationCoverageComplete;
   const registrationRateReason = 'Les inscriptions attendent une mise à jour couvrant les formulaires de cette sélection.';
   if (registrationsWithoutNavigation) limits.push(`Le parcours de ${registrationsWithoutNavigation} inscrit${registrationsWithoutNavigation > 1 ? 's' : ''} n’a pas pu être relié. ${registrationsWithoutNavigation > 1 ? 'Ils restent comptés' : 'Il reste compté'} parmi les inscriptions. ${registrationsWithoutNavigation > 1 ? 'Leur absence du passage confirmé vers la vidéo ne prouve pas qu’ils ne l’ont pas démarrée.' : 'Son absence du passage confirmé vers la vidéo ne prouve pas qu’il ne l’a pas démarrée.'}`);
@@ -283,9 +306,9 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const activeAppointment = (row: VisualJourneyAppointmentRow) => !['cancelled', 'canceled', 'rescheduled'].includes(row.status.toLowerCase());
   const bookedRegistrations = registrationsScoped.filter(registration => registration.personId && (appointmentsByPerson.get(registration.personId) ?? []).some(activeAppointment));
   const linkedAppointmentCount = appointmentRows.filter(row => row.personId).length;
-  const latestBookingPrerequisite = [...browserScoped.map(row => row.bookingOpenAt ?? row.videoStartAt),...registrationsScoped.map(row => row.occurredAt)].filter((value): value is string => !!value).sort().at(-1) ?? null;
+  const latestBookingPrerequisite = times([...browserScoped.map(row => row.bookingOpenAt ?? row.videoStartAt),...registrationsScoped.map(row => row.occurredAt)].filter((value): value is string => !!value)).at(-1) ?? null;
   const appointmentCoverage = input.freshness.appointments.coveredThrough;
-  const temporalCoverageComplete = input.freshness.appointments.status === 'available' && (!latestBookingPrerequisite || (!!appointmentCoverage && appointmentCoverage >= latestBookingPrerequisite));
+  const temporalCoverageComplete = input.freshness.appointments.status === 'available' && (!latestBookingPrerequisite || after(appointmentCoverage, latestBookingPrerequisite));
   const registrationState = !registrationsAvailable ? unavailable(input.registrationError ?? "Les inscriptions Wix ne sont pas disponibles.") : registrationsScoped.length > 0 || registrationCoverageComplete ? available() : unavailable(registrationRateReason);
   const bookingCountState = !registrationState.available ? registrationState
     : !appointmentsAvailable ? unavailable(input.appointmentError ?? "Le miroir des rendez-vous n'est pas disponible.")
@@ -296,10 +319,11 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const bookedCount = bookingCountState.available ? bookedRegistrations.length : null;
   if (input.freshness.appointments.status !== 'available' && input.freshness.appointments.reason) limits.push(input.freshness.appointments.reason);
 
-  const temporalBookings = bookedRegistrations.filter(registration => {
+  // A numerator member must belong to the unchanged signup→video denominator.
+  const temporalBookings = registrationsWithVideoAfterSignup.filter(registration => {
     const browser = browserForRegistration.get(registration.key);
     if (!browser?.videoStartAt || !registration.personId) return false;
-    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && appointment.bookedAt && appointment.bookedAt >= browser.videoStartAt!);
+    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, browser.videoStartAt));
   }).length;
   const bookingRateAvailable = bookingCountState.available && registrationRatesAvailable && temporalCoverageComplete && bookedRegistrations.every(registration =>
     !registration.personId || (appointmentsByPerson.get(registration.personId) ?? []).filter(activeAppointment).some(appointment => appointment.bookedAt));
@@ -310,7 +334,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const bookingsAfterCalendar = bookedRegistrations.filter(registration => {
     const browser = browserForRegistration.get(registration.key);
     if (!browser?.bookingOpenAt || !registration.personId) return false;
-    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && appointment.bookedAt && appointment.bookedAt >= browser.bookingOpenAt!);
+    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, browser.bookingOpenAt));
   }).length;
   if (!bookingRateAvailable) limits.push(`${bookingRateReason} Les taux vers le rendez-vous restent indisponibles.`);
 
@@ -377,7 +401,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
       clicked: metric(browserAvailable ? bookingClicked.size : null, browserState), calendar: metric(browserAvailable ? calendarOpened.size : null, browserState), booked: metric(bookedCount, bookingCountState),
       people: bookingCountState.available ? bookedRegistrations.map(registration => {
         const appointments = [...new Map((appointmentsByPerson.get(registration.personId!) ?? []).filter(activeAppointment).map(row => [row.id, row])).values()]
-          .sort((a, b) => (a.scheduledAt ?? '').localeCompare(b.scheduledAt ?? '') || a.id.localeCompare(b.id));
+          .sort((a, b) => compareScheduledDates(a.scheduledAt, b.scheduledAt) || a.id.localeCompare(b.id));
         const ad = input.availableAds?.find(item => item.id === `meta-ad:${registration.originA.ad}`);
         return {
           name: appointments.map(row => text(row.displayName)).find(Boolean) ?? 'Nom non renseigné',

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildVisualJourneyReport } from '../src/lib/visual-journey-report';
-import { AD_A, AD_B, visualJourneyFixture } from './fixtures/visual-journey';
+import { AD_A, AD_B, VISITOR_B, visualJourneyFixture } from './fixtures/visual-journey';
 
 test('le détail des réservants contient exactement les personnes du compteur et leurs dates futures', () => {
   const input = visualJourneyFixture();
@@ -205,4 +205,70 @@ test('Wix absent avec Notion frais ne fabrique aucun zéro ni taux de réservati
   assert.equal(report.booking.booked.count,null);
   assert.equal(report.booking.rates.bookedFromCalendar.rate,null);
   assert.equal(report.stages[4].fromPrevious?.rate,null);
+});
+
+function bookingIntersectionFixture() {
+  const input = visualJourneyFixture();
+  const browser = input.browser![0], registration = input.registrations![0];
+  input.browser = [
+    { ...browser, videoStartAt: '2026-09-18T09:00:00Z', bookingClickAt: '2026-09-18T09:30:00Z', bookingOpenAt: '2026-09-18T09:40:00Z' },
+    { ...browser, browserId: 'browser-b', visitorId: VISITOR_B, sessionId: 'session-b', videoStartAt: '2026-09-18T08:30:00Z', bookingClickAt: '2026-09-18T09:30:00Z', bookingOpenAt: '2026-09-18T09:40:00Z' },
+  ];
+  input.registrations = [
+    { ...registration, occurredAt: '2026-09-18T08:30:00Z' },
+    { ...registration, id: 'registration-b', personId: 'person-b', occurredAt: '2026-09-18T09:00:00Z', origin: { ...registration.origin, visitor: VISITOR_B, session: 'session-b' } },
+  ];
+  input.appointments = [
+    { id: 'booking-a', personId: 'person-a', bookedAt: '2026-09-18T10:00:00Z', status: 'unknown', observedAt: input.generatedAt },
+    { id: 'booking-b', personId: 'person-b', bookedAt: '2026-09-18T10:00:00Z', status: 'unknown', observedAt: input.generatedAt },
+  ];
+  input.freshness.wix = input.freshness.appointments = { observedAt: input.generatedAt, coveredThrough: input.generatedAt, status: 'available', reason: null };
+  return input;
+}
+
+test('vidéo avant inscription reste hors du numérateur vidéo→RDV : 1/1 et deux réservants au total', () => {
+  const input = bookingIntersectionFixture(), report = buildVisualJourneyReport(input);
+  assert.deepEqual(report.stages.map(stage => stage.count), [2, 2, 2, 2, 2]);
+  assert.deepEqual(report.stages[3].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
+  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 1, denominator: 1, rate: 1, available: true, reason: null });
+  assert.equal(report.booking.booked.count, 2);
+  assert.equal(report.booking.people!.length, 2);
+  assert.deepEqual(report.booking.rates.bookedFromCalendar, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null }, 'le taux calendrier→RDV garde sa propre base');
+});
+
+test('le RDV de la seule personne hors dénominateur ne transforme pas 0/1 en 1/1', () => {
+  const input = bookingIntersectionFixture();
+  input.appointments = [input.appointments![1]];
+  const report = buildVisualJourneyReport(input);
+  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 0, denominator: 1, rate: 0, available: true, reason: null });
+  assert.equal(report.booking.booked.count, 1);
+  assert.equal(report.booking.rates.bookedFromCalendar.numerator, 1);
+});
+
+test('égalité inscription→vidéo, sans RDV, annulation et absence de base conservent les règles du taux', () => {
+  const input = bookingIntersectionFixture();
+  input.browser![1].videoStartAt = '2026-09-18T11:00:00.000+02:00'; // Même instant que son inscription.
+  let report = buildVisualJourneyReport(input);
+  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null });
+  input.appointments![1].status = 'cancelled';
+  report = buildVisualJourneyReport(input);
+  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
+  input.appointments = [];
+  report = buildVisualJourneyReport(input);
+  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 0, denominator: 2, rate: 0, available: true, reason: null });
+  for (const browser of input.browser!) browser.videoStartAt = '2026-09-18T08:00:00Z';
+  report = buildVisualJourneyReport(input);
+  assert.equal(report.stages[4].fromPrevious?.numerator, 0);
+  assert.equal(report.stages[4].fromPrevious?.denominator, 0);
+  assert.equal(report.stages[4].fromPrevious?.rate, null);
+});
+
+test('une date RDV absente hors de la base conserve la garde de disponibilité actuelle', () => {
+  const input = bookingIntersectionFixture();
+  input.appointments![1].bookedAt = null;
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 2);
+  assert.equal(report.stages[4].fromPrevious?.available, false);
+  assert.equal(report.stages[4].fromPrevious?.rate, null);
+  assert.match(report.stages[4].fromPrevious?.reason ?? '', /date prévue/);
 });
