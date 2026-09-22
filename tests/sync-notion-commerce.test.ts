@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { checkpointParts, refreshNotionCommerce } from '../src/lib/sync-notion-commerce';
+import { CHECKPOINT_MARKER_BATCH_SIZE, checkpointParts, refreshNotionCommerce } from '../src/lib/sync-notion-commerce';
 import type { Database, Row } from '../src/lib/db';
 import { AppError } from '../src/lib/errors';
 import { retainConfirmedArchivedClients, reportFromCheckpoint } from '../src/lib/notion-commerce-archive';
@@ -38,14 +38,19 @@ const ARCHIVED_CLIENT = '11111111-1111-4111-8111-111111111111';
 
 function statefulMemoryDb() {
   const rows: Row[] = [], runs: Row[] = [];
-  let sequence = 0, checkpointReads = 0;
-  const matches = (row: Row, eq: Record<string, string> = {}) => Object.entries(eq).every(([key, value]) => String(row[key]) === value);
+  const markerBatchSizes: number[] = [];
+  let sequence = 0, checkpointReads = 0, aggregateReads = 0;
+  const matches = (row: Row, eq: Record<string, string> = {}, within: Record<string, string[]> = {}) => Object.entries(eq).every(([key, value]) => String(row[key]) === value) && Object.entries(within).every(([key, values]) => values.includes(String(row[key])));
   const db: Database = {
     select: async (table, options = {}) => {
-      if (table === 'source_aggregates' && options.eq?.metric_key === 'notion_commerce_checkpoint') checkpointReads++;
+      if (table === 'source_aggregates') {
+        aggregateReads++;
+        if (options.eq?.metric_key === 'notion_commerce_checkpoint') checkpointReads++;
+        if (options.eq?.metric_key === 'notion_commerce_checkpoint_publication') markerBatchSizes.push(options.in?.sync_run_id?.length ?? 0);
+      }
       const source = table === 'sync_runs' ? runs : rows;
       const order = (options.order ?? 'id').split(',');
-      return source.filter(row => matches(row, options.eq)).sort((left, right) => {
+      return source.filter(row => matches(row, options.eq, options.in)).sort((left, right) => {
         for (const key of order) { const compared = String(left[key]).localeCompare(String(right[key])); if (compared) return options.descending ? -compared : compared; }
         return 0;
       }).slice(options.from ?? 0, (options.from ?? 0) + (options.limit ?? 1000));
@@ -67,17 +72,18 @@ function statefulMemoryDb() {
     probe: async () => undefined,
   };
   const addReaderCheckpoint = (checkpoint: CommerceReadCheckpoint, publishedRunId?: string) => {
-    const id = `legacy-${++sequence}`, serialized = JSON.stringify(checkpoint), parts = checkpointParts(serialized), hash = createHash('sha256').update(serialized).digest('hex');
+    const id = `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`, serialized = JSON.stringify(checkpoint), parts = checkpointParts(serialized), hash = createHash('sha256').update(serialized).digest('hex');
     runs.push({ id, source: 'notion', source_namespace: config.parcours.dataSourceId, stream_key: 'commerce_reader_checkpoint', query_profile_key: notionCommerceProfile(config), status: 'complete', pagination_complete: 'true', rows_rejected: '0', finished_at: `2026-09-22T22:${String(sequence).padStart(2, '0')}:00.000Z` });
     rows.push(...parts.map((part, index) => ({ sync_run_id: id, metric_key: 'notion_commerce_checkpoint', dimensions_key: `checkpoint:${String(index).padStart(6, '0')}`, dimensions: { index, total: parts.length, hash, part } })));
     if (publishedRunId) rows.push({ sync_run_id: id, metric_key: 'notion_commerce_checkpoint_publication', dimensions_key: 'published', dimensions: { publishedRunId } });
     return id;
   };
+  const addPublicationMarker = (checkpointRunId: string, publishedRunId: string, dimensionsKey = 'published') => rows.push({ sync_run_id: checkpointRunId, metric_key: 'notion_commerce_checkpoint_publication', dimensions_key: dimensionsKey, dimensions: { publishedRunId } });
   const readerCheckpoint = (id: string) => {
     const parts = rows.filter(row => row.sync_run_id === id && row.metric_key === 'notion_commerce_checkpoint').map(row => row.dimensions as { index: number; part: string }).sort((left, right) => left.index - right.index);
     return JSON.parse(parts.map(part => part.part).join('')) as CommerceReadCheckpoint;
   };
-  return { db, rows, runs, addReaderCheckpoint, readerCheckpoint, checkpointReads: () => checkpointReads };
+  return { db, rows, runs, addReaderCheckpoint, addPublicationMarker, readerCheckpoint, checkpointReads: () => checkpointReads, aggregateReads: () => aggregateReads, markerBatchSizes: () => [...markerBatchSizes] };
 }
 
 function clientPage(id = ARCHIVED_CLIENT) { return { id, properties: { Nom: { type: 'title', title: [{ plain_text: 'Client conservé' }] }, Email: { email: null }, 'Email 2': { email: null }, Début: { date: { start: '2024-01-01' } }, Prospect: { relation: [] }, Binôme: { relation: [] } } }; }
@@ -191,6 +197,43 @@ test('la recherche du dernier checkpoint publié ne décode pas chaque ancien ch
   const partial: CommerceReadCheckpoint = { ...structuredClone(published), familyIndex: 0, cursor: null, completedAt: undefined, snapshot: { clients: [], payments: [], schedules: [], parcours: [], startedAt: published.startedAt, sourceCounts: {} } };
   for (let index = 0; index < 40; index++) memory.addReaderCheckpoint(partial);
   const before = memory.checkpointReads();
+  const beforeAggregate = memory.aggregateReads();
   await assert.rejects(() => refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: (async () => new Response('', { status: 503 })) as typeof fetch, maxPages: 3 }));
   assert.ok(memory.checkpointReads() - before <= 2);
+  assert.ok(memory.aggregateReads() - beforeAggregate <= 3);
+});
+
+test('un millier de checkpoints est paginé et ses marqueurs restent dans des requêtes REST courtes', async () => {
+  const memory = statefulMemoryDb();
+  await refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: commerceFetcher({ mode: 'baseline', calls: [] }) as typeof fetch, maxPages: 3 });
+  const published = memory.readerCheckpoint(String(memory.runs.find(run => run.stream_key === 'commerce_reader_checkpoint')!.id));
+  const partial: CommerceReadCheckpoint = { ...structuredClone(published), familyIndex: 0, cursor: null, completedAt: undefined, snapshot: { clients: [], payments: [], schedules: [], parcours: [], startedAt: published.startedAt, sourceCounts: {} } };
+  for (let index = 0; index < 1_000; index++) memory.addReaderCheckpoint(partial);
+  const beforeRows = structuredClone(memory.rows);
+  await assert.rejects(() => refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: (async () => new Response('', { status: 503 })) as typeof fetch, maxPages: 3 }));
+  assert.deepEqual(memory.rows, beforeRows, 'un échec de lecture ne modifie aucun checkpoint historique');
+  const batches = memory.markerBatchSizes();
+  assert.ok(batches.length >= 11);
+  assert.ok(batches.every(size => size > 0 && size <= CHECKPOINT_MARKER_BATCH_SIZE));
+  assert.ok(batches.some(size => size === CHECKPOINT_MARKER_BATCH_SIZE));
+});
+
+test('un marqueur dupliqué est refusé sans choisir un miroir historique arbitraire', async () => {
+  const memory = statefulMemoryDb();
+  await refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: commerceFetcher({ mode: 'baseline', calls: [] }) as typeof fetch, maxPages: 3 });
+  const checkpointRunId = String(memory.runs.find(run => run.stream_key === 'commerce_reader_checkpoint')!.id);
+  memory.addPublicationMarker(checkpointRunId, 'different-published-run');
+  const beforeRows = structuredClone(memory.rows);
+  await assert.rejects(() => refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: (async () => new Response('', { status: 503 })) as typeof fetch, maxPages: 3 }), /CHECKPOINT_PUBLICATION_MARKER_CARDINALITY/);
+  assert.deepEqual(memory.rows, beforeRows);
+});
+
+test('un checkpoint publié mais incomplet est refusé sans modifier l’historique', async () => {
+  const memory = statefulMemoryDb();
+  await refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: commerceFetcher({ mode: 'baseline', calls: [] }) as typeof fetch, maxPages: 3 });
+  const published = memory.readerCheckpoint(String(memory.runs.find(run => run.stream_key === 'commerce_reader_checkpoint')!.id));
+  memory.addReaderCheckpoint({ ...structuredClone(published), familyIndex: 0, cursor: null, completedAt: undefined }, 'invalid-published-run');
+  const beforeRows = structuredClone(memory.rows);
+  await assert.rejects(() => refreshNotionCommerce({ db: memory.db, config, token: 'synthetic', identitySecret: 'x'.repeat(32), fetcher: (async () => new Response('', { status: 503 })) as typeof fetch, maxPages: 3 }), /CHECKPOINT_PUBLISHED_INVALID/);
+  assert.deepEqual(memory.rows, beforeRows);
 });

@@ -14,6 +14,16 @@ test('la lecture REST conserve toutes les contraintes sur une même colonne',asy
  assert.deepEqual(requested!.searchParams.getAll('external_id'),['eq.123','in.(123,456)','gte.100','lt.200']);
 });
 
+test('un lot de cent UUID conserve une URL REST nettement sous huit kilo-octets',async()=>{
+ const config=getConfig({SUPABASE_URL:'https://synthetic.supabase.co',SUPABASE_SECRET_KEY:'synthetic'});
+ let requested:URL|undefined;
+ const db=supabaseDatabase(config,async input=>{requested=new URL(String(input));return new Response('[]');});
+ const ids=Array.from({length:100},(_,index)=>`00000000-0000-4000-8000-${String(index).padStart(12,'0')}`);
+ await db.select('source_aggregates',{eq:{metric_key:'notion_commerce_checkpoint_publication'},in:{sync_run_id:ids},columns:['sync_run_id','dimensions_key','dimensions'],order:'sync_run_id,dimensions_key',limit:101});
+ assert.ok(requested!.href.length<8_000);
+ assert.equal(requested!.searchParams.get('sync_run_id')?.match(/[0-9a-f]{8}-[0-9a-f-]{27}/g)?.length,100);
+});
+
 test('les attentes et interruptions de lecture restent identifiables sans exposer les détails SQL',async()=>{
  for(const [sourceCode,expected] of [['PGRST003','database_busy'],['57014','database_query_interrupted'],['unexpected','database_unavailable']]){
   let calls=0;

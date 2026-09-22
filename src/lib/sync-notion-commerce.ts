@@ -11,6 +11,10 @@ const CHECKPOINT = 'notion_commerce_checkpoint';
 const PUBLICATION = 'notion_commerce_checkpoint_publication';
 const MAX_PART_BYTES = 2800;
 const MAX_PARTS = 10_000;
+const CHECKPOINT_RUN_PAGE_SIZE = 1000;
+const MAX_CHECKPOINT_RUNS = 10_000;
+/** Kept small enough for a Supabase REST `.in` filter with UUID run ids. */
+export const CHECKPOINT_MARKER_BATCH_SIZE = 100;
 
 export interface CommerceRefreshResult {
   status: 'partial' | 'complete' | 'failed';
@@ -75,22 +79,52 @@ function decodeCheckpoint(rows: Row[]): CommerceReadCheckpoint | null {
 }
 
 async function checkpointPair(db: Database, namespace: string, profile: string): Promise<{ latest: StoredCheckpoint | null; published: StoredCheckpoint | null }> {
-  const runs = await db.select('sync_runs', { eq: { source: 'notion', source_namespace: namespace, stream_key: STREAM, query_profile_key: profile, status: 'complete', pagination_complete: 'true', rows_rejected: '0' }, order: 'finished_at,id', descending: true, limit: 1000 });
-  let latest: StoredCheckpoint | null = null, published: StoredCheckpoint | null = null;
-  for (const run of runs) {
-    const runId = String(run.id);
-    const publication = await rowsForRun(db, runId, PUBLICATION);
-    const publishedRunId = publication.length === 1 && typeof (publication[0].dimensions as Row).publishedRunId === 'string' ? String((publication[0].dimensions as Row).publishedRunId) : undefined;
-    // Once a current checkpoint is known, only a marked publication can supply
-    // the historical mirror. This avoids decoding every old fragmented snapshot.
-    if (latest && !publishedRunId) continue;
-    const checkpoint = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
-    if (!checkpoint) continue;
-    const entry = { runId, checkpoint, publishedRunId };
-    if (!latest) latest = entry;
-    if (publishedRunId && checkpoint.completedAt) { published = entry; break; }
+  const runOptions = { eq: { source: 'notion', source_namespace: namespace, stream_key: STREAM, query_profile_key: profile, status: 'complete', pagination_complete: 'true', rows_rejected: '0' }, order: 'finished_at,id', descending: true } as const;
+  const runs: Row[] = [];
+  for (let from = 0; from < MAX_CHECKPOINT_RUNS; from += CHECKPOINT_RUN_PAGE_SIZE) {
+    const page = await db.select('sync_runs', { ...runOptions, from, limit: CHECKPOINT_RUN_PAGE_SIZE });
+    runs.push(...page);
+    if (page.length < CHECKPOINT_RUN_PAGE_SIZE) break;
+    if (from + CHECKPOINT_RUN_PAGE_SIZE >= MAX_CHECKPOINT_RUNS) throw new Error('CHECKPOINT_RUNS_LIMIT');
   }
-  return { latest, published };
+  if (!runs.length) return { latest: null, published: null };
+
+  const latestRunId = typeof runs[0].id === 'string' ? runs[0].id : null;
+  if (!latestRunId) throw new Error('CHECKPOINT_RUN_INVALID');
+  const latestCheckpoint = decodeCheckpoint(await rowsForRun(db, latestRunId, CHECKPOINT));
+  if (!latestCheckpoint) throw new Error('CHECKPOINT_LATEST_INVALID');
+  const latest: StoredCheckpoint = { runId: latestRunId, checkpoint: latestCheckpoint };
+
+  // A marker is a single durable assertion for one checkpoint run. Read them
+  // in bounded batches: this stays below the REST URL limit and cannot silently
+  // truncate a duplicated marker set into an arbitrary historical baseline.
+  for (let offset = 0; offset < runs.length; offset += CHECKPOINT_MARKER_BATCH_SIZE) {
+    const batch = runs.slice(offset, offset + CHECKPOINT_MARKER_BATCH_SIZE);
+    const runIds = batch.map(run => typeof run.id === 'string' ? run.id : '').filter(Boolean);
+    if (runIds.length !== batch.length || new Set(runIds).size !== runIds.length) throw new Error('CHECKPOINT_RUN_INVALID');
+    const publications = await db.select('source_aggregates', { eq: { metric_key: PUBLICATION }, in: { sync_run_id: runIds }, columns: ['sync_run_id', 'dimensions_key', 'dimensions'], order: 'sync_run_id,dimensions_key', limit: runIds.length + 1 });
+    if (publications.length > runIds.length) throw new Error('CHECKPOINT_PUBLICATION_MARKER_CARDINALITY');
+    const publishedByRun = new Map<string, string>();
+    for (const row of publications) {
+      const checkpointRunId = typeof row.sync_run_id === 'string' ? row.sync_run_id : null;
+      const publishedRunId = (row.dimensions as Row)?.publishedRunId;
+      if (!checkpointRunId || !runIds.includes(checkpointRunId) || row.dimensions_key !== 'published' || typeof publishedRunId !== 'string' || publishedByRun.has(checkpointRunId)) throw new Error('CHECKPOINT_PUBLICATION_MARKER_INVALID');
+      publishedByRun.set(checkpointRunId, publishedRunId);
+    }
+    for (const run of batch) {
+      const runId = run.id as string, publishedRunId = publishedByRun.get(runId);
+      if (!publishedRunId) continue;
+      if (runId === latestRunId) {
+        if (!latest.checkpoint.completedAt) throw new Error('CHECKPOINT_PUBLISHED_INVALID');
+        latest.publishedRunId = publishedRunId;
+        return { latest, published: latest };
+      }
+      const checkpoint = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
+      if (!checkpoint?.completedAt) throw new Error('CHECKPOINT_PUBLISHED_INVALID');
+      return { latest, published: { runId, checkpoint, publishedRunId } };
+    }
+  }
+  return { latest, published: null };
 }
 
 function deadlineFetcher(fetcher: typeof fetch, timeoutMs: number): typeof fetch {
