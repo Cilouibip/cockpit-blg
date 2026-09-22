@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
+import { ConnectorError, safeConnectorError } from '../connectors/http';
 import { AppError } from './errors';
 import type { Database, Row } from './db';
-import { buildNotionCommerceReport } from './notion-commerce-report';
+import { retainConfirmedArchivedClients, reportFromCheckpoint } from './notion-commerce-archive';
 import { publishNotionCommerceReport } from './notion-commerce-storage';
 import { notionCommerceProfile, readNotionCommerceSnapshot, type CommerceReadCheckpoint, type NotionCommerceConfig } from '../connectors/notion-commerce';
 
@@ -21,6 +22,7 @@ export interface CommerceRefreshResult {
 type StoredCheckpoint = { runId: string; checkpoint: CommerceReadCheckpoint; publishedRunId?: string };
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+const commerceError = (error: unknown) => error instanceof ConnectorError ? safeConnectorError(error).replace(/[()]/g, '') : error instanceof Error && /^(COMMERCE_[A-Z_]+|PAYMENT_PROVIDER_CONFLICT|INVALID_PAYMENT_AMOUNT|CHECKPOINT_[A-Z_]+)$/.test(error.message) ? error.message : 'COMMERCE_READER_FAILED';
 const safeTime = () => new Date().toISOString();
 
 /** Splits only on code-point boundaries, never between the UTF-16 halves of an emoji. */
@@ -72,16 +74,23 @@ function decodeCheckpoint(rows: Row[]): CommerceReadCheckpoint | null {
   } catch { return null; }
 }
 
-async function latestCheckpoint(db: Database, namespace: string, profile: string): Promise<StoredCheckpoint | null> {
+async function checkpointPair(db: Database, namespace: string, profile: string): Promise<{ latest: StoredCheckpoint | null; published: StoredCheckpoint | null }> {
   const runs = await db.select('sync_runs', { eq: { source: 'notion', source_namespace: namespace, stream_key: STREAM, query_profile_key: profile, status: 'complete', pagination_complete: 'true', rows_rejected: '0' }, order: 'finished_at,id', descending: true, limit: 1000 });
+  let latest: StoredCheckpoint | null = null, published: StoredCheckpoint | null = null;
   for (const run of runs) {
-    const runId = String(run.id), checkpoint = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
-    if (!checkpoint) continue;
+    const runId = String(run.id);
     const publication = await rowsForRun(db, runId, PUBLICATION);
     const publishedRunId = publication.length === 1 && typeof (publication[0].dimensions as Row).publishedRunId === 'string' ? String((publication[0].dimensions as Row).publishedRunId) : undefined;
-    return { runId, checkpoint, publishedRunId };
+    // Once a current checkpoint is known, only a marked publication can supply
+    // the historical mirror. This avoids decoding every old fragmented snapshot.
+    if (latest && !publishedRunId) continue;
+    const checkpoint = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
+    if (!checkpoint) continue;
+    const entry = { runId, checkpoint, publishedRunId };
+    if (!latest) latest = entry;
+    if (publishedRunId && checkpoint.completedAt) { published = entry; break; }
   }
-  return null;
+  return { latest, published };
 }
 
 function deadlineFetcher(fetcher: typeof fetch, timeoutMs: number): typeof fetch {
@@ -115,27 +124,30 @@ export async function refreshNotionCommerce(options: { db: Database; config: Not
   try {
     try { runId = await db.rpc<string>('begin_sync_stream', { p_source: 'notion', p_namespace: namespace, p_from: '1970-01-01T00:00:00Z', p_to: now, p_profile: profile, p_coverage_kind: 'source_snapshot', p_stream: STREAM }); }
     catch (error) { if (error instanceof AppError && error.status === 409) return { status: 'partial', counts: { pages: 0, read: 0 }, coverage: 'unavailable', reason: 'actualisation_en_cours' }; throw error; }
-    const previous = await latestCheckpoint(db, namespace, profile);
-    if (previous?.checkpoint.completedAt && !previous.publishedRunId) {
-      const report = buildNotionCommerceReport({ ...previous.checkpoint.snapshot, observedAt: previous.checkpoint.completedAt, paginationComplete: true });
-      const published = await publishNotionCommerceReport(db, config, report);
-      await markPublished(db, previous.runId, config, published.runId);
-      await db.rpc('finish_sync', { p_run: runId, p_status: 'complete', p_read: 0, p_rejected: 0, p_complete: true, p_error: null });
-      return { status: 'complete', counts: { pages: previous.checkpoint.pages, read: Object.values(previous.checkpoint.snapshot.sourceCounts).reduce((a, b) => a + b, 0) }, coverage: 'published' };
-    }
-    const resumed = previous && !previous.checkpoint.completedAt ? previous.checkpoint : undefined;
+    const { latest: previous, published: baseline } = await checkpointPair(db, namespace, profile);
     const deadline = Date.now() + 30_000;
     const fetcher = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error('COMMERCE_REFRESH_DEADLINE');
       return deadlineFetcher(options.fetcher ?? fetch, remaining)(input, init);
     };
+    const reconcile = (checkpoint: CommerceReadCheckpoint) => retainConfirmedArchivedClients({ current: checkpoint, previous: baseline ?? undefined, config, token: options.token, fetcher });
+    if (previous?.checkpoint.completedAt && !previous.publishedRunId && Date.now() - Date.parse(previous.checkpoint.completedAt) < 3_600_000) {
+      saved = await reconcile(previous.checkpoint);
+      await stageCheckpoint(db, runId, config, saved);
+      const report = reportFromCheckpoint(saved);
+      const published = await publishNotionCommerceReport(db, config, report);
+      await markPublished(db, runId, config, published.runId);
+      await db.rpc('finish_sync', { p_run: runId, p_status: 'complete', p_read: 0, p_rejected: 0, p_complete: true, p_error: null });
+      return { status: 'complete', counts: { pages: previous.checkpoint.pages, read: Object.values(previous.checkpoint.snapshot.sourceCounts).reduce((a, b) => a + b, 0) }, coverage: 'published' };
+    }
+    const resumed = previous && !previous.checkpoint.completedAt ? previous.checkpoint : undefined;
     const read = await readNotionCommerceSnapshot({ config, token: options.token, identitySecret: options.identitySecret, checkpoint: resumed, maxPages: Math.min(Math.max(options.maxPages ?? 3, 3), 6), fetcher, onCheckpoint: async checkpoint => { saved = checkpoint; } });
-    saved = read.checkpoint;
+    saved = read.complete ? await reconcile(read.checkpoint) : read.checkpoint;
     await stageCheckpoint(db, runId, config, saved);
     await db.rpc('finish_sync', { p_run: runId, p_status: 'complete', p_read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0), p_rejected: 0, p_complete: true, p_error: null });
     if (!read.complete) return { status: 'partial', counts: { pages: saved.pages, read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0) }, coverage: 'checkpoint' };
-    const report = buildNotionCommerceReport(read.snapshot!);
+    const report = reportFromCheckpoint(saved);
     const published = await publishNotionCommerceReport(db, config, report);
     await markPublished(db, runId, config, published.runId);
     return { status: 'complete', counts: { pages: saved.pages, read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0) }, coverage: 'published' };
@@ -143,11 +155,11 @@ export async function refreshNotionCommerce(options: { db: Database; config: Not
     if (runId && saved) {
       try {
         await stageCheckpoint(db, runId, config, saved);
-        await db.rpc('finish_sync', { p_run: runId, p_status: 'complete', p_read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0), p_rejected: 0, p_complete: true, p_error: null });
+        await db.rpc('finish_sync', { p_run: runId, p_status: 'complete', p_read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0), p_rejected: 0, p_complete: true, p_error: commerceError(error) });
         return { status: 'failed', counts: { pages: saved.pages, read: Object.values(saved.snapshot.sourceCounts).reduce((a, b) => a + b, 0) }, coverage: 'checkpoint', reason: 'lecture_interrompue_checkpoint_sauvegarde' };
       } catch { /* original failure remains the useful result */ }
     }
-    if (runId) await db.rpc('finish_sync', { p_run: runId, p_status: 'failed', p_read: 0, p_rejected: 0, p_complete: false, p_error: 'COMMERCE_READER_FAILED' }).catch(() => undefined);
+    if (runId) await db.rpc('finish_sync', { p_run: runId, p_status: 'failed', p_read: 0, p_rejected: 0, p_complete: false, p_error: commerceError(error) }).catch(() => undefined);
     throw error;
   }
 }

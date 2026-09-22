@@ -85,7 +85,9 @@ export async function readNotionCommerceReport(db:Database,filters:DashboardFilt
   }
   const counts=zero();for(const day of daily)if(day.date>=filters.from&&day.date<=filters.to)for(const key of COMMERCE_COUNTERS)counts[key]+=(day.counts as CommerceCounters)[key];
   const observedAt=String(info.observedAt),observedDay=Temporal.Instant.from(observedAt).toZonedDateTimeISO('Europe/Paris').toPlainDate().toString();
-  return {available:true,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt,counts,paidSales,coverage:info.coverage as CommerceReport['coverage'],runId:String(run.id),provisional:filters.to>=observedDay,reason:'Sous-totaux des Parcours Notion disponibles. Personnes accompagnées, classement payeur, paiement rattaché et dates divergentes restent distincts ; historique métier non exhaustif.'};
+  const coverage=info.coverage as CommerceReport['coverage'];
+  const archiveNote=coverage?.retainedArchivedClients?` ${coverage.retainedArchivedClients} fiche Client conservée dans l’historique après confirmation de son statut archivé/corbeille dans Notion.`:'';
+  return {available:true,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt,counts,paidSales,coverage,runId:String(run.id),provisional:filters.to>=observedDay,reason:'Sous-totaux des Parcours Notion disponibles. Personnes accompagnées, classement payeur, paiement rattaché et dates divergentes restent distincts ; historique métier non exhaustif.'+archiveNote};
   }catch(e){if(e instanceof TypeError||e instanceof RangeError)continue;throw e;}
  }
  return unavailable('Le rapport des achats déclarés n’a pas encore de publication complète pour ce profil.');

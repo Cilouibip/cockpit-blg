@@ -5,6 +5,9 @@ import { jobScope, type SyncJob } from './sync-jobs';
 import {connectionFreshness, type SyncRun} from './sync-freshness';
 export {latestConnectionRun,connectionFreshness} from './sync-freshness';
 const connectionJobs:{job:SyncJob;source:string;stream:string}[]=[
+  {job:'kpi_meta',source:'meta',stream:'kpi_meta_daily'},
+  {job:'kpi_posthog',source:'posthog',stream:'kpi_posthog_daily'},
+  {job:'kpi_email',source:'wix',stream:'kpi_wix_daily'},
   {job:'meta_ads',source:'meta',stream:'ad_daily'},
   {job:'notion',source:'notion',stream:'prospects_business'},
   {job:'wix',source:'wix',stream:'payments_analytics'},
@@ -23,6 +26,7 @@ export async function readConnectionRuns(db:Database,env:NodeJS.ProcessEnv=proce
       db.select('sync_runs',{eq,columns,order:'started_at',descending:true,limit:1}),
       db.select('sync_runs',{eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},columns,order:'finished_at',descending:true,limit:1}),
     ]);
+    if(definition.job==='commerce'){const checkpoints=await db.select('sync_runs',{eq:{...eq,stream_key:'commerce_reader_checkpoint',status:'failed'},columns,order:'started_at',descending:true,limit:1});return [...attempts,...published,...checkpoints.map(row=>({...row,stream_key:definition.stream}))];}
     return [...attempts,...published];
   }));
   return results.flatMap(result=>result.status==='fulfilled'?result.value:[]);
@@ -39,6 +43,9 @@ export async function connections():Promise<ConnectionsResponse> {
   };
   return {mode:config.mode,connections:[
     {id:'database',name:'Base du cockpit',status:config.mode==='demo'?'demo':available?'connected':'missing',summary:available?(config.mode==='demo'?'PostgreSQL local, données synthétiques.':'Tables accessibles dans Supabase.'):'Migration Supabase à installer.',lastSyncAt:null,coverage:available?'Persistance disponible.':'Aucune donnée métier chargée.',limits:config.mode==='demo'?['Ce mode local est interdit sur Vercel.']:['Les données restent dans le projet Supabase du cockpit.'],canSync:false},
+    connection('kpi_meta','Meta · tableau quotidien',['kpi_meta_daily'],!!process.env.META_ACCESS_TOKEN,['Campagnes et dates du tableau ; relevé complet requis.'],false,'meta'),
+    connection('kpi_posthog','PostHog · clics et confirmations du tableau',['kpi_posthog_daily'],!!process.env.POSTHOG_PERSONAL_API_KEY,['Sessions de production ; première origine et essais explicites.'],false,'posthog'),
+    connection('kpi_email','Wix · emails de suivi',['kpi_wix_daily'],!!process.env.WIX_API_KEY,['Séquence existante de neuf messages ; activité par destinataire pseudonymisé, pas de preuve du formulaire déclencheur.'],false,'wix'),
     connection('meta','Meta Ads',['ad_daily'],!!process.env.META_ACCESS_TOKEN&&!!process.env.META_AD_ACCOUNT_ID,['Statistiques rapportées par Meta, séparées de l’attribution commerciale.','Réponse vide distincte de dépenses nulles.'],true),
     connection('notion','Notion · commercial',['prospects_business'],!!process.env.NOTION_TOKEN&&!!process.env.NOTION_DATA_SOURCE_ID,['Lecture des propriétés commerciales autorisées uniquement.','Dates métier historiques conservées ; créations seules signalées à part. Présences selon classification courante Notion, sans reconstituer les créneaux remplacés.'],true),
     connection('wix','Wix · encaissements',['payments_analytics'],!!process.env.WIX_API_KEY,['CA issu de la synthèse des paiements Wix, actualisé pour la période choisie.','Périmètre Wix seulement ; rapprochement historique Notion et paiements par client encore incomplet.'],true),
