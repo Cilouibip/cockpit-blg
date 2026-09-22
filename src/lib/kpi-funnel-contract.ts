@@ -159,9 +159,10 @@ export const kpiFunnelSnapshotSchema = baseKpiFunnelSnapshotSchema.superRefine((
   }
 
   const hasCommercialMoney = [snapshot.totals.cash_collected_eur,snapshot.totals.contracted_revenue_eur,...snapshot.daily.flatMap(row => [row.cash_collected_eur,row.contracted_revenue_eur])].some(value => value !== null);
+  const commercialTotalMoney = snapshot.totals.cash_collected_eur !== null || snapshot.totals.contracted_revenue_eur !== null;
   const commercialCoverage = snapshot.coverage.some(item => /(sales|ventes|cash|contract)/i.test(item.field_group) && ['available','disponible'].includes(item.status));
   const moneyWithoutSale = snapshot.daily.some(row => (row.cash_collected_eur !== null || row.contracted_revenue_eur !== null) && row.sales === null);
-  if (hasCommercialMoney && (!commercialCoverage || snapshot.totals.sales === null || moneyWithoutSale)) context.addIssue({ code: 'custom', path: ['totals'], message: 'Les montants commerciaux exigent une cohorte de ventes et une couverture explicites.' });
+  if (hasCommercialMoney && (!commercialCoverage || (commercialTotalMoney && snapshot.totals.sales === null) || moneyWithoutSale)) context.addIssue({ code: 'custom', path: ['totals'], message: 'Les montants commerciaux exigent une cohorte de ventes et une couverture explicites.' });
 });
 
 export type KpiFunnelDay = z.infer<typeof kpiFunnelDaySchema>;
