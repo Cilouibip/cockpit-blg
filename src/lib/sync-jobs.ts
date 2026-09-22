@@ -1,3 +1,5 @@
+import { synchronizeKpi } from './sync-kpi';
+import { KPI_PROFILE } from './kpi-source-store';
 import {Temporal} from '@js-temporal/polyfill';
 import {database,type Database,type Row} from './db';
 import {synchronize,synchronizeMetaAds} from './sync';
@@ -20,7 +22,7 @@ import {invalidateSourceSnapshots} from './source-snapshots';
 import {ConnectorError} from '../connectors/http';
 import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
-export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce';
+export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce'|'kpi_meta'|'kpi_posthog'|'kpi_email';
 /** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle. */
 const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean}[]=[
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
@@ -35,6 +37,9 @@ const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cad
  {id:'forms',source:'wix',stream:'lead_entries_forms',cadence:3600000,resumable:true},
  {id:'quiz_entries',source:'wix',stream:'lead_entries_quiz',cadence:3600000,resumable:true},
  {id:'client_history',source:'notion',stream:'lead_entries_client_history',cadence:3600000,resumable:true},
+ {id:'kpi_meta',source:'meta',stream:'kpi_meta_daily',cadence:3600000},
+ {id:'kpi_posthog',source:'posthog',stream:'kpi_posthog_daily',cadence:3600000},
+ {id:'kpi_email',source:'wix',stream:'kpi_wix_daily',cadence:3600000},
  {id:'commerce',source:'notion',stream:'commerce_declared_snapshot',workStream:'commerce_reader_checkpoint',cadence:3600000,resumable:true},
 ];
 const RESUMABLE=new Set<SyncJob>(definitions.filter(d=>d.resumable).map(d=>d.id));
@@ -75,7 +80,7 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|n
  const due=new Set(syncStreamStates(runs,now,enabled).filter(s=>s.state==='due').map(s=>s.job));
  return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
-const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000};
+const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
 export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
@@ -89,6 +94,9 @@ export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;pr
  const meta=env.META_AD_ACCOUNT_ID?.replace(/^act_/,'');
  const scope=(namespace:string|undefined|null,profile:string|null,ready=true)=>namespace&&profile&&ready?{namespace,profile}:null;
  switch(job){
+  case 'kpi_meta':return scope(meta,KPI_PROFILE,!!env.META_ACCESS_TOKEN);
+  case 'kpi_posthog':return scope(env.POSTHOG_PROJECT_ID,KPI_PROFILE,!!env.POSTHOG_PERSONAL_API_KEY);
+  case 'kpi_email':return scope(env.WIX_SITE_ID,KPI_PROFILE,!!env.WIX_API_KEY&&!!env.IDENTITY_HMAC_SECRET);
   case 'notion':return scope(env.NOTION_DATA_SOURCE_ID,NOTION_BUSINESS_VERSION);
   case 'meta':return scope(meta,META_ACCOUNT_PROFILE);
   case 'meta_ads':return scope(meta,`${env.META_API_VERSION||'v23.0'}-ad-day-none`);
@@ -106,6 +114,9 @@ export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;pr
 async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget}):Promise<TickResult>{
  const {db,env}=options;
  switch(job){
+  case 'kpi_meta':return synchronizeKpi('meta',options);
+  case 'kpi_posthog':return synchronizeKpi('posthog',options);
+  case 'kpi_email':return synchronizeKpi('wix',options);
   case 'notion':case 'meta':return synchronize(job,undefined,undefined,options) as Promise<TickResult>;
   case 'wix':return synchronizeWix(from,to,options) as Promise<TickResult>;
   case 'receipts':return synchronizeWixTransactionCounts(from,to,options) as Promise<TickResult>;

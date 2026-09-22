@@ -30,6 +30,7 @@ import { readVisitsByOrigin, readVisitorCohort } from '@/lib/ad-arrivals';
 import { journeyReport } from '@/lib/journey-report';
 import { readVisualJourneyReport } from '@/connectors/visual-journey-analytics';
 import {openJourneyResume,sealJourneyResume,type VisualJourneyContinuation} from '@/lib/visual-journey-resume';
+import { readLiveKpiFunnel } from '@/lib/kpi-funnel-live';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 export const maxDuration=60;
@@ -64,6 +65,7 @@ async function handle(request:Request){
   if(!['GET','HEAD'].includes(method))requireOrigin(request,config);
   if(route==='logout'&&method==='POST')return json({ok:true},200,{'Set-Cookie':cookieHeader('',config,true)});
   if(route==='connections'&&method==='GET')return json(await connections());
+  if(route==='kpi-funnel'&&method==='GET')return json(await readLiveKpiFunnel(database(),parseFilters(url),{includeTests:url.searchParams.get('includeTests')==='true'}));
   if(route==='dashboard'&&method==='GET'){
    const filters=parseFilters(url),db=database();
    if(url.searchParams.get('refreshPosthog')==='1'){

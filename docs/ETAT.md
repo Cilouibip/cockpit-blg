@@ -1,3 +1,15 @@
+## 22 septembre 2026 — intégration revue du tableau automatique et de l’historique archivé
+
+Le tableau conserve les vues existantes et lit les relevés automatiques des sources, avec les mêmes dates, filtres et essais. Le commerce conserve séparément un Client historique absent uniquement après lecture de sa page confirmant archive et corbeille dans la source attendue. Les données du dernier miroir publié sont conservées ; toute autre disparition reste bloquante. Aucun changement des sources Notion, des ventes ou des paiements. Les erreurs HTTP après une page sauvegardée restent lisibles et la reprise est préservée.
+
+Revue indépendante favorable du lot KPI puis du correctif final ; 22 tests ciblés commerce réussis, typage après intégration réussi. Les 27 autres fichiers KPI du dossier de revue sont identiques. Les contrôles CI sur le lot intégré, la publication et les passages automatiques réels restent à constater. Aucun nettoyage de stockage, nouveau service ou changement des sources n’est inclus.
+
+## 22 septembre 2026 — automatisation KPI préparée localement, revue requise
+
+Le tableau KPI lit désormais les publications de sources automatiques : Meta quotidien, clics/confirmations PostHog et activité des neuf messages Wix validés. Trois unités rejoignent le tick existant ; les identifiants existants sont réutilisés. Les sources restent en lecture seule. Période, filtres, essais explicites, fraîcheur et export CSV reprennent le relevé affiché. Les vues historiques restent dans le cockpit ; aucune refonte Parcours, Liens ou Commercial. Conservation des versions et des derniers relevés valides, sans purge ni migration de schéma.
+
+Deux cycles de lectures réelles ont abouti avec publications uniquement en mémoire locale. 500 tests unitaires et compilation passent avant les dernières corrections bornées ; ensuite dix tests ciblés (dont PostgreSQL JSONB réel et échec HTTP), typage et recette navigateur du tableau passent. Dernière correction de texte contrôlée par typage. La recette exhaustive des cinq vues en production, la fenêtre automatique complète de 35 jours et deux passages du planificateur en production restent à faire après revue/intégration. Une fiche Client archivée bloquait la publication commerciale ; sa conservation historique est maintenant couverte par le correctif revu ci-dessus. Aucune donnée individuelle n’est incluse dans la documentation produit. La publication distante reste à constater.
+
 ## 19 septembre 2026 — Parcours : intersection vidéo vers rendez-vous (local)
 
 Complément séparé après `76c4c07` : le taux vidéo→RDV pouvait afficher 2/1. Son dénominateur exigeait une vidéo après inscription, mais son numérateur acceptait aussi un réservant ayant regardé avant de s’inscrire. Le numérateur réutilise maintenant exactement les personnes du dénominateur existant, puis leur applique la condition vidéo→RDV déjà présente. Aucun plafonnement artificiel du pourcentage.
@@ -19,6 +31,12 @@ La contre-relecture a reproduit un cas restant après `0df4d18` : les en-têtes 
 Le correctif est limité à `posthog-query.ts`. Il conserve la classification du transport pendant la lecture du flux, avant la normalisation générique ; le parsing JSON reste distinct. `http.ts` et les erreurs des autres connecteurs ne changent pas. Les réponses non-2xx et les limites de taille restent prioritaires. Un corps POST ou GET interrompu au budget devient une continuation en attente ; la reprise récupère le même identifiant sans nouveau POST. Un document entièrement reçu mais invalide reste un échec, y compris à la limite de temps. Le dernier rapport complet reste conservé dans les deux cas.
 
 Validation du complément : reproduction avant/après identique (échec puis attente, checkpoint présent, aucune publication), cinq tests supplémentaires couvrant POST/GET interrompus, JSON invalide POST/GET et refus de réémettre après réception des en-têtes ; 476 tests généraux, typage et compilation Webpack réussis. Les 12 tests PostgreSQL C3 réexécutés réussissent également et vérifient le lecteur contre la persistance réelle. Aucun changement SQL, filtre, calcul, délai ou système distant. La revue finale et l’intégration restent au coordinateur, selon `ETAT-ACTUEL.md` et `DECISIONS-ACTEES.md` du centre BLG.
+
+## 22 septembre 2026 — relevé KPI daté dans Résultats (local)
+
+Le cockpit local lit maintenant un relevé JSON agrégé et validé depuis une variable serveur privée, ou depuis un fichier absolu local explicitement configuré. La variable JSON est prioritaire ; aucune donnée métier n'est embarquée dans le dépôt. Sans relevé, l'écran affiche simplement « Aucun relevé chargé ».
+
+Le tableau fixe sa propre fenêtre et sa fraîcheur, indépendamment des filtres globaux. Il sépare Meta, occurrences et contacts Wix, réservation, appels, ventes et cash ; les valeurs non mesurées restent indisponibles. Les ratios qui croiseraient la dépense Meta et le suivi commercial sont masqués faute de cohorte payante chaînée. Validation : tests ciblés, typage, build et recette 1440/390 px réussis. Aucun changement du Parcours, publication ou raccord automatique n'a été effectué.
 
 ## 19 septembre 2026 — C3 : reprise durable des rapports PostHog (local)
 

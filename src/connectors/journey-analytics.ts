@@ -478,3 +478,17 @@ export async function readJourneyAnalytics(config: JourneyAnalyticsConfig): Prom
     return report;
   }
 }
+
+/** Daily booking-session measures use the same production, origin and explicit-test rules as Parcours. */
+export function kpiBookingQuery(from: string, to: string) {
+ const { start, end } = dateWindow(from, to), first = firstTouchDimensions('masterclass');
+ const surface = `(lower(${property('page_path')}) IN (${MC_PATHS.map(literal).join(', ')}) AND ${property('page_id')} = 'blg-rugby-mc' AND lower(${property('environment')}) = 'production' AND NOT ${hostConflict} AND (${host} = '' OR ${host} IN (${MASTERCLASS_HOSTS.map(literal).join(', ')})))`;
+ const measures = [ ['mc_booking_click','click'], ['mc_booking_confirmed','confirmed'] ];
+ const perSession = `SELECT ${session} AS sid, minIf(timestamp,event='mc_booking_click') AS click_at, minIf(timestamp,event='mc_booking_confirmed') AS confirmed_at,
+  argMinIf(${first.ad},timestamp,${first.ad}!='') AS ad, argMinIf(${first.campaign},timestamp,${first.campaign}!='') AS campaign,
+  argMinIf(${first.source},timestamp,${first.source}!='') AS source, argMinIf(${first.medium},timestamp,${first.medium}!='') AS medium,
+  argMinIf(${first.link},timestamp,${first.link}!='') AS link, max(if(${explicitTest(first)},1,0)) AS is_test
+  FROM events WHERE timestamp >= fromUnixTimestamp64Milli(${start.epochMilliseconds}) AND timestamp < fromUnixTimestamp64Milli(${end.epochMilliseconds})
+  AND event LIKE 'mc_%' AND ${surface} AND ${session}!='' GROUP BY sid`;
+ return `WITH sessions AS (${perSession}) ${measures.map(([,kind])=>`SELECT formatDateTime(${kind}_at,'%Y-%m-%d','Europe/Paris') AS day, '${kind}' AS kind, ad, campaign, source, medium, link, is_test, count() AS sessions FROM sessions WHERE ${kind}_at > toDateTime(0) GROUP BY day,ad,campaign,source,medium,link,is_test`).join(' UNION ALL ')} LIMIT 10001`;
+}
