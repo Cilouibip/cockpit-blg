@@ -70,6 +70,8 @@ test('ad_daily, ancien schéma et ancien chemin : trois tentatives complètes, u
 
 test('migration 018 (reprise) : v_ad_daily et v_meta_conversions_daily identiques ; lignes courantes = lignes lues', async () => {
   await sql.query(fs.readFileSync('supabase/migrations/018_current_state_by_stable_key.sql', 'utf8'));
+  // Fusion U4c-inscriptions : la migration 020 (mise à jour en place des inscriptions) suit 018 ; les scénarios inscriptions ci-dessous en portent les attentes.
+  await sql.query(fs.readFileSync('supabase/migrations/020_lead_entries_update_in_place.sql', 'utf8'));
   assert.deepStrictEqual(await view('111'), legacyViews.ad);
   assert.deepStrictEqual(await conversionsView('111'), legacyViews.conversions);
   const current = (await sql.query(`SELECT id FROM ad_daily WHERE is_current AND ${inNs('111')} ORDER BY id`)).rows.map(row => row.id);
@@ -183,30 +185,31 @@ test('non-accumulation inscriptions (lead_entries_forms) : identique, modifié, 
   assert.equal(same.result.status, 'complete');assert.equal(same.result.counts.unchanged, 2);assert.equal(same.result.counts.unchangedSkipped, 2);assert.equal(same.result.counts.changed, 0);
   assert.equal(await n('sync_runs', "stream_key='lead_entries_forms' AND source_namespace='site-state'"), journal + 1);
   note(flow, 'collecte identique', 2, await total(), '(sync_runs +1)');
-  // 2. Modifiée (nouvelle version source) : règle inchangée des inscriptions, une version d'audit de plus, une seule courante.
+  // 2. Modifiée (nouvelle version source) : migration 020, la ligne courante est mise à jour en place (même id), aucune copie.
   const bChanged = lead('lead-b', '2026-06-01T10:00:00Z', '2026-08-02T00:00:00Z', 'CANCELED');
   const changed = await collectLeads([a, bChanged]);
-  assert.equal(changed.result.counts.changed, 1);assert.equal(changed.result.counts.unchangedSkipped, 1);assert.equal(await total(), 3);
+  assert.equal(changed.result.counts.changed, 1);assert.equal(changed.result.counts.unchangedSkipped, 1);assert.equal(await total(), 2);
+  assert.equal((await current()).find(row => row.external_id === 'lead-b')?.id, reference.find(row => row.external_id === 'lead-b')?.id, 'même identifiant après modification (020)');
   assert.equal((await current()).length, 2);assert.equal((await current()).find(row => row.external_id === 'lead-b')?.source_status, 'CANCELED');
-  note(flow, 'valeur modifiée', 2, await total(), '(nouvelle version d’audit, ancienne non courante : règle 009 inchangée)');
+  note(flow, 'valeur modifiée', 2, await total(), '(même ligne mise à jour en place, une trace de changement : migration 020)');
   // 3. Nouvel objet.
-  await collectLeads([a, bChanged, lead('lead-c')]);assert.equal(await total(), 4);note(flow, 'nouvel objet', 3, 4);
+  await collectLeads([a, bChanged, lead('lead-c')]);assert.equal(await total(), 3);note(flow, 'nouvel objet', 2, 3);
   // 4. Absent d'une lecture par delta : rien n'est retiré ni effacé (une absence n'est pas une suppression).
-  const partial = await collectLeads([a]);assert.equal(partial.result.status, 'complete');assert.equal(await total(), 4);assert.equal((await current()).length, 3);
-  note(flow, 'objet absent du delta', 4, await total(), '(aucun retrait : lecture par delta)');
+  const partial = await collectLeads([a]);assert.equal(partial.result.status, 'complete');assert.equal(await total(), 3);assert.equal((await current()).length, 3);
+  note(flow, 'objet absent du delta', 3, await total(), '(aucun retrait : lecture par delta)');
   // 5. Rejeu de la publication (accusé perdu) : refusée (55000), aucun changement.
   const snapshot = await current();
   await assert.rejects(publishLeads(partial.c), { code: '55000' });
-  assert.deepEqual(await current(), snapshot);assert.equal(await total(), 4);
-  note(flow, 'rejeu de publication', 4, await total());
+  assert.deepEqual(await current(), snapshot);assert.equal(await total(), 3);
+  note(flow, 'rejeu de publication', 3, await total());
   // 6. Interrompue avant publication : page préparée invisible ; bail expiré, reprise de la même tentative.
   const pending = await claim();await stage(pending, [lead('lead-d')], false, 0);
   assert.deepEqual(await current(), snapshot, 'observation préparée non courante');
   await sql.query("UPDATE sync_runs SET lease_until=now()-interval '1 second' WHERE id=$1", [pending.runId]);
   const resumed = await claim();assert.equal(resumed.runId, pending.runId);assert.equal(resumed.checkpoint.page, 1);
   await stage(resumed, [], true, 1);assert.equal((await publishLeads(resumed)).status, 'complete');
-  assert.equal(await total(), 5);assert.equal((await current()).length, 4);
-  note(flow, 'tentative interrompue', 4, 5, '(la reprise publie la page préparée : un nouvel objet)');
+  assert.equal(await total(), 4);assert.equal((await current()).length, 4);
+  note(flow, 'tentative interrompue', 3, 4, '(la reprise publie la page préparée : un nouvel objet)');
   console.log('STATE_REPORT ' + JSON.stringify(report));
 });
 
@@ -252,7 +255,7 @@ test('migration 019 : lignes préparées des tentatives failed et partial de plu
   const recent = await legacyMeta(ns, from, to, records(9), 'failed');
   // Inscriptions : une observation jamais publiée d'une tentative en échec (plus de 24 h), une d'une tentative en cours,
   // les observations publiées et courantes ; une observation antérieure à 018.
-  // Publiées : deux observations, puis une modification réelle de kept-b (version d'audit publiée, non courante) ; datées de 2 jours.
+  // Publiées : deux observations, puis une modification réelle de kept-b (mise à jour en place, migration 020 : aucune version non courante) ; datées de 2 jours.
   const site = 'site-cleanup';const c = await claimAs(site, 'cleanup-v1');await stage(c, [leadIn(site, 'kept-a'), leadIn(site, 'kept-b')]);await publishLeads(c);
   const c2 = await claimAs(site, 'cleanup-v1');await stage(c2, [leadIn(site, 'kept-b', '2026-08-02T00:00:00Z')]);await publishLeads(c2);
   await age([c.runId, c2.runId], '2 days');
@@ -267,7 +270,7 @@ test('migration 019 : lignes préparées des tentatives failed et partial de plu
   });
   const before = await snapshot();
   assert.deepEqual(before.ad, { legacyFailed: 4, current: 4, legacyComplete: 4, partial: 4, failed: 4, recent: 4 });
-  assert.deepEqual(before.leads, { published: 3, publishedNotCurrent: 1, failed: 1, running: 1, before018: 1 });
+  assert.deepEqual(before.leads, { published: 2, publishedNotCurrent: 0, failed: 1, running: 1, before018: 1 });
   const currentIds = (await sql.query(`SELECT id, spend_minor FROM ad_daily WHERE is_current AND ${inNs(ns)} ORDER BY id`)).rows, readBefore = await view(ns), conversionsBefore = await conversionsView(ns);
   // Borne par table et par appel : 8 lignes éligibles par table Meta, 5 supprimées au premier appel, 3 au suivant.
   const first = await cleanup(5);

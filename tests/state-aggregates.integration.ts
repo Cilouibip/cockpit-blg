@@ -271,6 +271,8 @@ for (const source of ['meta', 'posthog', 'wix'] as KpiSource[]) test(`non-accumu
   note(flow, 'tentative interrompue', initial + 1, initial + 1 + 9, '(9 lignes préparées invisibles, nettoyées après 24 h)');
   // Nettoyage borné : plus de 24 h après, la publication suivante supprime ces lignes jamais publiées.
   await sql.query("UPDATE sync_runs SET started_at=started_at-interval '25 hours' WHERE id=$1", [interrupted]);
+  // Garde « aucune purge héritée » (fusion U4c-garde) : seules les tentatives commencées après l'application de 018 sont nettoyées ; la migration est datée avant la tentative vieillie.
+  await sql.query("UPDATE cockpit_migrations SET applied_at=least(applied_at, clock_timestamp()-interval '26 hours') WHERE version=18");
   const cleaned = await collect(rows, '2026-09-13T11:30:00Z');
   assert.equal((await stateOf(cleaned.runId)).state.cleaned, 9);assert.equal(await count(scope), initial + 1);
   assert.equal(await count(`${scope} AND is_current`), initial + 1 - 1);

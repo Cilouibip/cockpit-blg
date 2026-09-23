@@ -77,7 +77,7 @@ BEGIN
  DELETE FROM public.source_aggregates s WHERE s.id IN (
   SELECT x.id FROM public.source_aggregates x JOIN public.sync_runs f ON f.id=x.sync_run_id
   WHERE NOT x.is_current AND f.status='failed' AND f.source=r.source AND f.source_namespace=r.source_namespace
-   AND f.stream_key=r.stream_key AND f.query_profile_key=r.query_profile_key AND f.started_at<clock_timestamp()-interval '24 hours'
+   AND f.stream_key=r.stream_key AND f.query_profile_key=r.query_profile_key AND f.started_at<clock_timestamp()-interval '24 hours' AND f.started_at>=(SELECT applied_at FROM public.cockpit_migrations WHERE version=18)
   LIMIT 5000);
  GET DIAGNOSTICS n_cleaned=ROW_COUNT;
  SELECT count(*) INTO n_current FROM public.source_aggregates c
@@ -233,10 +233,10 @@ BEGIN
  GET DIAGNOSTICS c_inserted=ROW_COUNT;
  -- Nettoyage borné : lignes jamais publiées de tentatives Meta en échec de plus de 24 h (5 000 par table et par publication).
  DELETE FROM public.meta_conversions_daily s WHERE s.id IN (SELECT x.id FROM public.meta_conversions_daily x JOIN public.sync_runs f ON f.id=x.sync_run_id
-  WHERE NOT x.is_current AND f.status='failed' AND f.source='meta' AND f.stream_key='ad_daily' AND f.source_namespace=r.source_namespace AND f.started_at<clock_timestamp()-interval '24 hours' LIMIT 5000);
+  WHERE NOT x.is_current AND f.status='failed' AND f.source='meta' AND f.stream_key='ad_daily' AND f.source_namespace=r.source_namespace AND f.started_at<clock_timestamp()-interval '24 hours' AND f.started_at>=(SELECT applied_at FROM public.cockpit_migrations WHERE version=18) LIMIT 5000);
  GET DIAGNOSTICS n=ROW_COUNT;n_cleaned=n;
  DELETE FROM public.ad_daily s WHERE s.id IN (SELECT x.id FROM public.ad_daily x JOIN public.sync_runs f ON f.id=x.sync_run_id
-  WHERE NOT x.is_current AND f.status='failed' AND f.source='meta' AND f.stream_key='ad_daily' AND f.source_namespace=r.source_namespace AND f.started_at<clock_timestamp()-interval '24 hours' LIMIT 5000);
+  WHERE NOT x.is_current AND f.status='failed' AND f.source='meta' AND f.stream_key='ad_daily' AND f.source_namespace=r.source_namespace AND f.started_at<clock_timestamp()-interval '24 hours' AND f.started_at>=(SELECT applied_at FROM public.cockpit_migrations WHERE version=18) LIMIT 5000);
  GET DIAGNOSTICS n=ROW_COUNT;n_cleaned=n_cleaned+n;
  SELECT count(*) INTO d_current FROM public.ad_daily c JOIN public.ads a ON a.id=c.ad_id
  WHERE c.is_current AND a.source='meta' AND a.source_namespace=r.source_namespace AND c.date>=r.date_from AND c.date<r.date_to;

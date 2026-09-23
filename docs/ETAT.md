@@ -1,3 +1,13 @@
+## 23 septembre 2026 : garde de la demi-heure, préparation bornée, retour arrière après nouvelles écritures (U4c-garde, local, revue requise)
+
+Rien n'est appliqué en production.
+
+- Cadence : `BLG_REFRESH_CADENCE_MINUTES=30` n'est appliqué que si le passage détient le verrou partagé en base (`lock.kind` = `shared`). Sans lui, le passage tourne à 60 minutes et sa réponse le dit (`cadence.requestedMinutes` = 30, `cadence.degradedReason`). Le tableau garde 30 : un retard reste affiché « ancien ».
+- Préparation bornée (migration 019) : chaque passage du tick supprime au plus 5 000 lignes par table jamais publiées de tentatives en échec (`failed` ou `partial`) terminées depuis plus de 24 heures et commencées après la migration 18. Des pannes répétées sans aucun succès ne font plus grossir les tables. Aucune ligne publiée, courante ou antérieure à 018 n'est touchée ; un échec du nettoyage est seulement signalé. À la fusion, la même garde « commencée après 018 » a été ajoutée au nettoyage à la publication de 018 (aucune purge héritée).
+- Retour arrière : prouvé qu'après des écritures du nouveau code, l'ancien lit la même chose. Après des écritures de l'ancien code, le rejeu de la migration 18 ne suffit pas : au redéploiement, lancer une fois `SELECT cockpit_resume_current_state();` (docs/ACTUALISATION.md §7.1).
+
+Preuves : 597 tests, typage et compilation ; 106 tests PostgreSQL 17 jetable (lot) puis contrôle sur le SHA fusionné. Restent : migrations 017 à 020 à appliquer avant le code, mesure sur volume réel, rétention de `sync_runs` (décision), périmètre du nettoyage 019 (tous les flux des quatre tables) à confirmer par Codex.
+
 ## 23 septembre 2026 : inscriptions, une modification met à jour la même ligne (U4c-inscriptions, local, revue requise)
 
 Migration 020. Une inscription modifiée à la source, re-liée à une autre personne ou reclassée par un profil de mapping revu met à jour sa ligne existante (même identifiant) au lieu d'en ajouter une copie complète. Une collecte identique n'ajoute rien, un nouvel objet ajoute une ligne. Les changements métier (fiche modifiée à la source, personne ou état d'identité, éligibilité) sont datés dans une trace minimale sans aucun contenu de fiche ; un changement de profil seul n'y écrit rien (déjà suivi par passage). Aucun lecteur modifié, aucun changement de code.

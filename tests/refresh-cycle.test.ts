@@ -35,6 +35,8 @@ async function simulate(profile: Profile, everyMinutes: number, hours: number) {
     const tickStart = start + k * everyMinutes * 60_000 + 2000;t = tickStart;
     await tickSyncJobs(db, env, {
       lock: createProcessTickLock(), now: () => t,
+      // Fusion U4c-garde : la simulation du déclencheur détient le bail partagé, sinon la demi-heure n'est pas effective (60 signalé).
+      sharedLease: { claim: async () => ({ state: 'acquired', release: async () => undefined }) },
       budget: { sourceFetch: async () => new Response('{}'), canStart: max => tickStart + 40_000 - t >= max, dispose: () => {} },
       execute: async job => {
         const [units, seconds] = profile[job] ?? assert.fail(`unité inattendue ${job}`), scope = jobScope(job, env)!;
