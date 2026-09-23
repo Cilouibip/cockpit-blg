@@ -15,7 +15,8 @@ export function memoryKpiDatabase(initial: Partial<Record<TableName,Row[]>> = {}
    const rows=get('source_aggregates'),metrics=String(args.p_metric_keys).replace(/[{}]/g,'').split(',');
    const key=(r:Row)=>['source','source_namespace','report_profile_key','metric_key','period_from','period_to','dimensions_key'].map(k=>String(r[k])).join('|');
    for(const row of rows.filter(r=>r.sync_run_id===run.id&&!r.is_current)){const current=rows.find(r=>r.is_current&&key(r)===key(row));if(current){Object.assign(current,{...row,id:current.id,is_current:true});rows.splice(rows.indexOf(row),1);}}
-   for(const row of rows)if(row.is_current&&row.sync_run_id!==run.id&&metrics.includes(String(row.metric_key))&&String(row.period_from)>=String(run.period_from)&&String(row.period_to)<=String(run.period_to))row.is_current=false;
+   const inScope=(r:Row)=>r.source===run.source&&r.source_namespace===run.source_namespace&&r.report_profile_key===run.query_profile_key&&metrics.includes(String(r.metric_key))&&String(r.period_from)>=String(run.period_from)&&String(r.period_to)<=String(run.period_to);
+   for(const row of rows)if(row.is_current&&row.sync_run_id!==run.id&&inScope(row))row.is_current=false;
    for(const row of rows)if(row.sync_run_id===run.id)row.is_current=true;
    const current=rows.filter(r=>r.is_current&&r.sync_run_id===run.id).length;
    Object.assign(run,{status:current?'complete':'empty',finished_at:clock(),pagination_complete:true,rows_rejected:0,rows_written:current,error_code:null});
