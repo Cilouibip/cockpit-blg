@@ -17,37 +17,40 @@ const PILOT: SyncJob[] = ['meta_ads', 'masterclass', 'forms', 'kpi_meta', 'kpi_p
 const done = (job: SyncJob, at: number): Row => ({ id: `${job}-${at}`, source: STREAM[job][0], source_namespace: STREAM[job][0], stream_key: STREAM[job][1], status: 'complete', pagination_complete: true, started_at: new Date(at).toISOString(), finished_at: new Date(at + 5000).toISOString() });
 const env = (value?: string) => (value === undefined ? {} : { BLG_REFRESH_CADENCE_MINUTES: value }) as NodeJS.ProcessEnv;
 
-test('réglage : absent, vide ou invalide = 30 minutes ; 60 rétablit la cadence horaire ; jamais sous 30', () => {
-  assert.equal(refreshCadenceMinutes({}), 30, 'réglage absent = 30');
-  for (const value of ['', '30', ' 30 ', '15', '5', '0', '-30', '45', 'abc', '60min']) assert.equal(refreshCadenceMinutes(env(value)), 30, `« ${value} » = 30`);
-  assert.equal(refreshCadenceMinutes(env('60')), 60);
-  assert.equal(refreshCadenceMinutes(env(' 60\n')), 60, 'un retour à la ligne copié avec la valeur ne change pas son sens');
+test('réglage : absent, vide ou invalide = 60 minutes (défaut de transition) ; 30 explicite active la demi-heure ; jamais sous 30', () => {
+  assert.equal(refreshCadenceMinutes({}), 60, 'réglage absent = 60');
+  for (const value of ['', '60', ' 60\n', '15', '5', '0', '-30', '45', 'abc', '30min', '60min', '3 0']) assert.equal(refreshCadenceMinutes(env(value)), 60, `« ${value} » = 60`);
+  assert.equal(refreshCadenceMinutes(env('30')), 30, 'activation explicite');
+  assert.equal(refreshCadenceMinutes(env(' 30\n')), 30, 'un retour à la ligne copié avec la valeur ne change pas son sens');
   assert.deepEqual([...PILOT_REFRESH_JOBS].sort(), [...PILOT].sort(), 'flux Masterclass bornés : publicités par jour, PostHog Masterclass, formulaires Wix, trois KPI quotidiens');
-  const fast = refreshCadences({}), slow = refreshCadences(env('60'));
+  const fast = refreshCadences(env('30')), slow = refreshCadences({});
   for (const job of ALL) {
-    assert.equal(fast[job], PILOT.includes(job) ? 30 * MIN : 60 * MIN, `${job} : cadence par défaut`);
-    assert.equal(slow[job], 60 * MIN, `${job} : réglage 60 = comportement antérieur`);
+    assert.equal(fast[job], PILOT.includes(job) ? 30 * MIN : 60 * MIN, `${job} : cadence activée à 30`);
+    assert.equal(slow[job], 60 * MIN, `${job} : réglage absent = comportement antérieur`);
+    assert.equal(refreshCadences(env('60'))[job], 60 * MIN, `${job} : 60 explicite = comportement antérieur`);
   }
   assert.equal(fast.notion, 60 * MIN, 'l’inventaire Notion complet n’est jamais relu plus souvent qu’aujourd’hui');
   assert.equal(fast.meta_catalog, 60 * MIN, 'le catalogue Meta complet n’est jamais relu plus souvent qu’aujourd’hui');
 });
 
-test('horloge simulée : les flux Masterclass sont dus à 30 minutes, les autres à 60, depuis le début de la tentative précédente', () => {
+test('horloge simulée : à 30 activé, les flux Masterclass sont dus à 30 minutes, les autres à 60, depuis le début de la tentative précédente', () => {
   for (const job of ALL) {
-    const rows = [done(job, T0)], due = (minutes: number, settings = env()) => chooseSyncJob(rows, T0 + minutes * MIN, [job], refreshCadences(settings)) === job;
+    const rows = [done(job, T0)], due = (minutes: number, settings = env('30')) => chooseSyncJob(rows, T0 + minutes * MIN, [job], refreshCadences(settings)) === job;
     assert.equal(due(1), false, `${job} reste à jour juste après sa publication`);
     assert.equal(due(29), false, `${job} n’est pas dû avant 30 minutes`);
     assert.equal(due(30), PILOT.includes(job), `${job} : dû à 30 minutes seulement s’il conditionne le pilotage Masterclass`);
     assert.equal(due(59), PILOT.includes(job), `${job} : un flux horaire reste à jour pendant son heure`);
     assert.equal(due(60), true, `${job} est dû à une heure`);
     assert.equal(due(30, env('60')), false, `${job} : avec le réglage 60, rien ne change par rapport à aujourd’hui`);
+    assert.equal(due(30, env()), false, `${job} : réglage absent = défaut de transition 60, rien ne change`);
+    assert.equal(due(60, env()), true, `${job} : réglage absent, dû à une heure`);
   }
 });
 
 test('un déclenchement toutes les 5 minutes ne fait pas dériver la cadence : passage au créneau suivant de 30 minutes', () => {
   // Sans la règle de créneau, une unité partie à 10:00:07 ne serait due qu’à 10:30:07 et manquerait le déclenchement de 10:30:00 :
   // la publication suivante glisserait à 10:35, puis 11:10... (35 minutes par cycle).
-  const cadences = refreshCadences({}), rows = [done('forms', T0)];
+  const cadences = refreshCadences(env('30')), rows = [done('forms', T0)];
   const at = (clock: string) => Date.parse(`2026-09-23T${clock}Z`);
   assert.equal(chooseSyncJob(rows, at('10:25:00'), ['forms'], cadences), null);
   assert.equal(chooseSyncJob(rows, at('10:30:00'), ['forms'], cadences), 'forms', 'dû au premier déclenchement du créneau suivant');
@@ -64,14 +67,14 @@ test('un déclenchement toutes les 5 minutes ne fait pas dériver la cadence : p
 
 test('la fraîcheur affichée suit la même cadence : une publication de plus de 30 minutes d’un flux Masterclass est ancienne', () => {
   const rows = [done('kpi_meta', T0), done('notion', T0)];
-  const [kpi, notion] = syncStreamStates(rows, T0 + 31 * MIN, ['notion', 'kpi_meta'], refreshCadences({})).sort((a, b) => a.job.localeCompare(b.job));
+  const [kpi, notion] = syncStreamStates(rows, T0 + 31 * MIN, ['notion', 'kpi_meta'], refreshCadences(env('30'))).sort((a, b) => a.job.localeCompare(b.job));
   assert.equal(kpi.job, 'kpi_meta'); assert.equal(kpi.stale, true); assert.equal(kpi.state, 'due');
   assert.equal(notion.job, 'notion'); assert.equal(notion.stale, false); assert.equal(notion.state, 'complete');
 });
 
-// Toutes les lectures configurées, lecteur des ventes en pause (réglage absent) : 14 flux planifiables.
+// Toutes les lectures configurées, lecteur des ventes en pause (réglage absent) : 14 flux planifiables. Cadence 30 activée explicitement.
 const liveEnv = {
-  COCKPIT_MODE: 'live', NOTION_DATA_SOURCE_ID: 'notion', NOTION_TOKEN: 'synthetic', NOTION_CLIENT_DATA_SOURCE_ID: 'clients', META_AD_ACCOUNT_ID: 'meta', META_ACCESS_TOKEN: 'synthetic',
+  COCKPIT_MODE: 'live', BLG_REFRESH_CADENCE_MINUTES: '30', NOTION_DATA_SOURCE_ID: 'notion', NOTION_TOKEN: 'synthetic', NOTION_CLIENT_DATA_SOURCE_ID: 'clients', META_AD_ACCOUNT_ID: 'meta', META_ACCESS_TOKEN: 'synthetic',
   WIX_SITE_ID: 'wix', WIX_API_KEY: 'synthetic', IDENTITY_HMAC_SECRET: 'x'.repeat(32), POSTHOG_PROJECT_ID: '123', POSTHOG_PERSONAL_API_KEY: 'synthetic',
   WIX_LEAD_ENTRY_CONFIG: JSON.stringify({ formIds: ['form-1'], quiz: { collectionId: 'Quiz', originFields: { ad: 'publicite' } } }),
 } as unknown as NodeJS.ProcessEnv;
@@ -110,5 +113,13 @@ test('tick sans travail : aucun appel source, aucune écriture, une seule lectur
 test('tick sans travail entre deux créneaux : un flux Masterclass publié il y a 25 minutes n’est pas relu', async () => {
   const at = Date.parse('2026-09-23T10:25:00Z'), rows = ALL.filter(job => jobScope(job, liveEnv)).map(job => scoped(job, Date.parse('2026-09-23T10:00:05Z'))), calls: string[] = [];
   const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), liveEnv, { now: () => at, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async () => assert.fail('rien n’est dû') });
+  assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0);
+});
+
+test('tick : sans réglage, la réponse annonce le défaut de transition 60 ; 30 seulement sur activation explicite', async () => {
+  const { BLG_REFRESH_CADENCE_MINUTES: _unset, ...transitionEnv } = liveEnv;
+  const at = Date.parse('2026-09-23T10:40:00Z'), rows = ALL.filter(job => jobScope(job, transitionEnv as NodeJS.ProcessEnv)).map(job => scoped(job, Date.parse('2026-09-23T10:00:05Z'))), calls: string[] = [];
+  const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), transitionEnv as NodeJS.ProcessEnv, { now: () => at, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async () => assert.fail('rien n’est dû à 40 minutes avec la cadence horaire') });
+  assert.deepEqual(summary.cadence, { pilotMinutes: 60, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
   assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0);
 });

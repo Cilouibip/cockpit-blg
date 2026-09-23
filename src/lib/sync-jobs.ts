@@ -26,7 +26,7 @@ import {createSyncExecutionBudget} from './sync-budget';
 export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce'|'kpi_meta'|'kpi_posthog'|'kpi_email';
 /** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle.
  * `cadence` : cadence de base (une heure). `pilot` : flux qui conditionne le pilotage Masterclass et dont chaque passage reste borné
- * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (30 minutes par défaut). */
+ * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (60 minutes par défaut, 30 sur activation explicite). */
 const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean;pilot?:true}[]=[
  // Chaque nouveau passage Notion relit l'inventaire complet de la base (et tout le miroir une fois par 24 h) : il reste à une heure.
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
@@ -52,9 +52,10 @@ const MAX_CHUNKS=4;
 const HOUR_MS=3_600_000;
 /** Flux du pilotage Masterclass soumis au réglage de cadence ; tous les autres restent à une heure. */
 export const PILOT_REFRESH_JOBS:readonly SyncJob[]=definitions.filter(d=>d.pilot).map(d=>d.id);
-/** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES : `60` rétablit exactement la cadence horaire antérieure ;
- * absent, vide ou toute autre valeur : 30 minutes. Aucune valeur ne descend sous 30 minutes. */
-export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='60'?60:30;}
+/** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES. Défaut de transition : absent, vide, `60` ou toute valeur
+ * autre que `30` = 60 minutes (cadence horaire antérieure, à l'identique). `30` (espaces ignorés) est une activation
+ * explicite, à poser seulement après les conditions de docs/ACTUALISATION.md §2. Aucune valeur ne descend sous 30 minutes. */
+export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='30'?30:60;}
 export type RefreshCadences=Record<SyncJob,number>;
 /** Cadence en millisecondes de chaque flux, d'après le seul réglage serveur. */
 export function refreshCadences(env:Record<string,string|undefined>=process.env):RefreshCadences {
