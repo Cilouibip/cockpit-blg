@@ -356,6 +356,17 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const wixCoverage = sourceCoverage('wix', registrationsAvailable, registrationState.reason ?? registrationRateReason, registrationRateReason);
   const notionCoverage = sourceCoverage('appointments', appointmentsAvailable, input.appointmentError ?? "Le miroir des rendez-vous n'est pas disponible.", 'La couverture du miroir des rendez-vous est inconnue.');
   const registrationCoverage: RateCoverage = { at: wixCoverage.at, blocked: browserAvailable ? wixCoverage.blocked : browserReason, label: 'des inscriptions' };
+  // U6b : le numérateur inscription → vidéo dépend de la lecture PostHog. Un démarrage vidéo n'est connu
+  // que jusqu'à l'heure de LECTURE (`observedAt`, heure du résultat ou de son rafraîchissement en cache),
+  // pas jusqu'au dernier événement observé (`coveredThrough`, qui reculerait la population à chaque heure
+  // sans événement). Couverture commune = min(W, lecture PostHog) ; heure de lecture inconnue ou illisible :
+  // taux indisponible avec un motif navigateur.
+  const posthogReadAt = (() => { try { return input.freshness.posthog.observedAt ? Temporal.Instant.from(input.freshness.posthog.observedAt) : null; } catch { return null; } })();
+  const videoCoverage: RateCoverage = {
+    at: wixCoverage.at && posthogReadAt ? (Temporal.Instant.compare(wixCoverage.at, posthogReadAt) <= 0 ? wixCoverage.at : posthogReadAt) : null,
+    blocked: !browserAvailable ? browserReason : !posthogReadAt ? "L'heure de lecture navigateur est inconnue." : wixCoverage.blocked,
+    label: 'des inscriptions et de la lecture navigateur',
+  };
   const bookingBlocked = registrationCoverage.blocked ?? notionCoverage.blocked
     ?? (appointmentRows.length > 0 && linkedAppointmentCount === 0 ? "Les rendez-vous enregistrés ne sont pas encore reliés aux inscrits." : null)
     // Règle conservée : la date prévue d'un réservant de la sélection ne prouve pas quand il a réservé.
@@ -374,7 +385,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
     row => { const registration = scopedRegistrationByBrowser.get(row.key); return !!registration && after(registration.occurredAt, row.formOpenAt); }, 'Aucune ouverture de formulaire mesurée.');
   const signupFromStarted = coveredRate(registrationCoverage, browserAvailable ? formStarted.size : null, browserScoped.filter(row => row.formStartAt), row => row.formStartAt,
     row => { const registration = scopedRegistrationByBrowser.get(row.key); return !!registration && after(registration.occurredAt, row.formStartAt); }, 'Aucun démarrage de formulaire mesuré.');
-  const videoFromSignup = coveredRate(registrationCoverage, registrationState.available ? registrationsScoped.length : null, registrationsScoped, registration => registration.occurredAt,
+  const videoFromSignup = coveredRate(videoCoverage, registrationState.available ? registrationsScoped.length : null, registrationsScoped, registration => registration.occurredAt,
     registration => { const browser = browserForRegistration.get(registration.key); return !!browser && after(browser.videoStartAt, registration.occurredAt); }, 'Aucune inscription confirmée dans cette sélection.');
   // Le dénominateur vidéo → rendez-vous est le numérateur inscription → vidéo, entré à son démarrage vidéo.
   const bookingFromVideo = coveredRate(bookingCoverage, registrationsToVideo || null, registrationsWithVideoAfterSignup, registration => browserForRegistration.get(registration.key)?.videoStartAt ?? null,
