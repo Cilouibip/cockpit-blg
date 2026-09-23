@@ -255,6 +255,11 @@ END $$;
 -- Inscriptions : une observation identique à la ligne courante (même version source, mêmes empreintes, même mapping,
 -- même identité, même éligibilité, mêmes propriétés) n'est plus insérée ; elle est comptée dans checkpoint.unchangedSkipped.
 -- Le reste de 009 est repris à l'identique.
+-- Remplacées seulement si la table des observations (migration 009) existe : une base de contrôle qui l'omet reste migrable.
+DO $migration$
+BEGIN
+ IF to_regclass('public.lead_source_observations') IS NULL THEN RAISE NOTICE 'lead_source_observations absente : fonctions d''inscriptions inchangées.';RETURN;END IF;
+ EXECUTE $stage$
 CREATE OR REPLACE FUNCTION public.cockpit_stage_lead_entries(p_run uuid,p_lease uuid,p_page integer,p_records jsonb,p_next_cursor text,p_done boolean,p_read integer,p_ignored integer DEFAULT 0) RETURNS jsonb LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
 DECLARE r sync_runs;x jsonb;existing lead_source_observations;person uuid;identity person_identities;candidate uuid;candidate_count integer;state text;page_hash text;family_name text;rec_count integer;skipped integer=0;
 BEGIN
@@ -307,7 +312,8 @@ BEGIN
  UPDATE sync_runs SET rows_read=rows_read+p_read,rows_written=(SELECT count(*) FROM lead_source_observations WHERE run_id=p_run),checkpoint=checkpoint||jsonb_build_object('cursor',p_next_cursor,'page',p_page+1,'done',p_done,'lastPageHash',page_hash,'ignored',coalesce((checkpoint->>'ignored')::integer,0)+p_ignored,'unchangedSkipped',coalesce((checkpoint->>'unchangedSkipped')::integer,0)+skipped),lease_until=now()+interval '2 minutes' WHERE id=p_run;
  RETURN jsonb_build_object('alreadyStaged',false,'read',r.rows_read+p_read);
 END $$;
-
+ $stage$;
+ EXECUTE $publish$
 -- Publication des inscriptions : 009 à l'identique, sauf counts.unchanged qui inclut les observations inchangées non
 -- insérées (unchangedSkipped) et un statut « empty » réservé à une tentative sans aucune observation lue.
 CREATE OR REPLACE FUNCTION public.cockpit_publish_lead_entries(p_run uuid,p_lease uuid) RETURNS jsonb LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
@@ -346,6 +352,12 @@ BEGIN
  UPDATE sync_runs SET status=CASE WHEN staged+skipped=0 THEN 'empty' ELSE 'complete' END,finished_at=stamp,pagination_complete=true,covered_from=period_from,covered_to=period_to,checkpoint=checkpoint||jsonb_build_object('counts',counts),lease_until=NULL,lease_token=NULL WHERE id=p_run;
  RETURN jsonb_build_object('status',CASE WHEN staged+skipped=0 THEN 'empty' ELSE 'complete' END,'counts',counts);
 END $$;
+ $publish$;
+ REVOKE ALL ON FUNCTION public.cockpit_stage_lead_entries(uuid,uuid,integer,jsonb,text,boolean,integer,integer) FROM PUBLIC,anon,authenticated;
+ REVOKE ALL ON FUNCTION public.cockpit_publish_lead_entries(uuid,uuid) FROM PUBLIC,anon,authenticated;
+ GRANT EXECUTE ON FUNCTION public.cockpit_stage_lead_entries(uuid,uuid,integer,jsonb,text,boolean,integer,integer) TO service_role;
+ GRANT EXECUTE ON FUNCTION public.cockpit_publish_lead_entries(uuid,uuid) TO service_role;
+END $migration$;
 
 -- ---------------------------------------------------------------------------------------------------------------
 -- Reprise des données existantes (idempotente, aucune suppression) : pour chaque clé métier, est courante la ligne de la
@@ -410,14 +422,10 @@ REVOKE ALL ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean)
 REVOKE ALL ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) FROM PUBLIC,anon,authenticated;
-REVOKE ALL ON FUNCTION public.cockpit_stage_lead_entries(uuid,uuid,integer,jsonb,text,boolean,integer,integer) FROM PUBLIC,anon,authenticated;
-REVOKE ALL ON FUNCTION public.cockpit_publish_lead_entries(uuid,uuid) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean) TO service_role;
 GRANT EXECUTE ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cockpit_stage_lead_entries(uuid,uuid,integer,jsonb,text,boolean,integer,integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cockpit_publish_lead_entries(uuid,uuid) TO service_role;
 INSERT INTO public.cockpit_migrations(version) VALUES(18) ON CONFLICT (version) DO NOTHING;
 COMMIT;
 

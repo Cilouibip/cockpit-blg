@@ -29,6 +29,12 @@ export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:Re
   // Retry re-reads the bounded partition from the start. Prior pages cannot be lost under a new published run.
   const result=await syncMeta({accessToken:env.META_ACCESS_TOKEN,accountId:namespace,apiVersion:env.META_API_VERSION||'v23.0',from:fromDay,to:toDay,maxPages:20,commitPage:commit,fetcher:options.fetcher});
   const status=result.status==='not_configured'?'failed':result.status;
+  // Lecture complète : publication atomique dans l'état courant (migration 018) ; un objet inchangé n'ajoute aucune ligne,
+  // un objet absent de la fenêtre est retiré sans être effacé. Lecture incomplète : clôture comme avant, rien n'est publié.
+  if(result.coverage.complete&&(status==='complete'||status==='empty')){
+   const published=await db.rpc<{status?:string}>('cockpit_publish_meta_daily',{p_run:run,p_read:result.counts.read,p_rejected:result.counts.rejected});
+   return {status:published?.status==='empty'||published?.status==='complete'?published.status:status,counts:result.counts,coverage:result.coverage,runId:run};
+  }
   await db.rpc('finish_sync',{p_run:run,p_status:status,p_read:result.counts.read,p_rejected:result.counts.rejected,p_complete:result.coverage.complete,p_error:result.safeError?result.safeError.replace(/[^A-Za-z0-9_ -]/g,'').slice(0,100):null});
   return {status,counts:result.counts,coverage:result.coverage,runId:run};
 }
