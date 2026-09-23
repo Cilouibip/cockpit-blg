@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readKpiFunnelSnapshot } from '../src/lib/kpi-funnel';
+import { KPI_BLOCKS, KPI_RATIO_KEYS, kpiRatios, type KpiMeasures } from '../src/lib/kpi-funnel-contract';
 
 const day = {
   spend_eur: 10,
@@ -22,17 +23,27 @@ const day = {
   sales: null,
   cash_collected_eur: null,
   contracted_revenue_eur: null,
+  registrants: 2,
+  calls_booked: null,
+  outbound_clicks: null,
+  meta_reach: null,
+  meta_unique_link_clicks: null,
 };
+// Schéma 3 : taux, couverture par bloc et motifs calculés par la règle du contrat ; fenêtres de 3 et 7 jours hors période.
+const covered = Object.fromEntries(KPI_BLOCKS.map(block => [block, true])) as Record<(typeof KPI_BLOCKS)[number], boolean>;
+const withRatios = (values: KpiMeasures) => { const { ratios, reasons } = kpiRatios(values, covered, { grain: 'day' }); return { ratios, blocks: covered, reasons: reasons as Record<string, string> }; };
+const outside = (key: 'last_3_days' | 'last_7_days', from: string) => ({ key, label: `${key} · du ${from}`, from, to: '2026-09-22', within_period: false, partial_day: null, ...Object.fromEntries(Object.keys(day).map(k => [k, null])), ratios: Object.fromEntries(KPI_RATIO_KEYS.map(k => [k, null])), blocks: Object.fromEntries(KPI_BLOCKS.map(b => [b, false])), reasons: Object.fromEntries(KPI_RATIO_KEYS.map(k => [k, 'Fenêtre hors période.'])) });
 
 const fixture = {
   metadata: {
-    dataset_id: 'synthetic-kpi-funnel', schema_version: '1.0.0', generated_at: '2026-09-22T17:00:00Z', timezone: 'Europe/Paris',
+    dataset_id: 'synthetic-kpi-funnel', schema_version: '3.0.0', generated_at: '2026-09-22T17:00:00Z', timezone: 'Europe/Paris',
     window_start: '2026-09-22T00:00:00+02:00', window_end_meta: '2026-09-22T16:58:00+02:00', window_end_email: '2026-09-22T16:52:00+02:00', window_end_commercial: '2026-09-22T14:55:27+02:00',
     scope: 'mixed_source_masterclass_monitoring', scope_note: 'Synthetic source boundaries.', campaign_ids: ['synthetic-campaign'], exclusions: ['PII'],
   },
   definitions: { wix_form_submission_occurrences: 'Synthetic Wix occurrences.' },
-  daily: [{ date: '2026-09-22', partial_day: 'through_16_58_paris', ...day }],
+  daily: [{ date: '2026-09-22', partial_day: 'through_16_58_paris', ...day, ...withRatios(day) }],
   totals: { ...day, wix_distinct_contacts: 2, wix_repeat_occurrences: 1 },
+  summaries: [{ key: 'global', label: 'Global · du 22/09/2026 au 22/09/2026', from: '2026-09-22', to: '2026-09-22', within_period: true, partial_day: 'Inclut la journée en cours', ...day, ...withRatios(day) }, outside('last_3_days', '2026-09-20'), outside('last_7_days', '2026-09-16')],
   attribution_breakdown: {
     freshness: '2026-09-22T09:32:46Z', metric: 'Synthetic booking click sessions.',
     rows: [{ label: 'B1', ad_id: 'synthetic-ad', booking_click_sessions: 1, booking_confirmed_browser: 0 }],

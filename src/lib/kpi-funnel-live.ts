@@ -1,38 +1,40 @@
 import { Temporal } from '@js-temporal/polyfill';
 import type { Database, Row } from './db';
 import type { DashboardFilters } from './ui-contract';
-import { kpiFunnelSnapshotSchema, type KpiFunnelDay, type KpiFunnelSnapshot, type KpiFunnelResponse } from './kpi-funnel-contract';
+import { KPI_ADDITIVE_FIELDS, KPI_BLOCKS, KPI_COUNT_FIELDS, KPI_FUNNEL_SCHEMA_VERSION, KPI_RATIO_KEYS, KPI_SUMMARY_KEYS, kpiCountReason, kpiFunnelSnapshotSchema, kpiRatios, type KpiBlockCoverage, type KpiCountField, type KpiFunnelDay, type KpiFunnelSnapshot, type KpiFunnelSummary, type KpiFunnelResponse, type KpiMeasures } from './kpi-funnel-contract';
 import { kpiDays, nextDay, pagedRows, readKpiSource, type KpiStoredSource } from './kpi-source-store';
 import { canonicalRegistrationOrigins, observationOrigin, originMatchesSelection } from './ad-funnel';
 import { reconcileAcquisitionPeople } from './results-acquisition';
 import { isExcludedTestTraffic } from './traffic-scope';
-import { appointmentDay, appointmentOutcome, isEffectiveAppointment } from './appointment-semantics';
+import { appointmentBooking, appointmentDay, appointmentOutcome, businessDay, isEffectiveAppointment } from './appointment-semantics';
 import { readNotionCommerceReport } from './notion-commerce-storage';
 import { VISUAL_JOURNEY_FORM_ID } from './visual-journey-report';
 import { leadEntryProfile, wixLeadEntryConfig } from '../connectors/wix-lead-entries';
 import { startOfParisDay } from '../domain/dates';
 import { refreshCadences, type SyncJob } from './sync-jobs';
 import { commerceReaderMode } from './config';
-import { parisMinute } from './kpi-funnel-export';
+import { KPI_DETAIL_COLUMNS, KPI_EXCEL_COLUMNS, frenchDay, parisMinute } from './kpi-funnel-export';
 
 // Campaign scope already used by the reviewed masterclass table, plus the explicitly prepared replacement campaign.
 export const KPI_MASTERCLASS_CAMPAIGNS = ['120248692698770714','120248692706180714','120248808857790714'];
 const record = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 const complete = (row: Row) => ['complete','empty'].includes(String(row.status)) && row.pagination_complete === true && Number(row.rows_rejected ?? 0) === 0;
-const fields = ['spend_eur','impressions','link_clicks','unique_link_clicks_campaign_sum','landing_page_views','wix_form_submission_occurrences','reached_cta_oral','booking_clicks','booking_confirmed_browser','booking_meta_attributed','calls_scheduled','calls_held','offers_made','sales','cash_collected_eur','contracted_revenue_eur'] as const;
-const missing = () => Object.fromEntries(fields.map(key => [key, null])) as Omit<KpiFunnelDay,'date'|'partial_day'>;
+const missing = () => Object.fromEntries(KPI_COUNT_FIELDS.map(key => [key, null])) as KpiMeasures;
 const sum = (values: (number | null)[]) => values.length && values.every(v => v !== null) ? Math.round(values.reduce<number>((n,v)=>n+(v ?? 0),0)*100)/100 : null;
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const observed = (run: Row | undefined) => { const bounds=run?[run.source_as_of,run.started_at,run.finished_at].filter(v=>typeof v==='string'&&Number.isFinite(Date.parse(v))).map(v=>String(v)).sort((a,b)=>Date.parse(a)-Date.parse(b)):[];return bounds[0]??null; };
+/** Taux d'une ligne et motifs : motifs des taux non mesurés, puis motifs des comptes non mesurés quand ils sont connus. */
+const rowRatios = (values: KpiMeasures, blocks: KpiBlockCoverage, grain: 'day' | 'window', termReasons: Partial<Record<KpiCountField,string>>) => {
+ const { ratios, reasons } = kpiRatios(values, blocks, { grain, termReasons });
+ const counts = Object.fromEntries(KPI_COUNT_FIELDS.filter(key => values[key] === null).map(key => [key, kpiCountReason(key, blocks, grain, termReasons[key])]));
+ return { ratios, blocks, reasons: { ...counts, ...reasons } as Record<string,string> };
+};
 const isoParis = (value: string) => Temporal.Instant.from(value).toZonedDateTimeISO('Europe/Paris').toString({ timeZoneName: 'never', calendarName: 'never' });
 const freshThrough = (source: KpiStoredSource) => [...source.days.values()].map(v=>v.observedAt).sort()[0] ?? null;
-const defs = {
- spend_eur: 'Dépenses Meta des campagnes masterclass identifiées, par jour de diffusion.', impressions: 'Impressions Meta par campagne et jour.', link_clicks: 'Clics lien Meta (inline_link_clicks), base du CTR et du CPC.',
- unique_link_clicks_campaign_sum: 'Somme au grain campagne-jour, sans déduplication de la période.', landing_page_views: 'Vues de landing attribuées par Meta ; différentes des visites PostHog.',
- wix_form_submission_occurrences: 'Soumissions confirmées du formulaire de la masterclass actuelle, datées en Europe/Paris ; répétitions conservées.', wix_distinct_contacts: 'Clés de contact distinctes parmi ces soumissions, sans identité dans la réponse.',
- reached_cta_oral: 'Non mesuré : aucun signal validé du passage au CTA oral.', booking_clicks: 'Sessions PostHog de production, datées au premier clic bilan de la fenêtre collectée.', booking_confirmed_browser: 'Sessions avec confirmation navigateur, distinctes des appels tenus.',
- booking_meta_attributed: 'Conversion personnalisée RDV Calendly BLG HOMME, 7 jours clic / 1 jour vue ; distincte de Schedule générique.', calls_scheduled: 'Créneaux effectifs Notion des contacts inscrits sur la période, datés au jour du call.', calls_held: 'Présences Notion des mêmes contacts, datées au jour du call.',
- offers_made: 'Non mesuré : aucun champ source validé.', sales: 'Premières ventes payées confirmées de la cohorte des inscrits ; cas à rapprocher exclus et signalés.', cash_collected_eur: 'Paiements réussis de cette cohorte, par date de paiement, avant remboursements.', contracted_revenue_eur: 'Non mesuré : aucune source contractuelle alignée.',
+const defs: Record<string,string> = {
+ ...Object.fromEntries([...KPI_EXCEL_COLUMNS,...KPI_DETAIL_COLUMNS].map(column => [column.id, column.definition])),
+ unique_link_clicks_campaign_sum: 'Somme au grain campagne-jour, sans déduplication (relevé JSON seulement, jamais affichée ni additionnée comme des personnes).',
+ wix_distinct_contacts: 'Clés de contact distinctes parmi les soumissions de la période, sans identité dans la réponse.',
 };
 export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters, options: { env?: NodeJS.ProcessEnv; now?: string; includeTests?: boolean } = {}): Promise<KpiFunnelResponse> {
  if (filters.tunnel === 'quiz') return { status: 'unavailable', message: 'Ce tableau suit la masterclass. Le parcours et les résultats du quiz restent accessibles dans leurs vues.' };
@@ -81,24 +83,67 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
  const campaigns = (env.BLG_KPI_MASTERCLASS_CAMPAIGN_IDS?.trim()||undefined)?.split(',').map(v=>v.trim()).filter(v=>/^\d+$/.test(v)) ?? KPI_MASTERCLASS_CAMPAIGNS;
  const metaCampaigns = filters.campaign.startsWith('meta:') ? [filters.campaign.slice(5)] : campaigns;
  const metaSupported = ['all','paid'].includes(filters.source)&&(!filters.campaign||filters.campaign==='all'||filters.campaign.startsWith('meta:'));
+ const unlinked=requests.filter(r=>!(r.identity_state==='linked'&&r.person_id)).length;
+ const cohortNote=unlinked?`${unlinked} inscription${unlinked>1?'s':''} de la période non reliée${unlinked>1?'s':''} à une personne : tout le bloc reste non mesuré (règle actuelle : toutes les inscriptions reliées).`:undefined;
+ // Appels réservés : réservations des personnes de la cohorte datées par la date de réservation explicite (appointmentBooking),
+ // même règle que Résultats « Réservés » (buildAdFunnel.appointmentsReserved) : un créneau courant compte une fois à sa date
+ // de réservation, qu'il soit ensuite annulé ou reporté ; une fiche sans créneau compte par sa date de réservation seule.
+ const appointmentProspects=new Set(appointments.map(a=>String(a.prospect_id??'')));
+ const bookingDays=[
+  ...cohortAppointments.map(a=>appointmentBooking(a,record(prospectById.get(String(a.prospect_id))?.business)).day),
+  ...prospects.filter(p=>p.archived!==true&&!appointmentProspects.has(String(p.id))&&(!env.NOTION_DATA_SOURCE_ID||p.source==='notion'&&p.source_namespace===env.NOTION_DATA_SOURCE_ID)&&people.has(String(p.person_id))&&!isExcludedTestTraffic({includeTests},record(p.business)))
+   .map(p=>{const business=record(p.business);return businessDay(record(business.dates).booked)??businessDay(business.bookedDay);}),
+ ].filter((day):day is string=>!!day);
+ const requestsOn=(from:string,to:string)=>requests.filter(r=>String(r.occurred_day)>=from&&String(r.occurred_day)<=to);
+ const distinctContacts=(rows:Row[])=>rows.every(r=>r.identity_key)?new Set(rows.map(r=>r.identity_key)).size:null;
+ const identityReason='Une soumission sans clé de contact : inscrits non mesurés (soumissions conservées).';
+ const reachReason='CTR unique non mesuré : aucune lecture Meta des comptes touchés (reach) au niveau compte pour ce jour.';
  const daily: KpiFunnelDay[] = dates.map(date=> {
-  const row: KpiFunnelDay={date,partial_day:date>=today?'Journée en cours ou à venir':null,...missing()};
-  const metaDay=meta.days.get(date);
-  if(metaDay&&metaSupported&&covers(metaDay.observedAt,date)){const rows=metaDay.rows.filter(r=>metaCampaigns.includes(String(r.data.campaignId)));for(const key of ['spend_eur','impressions','link_clicks','unique_link_clicks_campaign_sum','landing_page_views','booking_meta_attributed'] as const)row[key]=rows.length?sum(rows.map(r=>number(r.data[key]))):null;}
-  if(formsAvailable&&covers(formsAt,date))row.wix_form_submission_occurrences=requests.filter(r=>r.occurred_day===date).length;
-  const ph=posthog.days.get(date);
-  if(ph&&covers(ph.observedAt,date)){const rows=ph.rows.filter(r=>!isExcludedTestTraffic({includeTests},r.data)&&matches(observationOrigin({origin:{...r.data,linkId:r.data.link},firstTouch:null})));row.booking_clicks=rows.filter(r=>r.data.kind==='click').reduce((n,r)=>n+Number(r.data.sessions),0);row.booking_confirmed_browser=rows.filter(r=>r.data.kind==='confirmed').reduce((n,r)=>n+Number(r.data.sessions),0);}
-  if(cohortComplete&&covers(notionAt,date)&&covers(formsAt,date)){
-   const calls=cohortAppointments.filter(a=>appointmentDay(a)===date);row.calls_scheduled=calls.filter(a=>isEffectiveAppointment(a,record(prospectById.get(String(a.prospect_id))?.business))).length;row.calls_held=calls.filter(a=>appointmentOutcome(a,record(prospectById.get(String(a.prospect_id))?.business),date)==='attended').length;
-  }
-  if(moneyAvailable&&[commerceAt,clientsAt,formsAt,notionAt].every(at=>covers(at,date))){
+  const values=missing(),termReasons:Partial<Record<KpiCountField,string>>={};
+  const metaDay=meta.days.get(date),ph=posthog.days.get(date);
+  // Couverture par bloc et par jour (D3) : chaque bloc dépend de ses propres lectures.
+  const blocks:KpiBlockCoverage={
+   meta:!!metaDay&&metaSupported&&covers(metaDay.observedAt,date),
+   forms:formsAvailable&&covers(formsAt,date),
+   notion:formsAvailable&&!!notionRun&&covers(notionAt,date)&&covers(formsAt,date),
+   commerce:formsAvailable&&!!notionRun&&!!clientsRun&&!!commerce?.available&&!!commerce.paidSales&&[commerceAt,clientsAt,formsAt,notionAt].every(at=>covers(at,date)),
+   posthog:!!ph&&covers(ph.observedAt,date),
+  };
+  if(blocks.meta){const rows=metaDay!.rows.filter(r=>metaCampaigns.includes(String(r.data.campaignId)));for(const key of ['spend_eur','impressions','link_clicks','unique_link_clicks_campaign_sum','landing_page_views','booking_meta_attributed','outbound_clicks'] as const)values[key]=rows.length?sum(rows.map(r=>number(r.data[key]))):null;if(!rows.length)for(const key of ['spend_eur','impressions','link_clicks'] as const)termReasons[key]='Non mesuré : aucune ligne des campagnes Masterclass lue pour ce jour (jamais zéro).';termReasons.meta_reach=reachReason;termReasons.meta_unique_link_clicks=reachReason;}
+  if(blocks.forms){const day=requestsOn(date,date);values.wix_form_submission_occurrences=day.length;values.registrants=distinctContacts(day);if(values.registrants===null)termReasons.registrants=identityReason;}
+  if(blocks.posthog){const rows=ph!.rows.filter(r=>!isExcludedTestTraffic({includeTests},r.data)&&matches(observationOrigin({origin:{...r.data,linkId:r.data.link},firstTouch:null})));values.booking_clicks=rows.filter(r=>r.data.kind==='click').reduce((n,r)=>n+Number(r.data.sessions),0);values.booking_confirmed_browser=rows.filter(r=>r.data.kind==='confirmed').reduce((n,r)=>n+Number(r.data.sessions),0);}
+  if(cohortComplete&&blocks.notion){
+   const calls=cohortAppointments.filter(a=>appointmentDay(a)===date);values.calls_scheduled=calls.filter(a=>isEffectiveAppointment(a,record(prospectById.get(String(a.prospect_id))?.business))).length;values.calls_held=calls.filter(a=>appointmentOutcome(a,record(prospectById.get(String(a.prospect_id))?.business),date)==='attended').length;
+   values.calls_booked=bookingDays.filter(day=>day===date).length;
+  } else if(!cohortComplete&&cohortNote)for(const key of ['calls_booked','calls_scheduled','calls_held','sales','cash_collected_eur'] as const)termReasons[key]=cohortNote;
+  if(cohortComplete&&blocks.commerce){
    const payments=cohortPayments.filter(p=>p.day===date),unresolved=(commerce?.paidSales?.details??[]).some(p=>p.day===date&&(p.clientIds.length!==1||!clientPeople.has(p.clientIds[0]))&&p.state!=='excluded'),pending=unresolved||payments.some(p=>p.state==='pending'||p.state==='reconciled');
-   row.sales=pending?null:payments.filter(p=>p.state==='confirmed').length;
-   row.cash_collected_eur=pending?null:sum(payments.filter(p=>p.state==='confirmed'||p.reasons.includes('subsequent_payment_for_client')).map(p=>p.amountMinor===null?null:p.amountMinor/100))??(payments.length?null:0);
+   values.sales=pending?null:payments.filter(p=>p.state==='confirmed').length;
+   values.cash_collected_eur=pending?null:sum(payments.filter(p=>p.state==='confirmed'||p.reasons.includes('subsequent_payment_for_client')).map(p=>p.amountMinor===null?null:p.amountMinor/100))??(payments.length?null:0);
+   if(pending){termReasons.sales='Un paiement du jour reste à rapprocher : ventes non mesurées.';termReasons.cash_collected_eur=termReasons.sales;}
   }
-  return row;
+  return {date,partial_day:date>=today?'Journée en cours ou à venir':null,...values,...rowRatios(values,blocks,'day',termReasons)};
  });
- const totals = {...missing(),wix_distinct_contacts:null as number|null,wix_repeat_occurrences:null as number|null};for(const key of fields)totals[key]=sum(daily.map(r=>r[key]));
+ // Récapitulatifs de l'Excel : fenêtres finissant le dernier jour de la période ; sommes des jours puis taux des sommes.
+ const lastDay=dates.at(-1)!,shift=(day:string,days:number)=>Temporal.PlainDate.from(day).add({days}).toString();
+ const summaryStart:Record<typeof KPI_SUMMARY_KEYS[number],string>={global:filters.from,last_3_days:shift(lastDay,-2),last_7_days:shift(lastDay,-6)};
+ const summaryName:Record<typeof KPI_SUMMARY_KEYS[number],string>={global:'Global',last_3_days:'3 derniers jours',last_7_days:'7 derniers jours'};
+ const summaries: KpiFunnelSummary[] = KPI_SUMMARY_KEYS.map(key=> {
+  const from=summaryStart[key],label=`${summaryName[key]} · du ${frenchDay(from)} au ${frenchDay(lastDay)}`,values=missing(),termReasons:Partial<Record<KpiCountField,string>>={};
+  if(from<filters.from){
+   const reason=`Non mesuré : la fenêtre commence le ${frenchDay(from)}, avant la période sélectionnée ; élargir la période pour la lire.`;
+   return {key,label,from,to:lastDay,within_period:false,partial_day:null,...values,ratios:Object.fromEntries(KPI_RATIO_KEYS.map(k=>[k,null])) as KpiFunnelSummary['ratios'],blocks:Object.fromEntries(KPI_BLOCKS.map(b=>[b,false])) as KpiBlockCoverage,reasons:{window:reason,...Object.fromEntries(KPI_RATIO_KEYS.map(k=>[k,reason]))}};
+  }
+  const days=daily.filter(d=>d.date>=from&&d.date<=lastDay);
+  const blocks=Object.fromEntries(KPI_BLOCKS.map(b=>[b,days.every(d=>d.blocks[b])])) as KpiBlockCoverage;
+  for(const field of KPI_ADDITIVE_FIELDS)values[field]=sum(days.map(d=>d[field]));
+  // Inscrits : contacts distincts de toute la fenêtre, jamais la somme des jours.
+  values.registrants=days.every(d=>d.registrants!==null)?distinctContacts(requestsOn(from,lastDay)):null;
+  for(const field of KPI_COUNT_FIELDS)if(values[field]===null){const reason=days.find(d=>d.reasons[field])?.reasons[field];if(reason)termReasons[field]=reason;}
+  termReasons.meta_reach=termReasons.meta_unique_link_clicks='CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours).';
+  return {key,label,from,to:lastDay,within_period:true,partial_day:days.some(d=>d.partial_day)?'Inclut la journée en cours ou à venir':null,...values,...rowRatios(values,blocks,'window',termReasons)};
+ });
+ const totals = {...Object.fromEntries(KPI_COUNT_FIELDS.map(field=>[field,summaries[0][field]])) as KpiMeasures,wix_distinct_contacts:null as number|null,wix_repeat_occurrences:null as number|null};
  if(totals.wix_form_submission_occurrences!==null&&identitiesComplete){totals.wix_distinct_contacts=identities.size;totals.wix_repeat_occurrences=requests.length-identities.size;}
  const emailRows=dates.flatMap(day=>email.days.get(day)?.rows??[]),emailCovered=dates.every(day=>covers(email.days.get(day)?.observedAt,day));
  const emailTotal=(key:string,cohort:boolean)=>emailCovered&&(!cohort||formsAvailable&&identitiesComplete)?(emailRows.filter(r=>!cohort||identities.has(r.data.identity)).length?sum(emailRows.filter(r=>!cohort||identities.has(r.data.identity)).map(r=>number(r.data[key]))):0):null;
@@ -112,8 +157,6 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
   const dated=parts.filter((p):p is {at:string;job:SyncJob}=>!!p.at),through=dated.length===parts.length?dated.map(p=>p.at).sort((a,b)=>Date.parse(a)-Date.parse(b))[0]:undefined;
   coverage.push({field_group,status:available?'available':'missing',...(through?{through,stale:dated.some(p=>Date.parse(now)-Date.parse(p.at)>=cadences[p.job])}:{}),reason,...(detail?{detail}:{}),...(attempt?{last_attempt:String(attempt.started_at),...(attempt.status==='failed'?{last_error:String(attempt.error_code??'SYNC_UNIT_FAILED')}:{})}:{})});
  };
- const unlinked=requests.filter(r=>!(r.identity_state==='linked'&&r.person_id)).length;
- const cohortNote=unlinked?`${unlinked} inscription${unlinked>1?'s':''} de la période non reliée${unlinked>1?'s':''} à une personne : tout le bloc reste non mesuré (règle actuelle : toutes les inscriptions reliées).`:undefined;
  cover('Diffusion Meta',[{at:freshThrough(meta),job:'kpi_meta'}],metaSupported&&daily.every(r=>r.spend_eur!==null),metaSupported?'Campagnes masterclass identifiées ; absence de ligne différente de zéro.':'Ce filtre ne permet pas de répartir la dépense campagne. Les mesures Meta restent non mesurées.',meta.latestAttempt);
  cover('Occurrences du formulaire Wix',[{at:formsAt,job:'forms'}],formsAvailable,'Formulaire de la masterclass actuelle ; occurrences et contacts distincts restent séparés.');
  cover('Clics bilan et confirmations navigateur',[{at:freshThrough(posthog),job:'kpi_posthog'}],daily.every(r=>r.booking_clicks!==null),'Sessions, première origine et essais explicites ; ce ne sont pas des rendez-vous réalisés.',posthog.latestAttempt);
@@ -142,8 +185,8 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
  for(const row of requests){const props=record(row.properties),own=observationOrigin({origin:record(props.origin),firstTouch:null}),selected=(row.person_id?origins.get(String(row.person_id))?.origin:null)??observationOrigin({origin:record(props.origin),firstTouch:record(props.firstTouch)});for(const [target,origin] of [[arrival,own],[selectedContext,selected]] as const){const key=origin.adId?String(adById.get(origin.adId)?.ad_name??`Publicité ${origin.adId}`):origin.linkId?'Lien identifié':origin.campaignId?`Campagne ${origin.campaignId}`:origin.source??'missing_context';target[key]=(target[key]??0)+1;}}
  const end = Temporal.PlainDate.from(filters.to).toZonedDateTime({timeZone:'Europe/Paris',plainTime:'23:59:59'}).toInstant().toString();
  const snapshot: KpiFunnelSnapshot={
-  metadata:{dataset_id:'blg-kpi-automatic',schema_version:'2.0.0',mode:'automatic',include_tests:includeTests,generated_at:now,timezone:'Europe/Paris',window_start:isoParis(startOfParisDay(filters.from)),window_end_meta:isoParis(end),window_end_email:isoParis(end),window_end_commercial:isoParis(end),scope:'mixed_source_masterclass_monitoring',scope_note:'Période sélectionnée. Chaque bloc garde sa source, son groupe de personnes et sa date de lecture ; aucune conversion entre bases non rapprochées.',campaign_ids:metaCampaigns,exclusions:includeTests?[]:['Essais explicitement marqués']},
-  definitions:defs,daily,totals,
+  metadata:{dataset_id:'blg-kpi-automatic',schema_version:KPI_FUNNEL_SCHEMA_VERSION,mode:'automatic',include_tests:includeTests,generated_at:now,timezone:'Europe/Paris',window_start:isoParis(startOfParisDay(filters.from)),window_end_meta:isoParis(end),window_end_email:isoParis(end),window_end_commercial:isoParis(end),scope:'mixed_source_masterclass_monitoring',scope_note:'Période sélectionnée. Chaque bloc garde sa source, son groupe de personnes et sa date de lecture ; aucune conversion entre bases non rapprochées.',campaign_ids:metaCampaigns,exclusions:includeTests?[]:['Essais explicitement marqués']},
+  definitions:defs,daily,totals,summaries,
   attribution_breakdown:{freshness:freshThrough(posthog)??now,metric:'Sessions de clic bilan ; lecture automatique.',rows:[...breakdown.values()],wix_submission_context:{arrival,selected_first_origin_else_arrival:selectedContext,rule:'Première origine canonique conservée ; sinon arrivée.',interpretation:'Le contexte ne prouve pas à lui seul la causalité publicitaire.',freshness:formsAt??now}},
   email_summary:{scope:'Activités email sur la période sélectionnée.',all_three_forms:{sent:emailTotal('sent',false),delivered:emailTotal('delivered',false),opens_sum_by_message:emailTotal('opens',false),clicks_sum_by_message:emailTotal('clicks',false)},facebook_form_recipient_filter:{submissions:totals.wix_form_submission_occurrences,distinct_emails:totals.wix_distinct_contacts,sent:emailTotal('sent',true),delivered:emailTotal('delivered',true),opens:emailTotal('opens',true),clicks:emailTotal('clicks',true)}},
   coverage,source_locators:[{source:'Meta',locator:'Collecte quotidienne par campagne, complète et datée.'},{source:'Wix',locator:'Formulaire masterclass actuel et séquence de neuf messages.'},{source:'PostHog',locator:'mc_booking_click / mc_booking_confirmed, production.'},{source:'Notion',locator:'Miroir prospects, créneaux et dernière publication commerciale complète.'}],
