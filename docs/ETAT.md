@@ -1,3 +1,15 @@
+## 23 septembre 2026 : actualisation 30 minutes préparée (local, non activée)
+
+GitHub ne lance que 2 à 7 passages par jour au lieu de 72. Ce lot prépare un déclencheur principal en base (pg_cron + pg_net, toutes les 2 minutes) et rend la cadence des flux Masterclass réglable. Rien n'est activé : aucune extension, aucun secret, aucune tâche planifiée, workflow GitHub inchangé.
+
+- Cadence : réglage serveur `BLG_REFRESH_CADENCE_MINUTES` (absent = 30 minutes, `60` = comportement actuel) pour PostHog Masterclass, formulaires Wix, trois KPI quotidiens et publicités par jour. Notion (inventaire complet relu à chaque passage) et le catalogue Meta (relu en entier) restent à une heure. Passage au créneau UTC suivant étendu aux demi-heures pour qu'un déclenchement toutes les quelques minutes ne fasse pas dériver la cadence.
+- Non-chevauchement : un refus 409 `source_busy` est « waiting », plus « failed » ; verrou de passage en mémoire du processus (même instance seulement). Verrou partagé en base préparé, non branché : `supabase/manual/2026-09-23_cockpit_tick_lease.sql`.
+- Déclencheur préparé : `supabase/manual/2026-09-23_cockpit_refresh_cron.sql` (secret dans Vault, fonction privée, planification toutes les 2 minutes, contrôles, retour arrière).
+- Dimensionnement (simulation avec le vrai planificateur, durées supposées sauf Notion mesuré) : toutes les 5 minutes ne suffit pas en profil pessimiste ; toutes les 2 minutes tient 30 minutes d'écart moyen (45 au plus). Notion ne peut pas publier plus souvent qu'environ toutes les 20 à 50 minutes.
+- Volume : chaque passage des flux Masterclass conserve sa version de fenêtre, sans purge ; à 30 minutes ce volume double. À mesurer et arbitrer (docs/ACTUALISATION.md, section 4).
+
+Validation locale : typage, suite complète et compilation (`npm run check`) ; 59 tests PostgreSQL 17 sur une base jetable. SQL préparé vérifié contre des doublures des signatures documentées et, pour le verrou partagé, sur les 14 migrations réelles. Limites : aucun appel réel, durées de production des unités non mesurées hors Notion, bascule et cadence réelle à constater (docs/ACTUALISATION.md, sections 5 et 6).
+
 ## 23 septembre 2026 : Isolation du lecteur financier Notion (local)
 
 Le lecteur des ventes Notion (`commerce`) échoue à chaque passage depuis le 22 septembre : la recherche de son point de reprise est trop lente sur la table des agrégats. Il consomme le budget du passage horaire et le fait terminer en échec. Ce lot l'isole côté serveur sans toucher à la correction de fond (index, réécriture), ni aux migrations, ni aux sources.

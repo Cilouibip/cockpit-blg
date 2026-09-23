@@ -1,3 +1,9 @@
+## 23 septembre 2026 : actualisation 30 minutes (préparation locale, non appliquée)
+
+`sync-jobs.ts` : `refreshCadenceMinutes` et `refreshCadences` lisent `BLG_REFRESH_CADENCE_MINUTES` (30 par défaut, `60` = antérieur) ; six flux marqués `pilot` (masterclass, forms, kpi_meta, kpi_posthog, kpi_email, meta_ads). `syncStreamStates` et `chooseSyncJob` reçoivent les cadences (défaut : réglage du processus) ; la règle « début de tentative + cadence » est conservée et le passage au créneau suivant vaut pour toute cadence qui divise l'heure. `tickSyncJobs` : verrou de passage injectable (`createProcessTickLock`, 120 s), 409 `source_busy` classé « waiting », champ `cadence` dans la réponse. Aucun changement de connecteur, de route, de composant, de migration ni de workflow.
+
+Tests nouveaux : `refresh-cadence` (réglage, horloge simulée 30/60, dérive, passage sans travail), `refresh-overlap` (même instance, deux instances avec double de `begin_sync_stream`, rejeu sans doublon, reprise après 10 minutes), `refresh-cycle` (dimensionnement 2 et 5 minutes). Préparé et non appliqué : `supabase/manual/` (déclencheur pg_cron, verrou partagé) et `docs/ACTUALISATION.md`. Commits locaux sur `fable/lot-urgent`, sans push.
+
 ## 23 septembre 2026 : isolation locale du lecteur financier Notion
 
 `commerceReaderMode` (config) lit `BLG_COMMERCE_READER` ; défaut `paused`. `jobScope('commerce')` renvoie `null` en pause ; `configuredJobScope` garde le profil pour relire les publications (Connexions). `commerceControlPass` exécute une unité `commerce` identique au tick, derrière `GET /api/jobs/commerce` (bearer `CRON_SECRET`, limite 2/min). `POST /api/sync/commerce` : 423 `commerce_paused`. Connexions : statut `paused`, `canSync` faux, dates issues de `sync_runs`. Cockpit : `resultsRefreshSources` et `commerceReaderPaused` pilotent Actualiser. `readStoredBusiness` et `buildAdFunnel` capturent l'échec de lecture du rapport des ventes.
