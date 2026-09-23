@@ -9,7 +9,7 @@ import JourneyFilters from './JourneyFilters';
 import type { CommercialDashboard, CommercialQuery } from '../lib/commercial-contract';
 import { serializeCommercialQuery } from '../lib/commercial-query';
 import type { LinkWriteResult } from '../lib/link-write-result';
-import { request } from '../lib/cockpit-request';
+import { CockpitRequestError, request } from '../lib/cockpit-request';
 import ResultsPage, { DemoIndicator, ResultsFilters, ReportStatus } from './ResultsPage';
 import {usePostHogReports} from './use-posthog-reports';
 import type {PostHogClientState} from '../lib/posthog-report-client';
@@ -202,9 +202,22 @@ async function refreshLeadEntries(request:(path:string,init:{method:string;body:
   }
   return {status:'complete'};
 }
-function Connections({ data, refresh, announce }: { data: ConnectionsResponse; refresh: () => void; announce: (message: string) => void }) {
+/** Connexions signale la lecture des ventes suspendue : Actualiser ne l’appelle plus. */
+export function commerceReaderPaused(data: ConnectionsResponse | null | undefined): boolean {
+  return !!data?.connections.some(connection => connection.id === 'notion_commerce' && connection.status === 'paused');
+}
+export type RefreshSource = 'wix' | 'notion' | 'commerce' | 'receipts' | 'inscriptions' | 'meta' | 'quiz' | 'masterclass';
+/** Lectures lancées par Actualiser sur Résultats, dans l’ordre historique ; la lecture des ventes est retirée quand elle est suspendue. */
+export function resultsRefreshSources(filters: DashboardFilters, commercePaused: boolean): RefreshSource[] {
+  const sources: RefreshSource[] = ['wix', 'notion', ...(commercePaused ? [] : ['commerce' as const]), 'receipts', 'inscriptions', 'meta'];
+  const quizSupported = !filters.campaign || /^meta:\d+$/.test(filters.campaign);
+  if (filters.tunnel !== 'masterclass' && quizSupported) sources.push('quiz');
+  if (filters.tunnel !== 'quiz' && filters.source === 'all' && !filters.campaign) sources.push('masterclass');
+  return sources;
+}
+export function Connections({ data, refresh, announce }: { data: ConnectionsResponse; refresh: () => void; announce: (message: string) => void }) {
   const [busy, setBusy] = useState(''); const [error, setError] = useState('');
-  const status: Record<Connection['status'], string> = { connected: 'À jour', partial: 'Actualisation à compléter', missing: 'À raccorder', error: 'Lecture interrompue', demo: 'Démonstration' };
+  const status: Record<Connection['status'], string> = { connected: 'À jour', partial: 'Actualisation à compléter', missing: 'À raccorder', error: 'Lecture interrompue', demo: 'Démonstration', paused: 'Lecture suspendue' };
   async function sync(connection: Connection) {
     setBusy(connection.id); setError('');
     try { const result=connection.id==='notion'?await refreshNotionToCompletion(()=>request(`/api/sync/notion`,{method:'POST',body:'{}',timeoutMs:75_000}),read=>announce(`Notion : ${read} fiches lues, lecture en cours…`)):connection.id==='wix_inscriptions'?await refreshLeadEntries(request,read=>announce(read)):connection.id==='notion_commerce'?await refreshNotionToCompletion(()=>request('/api/sync/commerce',{method:'POST',body:'{}',timeoutMs:75_000}),read=>announce(`Ventes : ${read} éléments lus, rapprochement en cours…`)):await request<{status:string}>(`/api/sync/${connection.id}`, { method: 'POST', body: '{}' }); announce(['complete','empty'].includes(result.status)?`Mise à jour ${connection.name} terminée.`:result.status==='failed'?`La mise à jour ${connection.name} a échoué. Les données précédentes restent affichées.`:`Mise à jour ${connection.name} à poursuivre. Les données précédentes restent affichées.`); refresh(); }
@@ -247,20 +260,23 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
     try {
       const invoke=(path:string)=>request<import('../lib/refresh-plan').RefreshResult>(path,{method:'POST',body:'{}',timeoutMs:75_000});
       const query=filtersQuery(filters);
-      const jobs:{source:string;work:Promise<{status:string;coverage?:{reason?:string}}> }[]=[
-        {source:'wix',work:invoke(`/api/sync/wix?${query}`)},
-        {source:'notion',work:refreshNotionToCompletion(()=>invoke('/api/sync/notion'),read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`))},
-        {source:'commerce',work:refreshNotionToCompletion(()=>invoke('/api/sync/commerce'),read=>setNotice(`Ventes : ${read} éléments lus, rapprochement en cours…`))},
-        {source:'receipts',work:invoke(`/api/sync/receipts?${query}`)},
-        {source:'inscriptions',work:refreshLeadEntries((path,init)=>request(path,init),message=>setNotice(message))},
-        {source:'meta',work:(async()=>{for(const period of metaRefreshPeriods(filters.from,filters.to)){const result=await invoke(`/api/sync/meta?${filtersQuery({...filters,...period})}`);if(result.status!=='complete')return result;}return {status:'complete'};})()},
-      ];
-      const quizSupported=!filters.campaign||/^meta:\d+$/.test(filters.campaign);
-      if(filters.tunnel!=='masterclass'&&quizSupported)jobs.push({source:'quiz',work:invoke(`/api/sync/analytics?${query}&type=quiz`)});
-      if(filters.tunnel!=='quiz'&&filters.source==='all'&&!filters.campaign)jobs.push({source:'masterclass',work:invoke(`/api/sync/analytics?${query}&type=masterclass`)});
+      // État de la lecture des ventes lu dans Connexions ; si l’état est illisible, le serveur refuse lui-même une lecture suspendue.
+      const commercePaused=await request<ConnectionsResponse>('/api/connections',{timeoutMs:15_000}).then(commerceReaderPaused,()=>false);
+      const work:Record<RefreshSource,()=>Promise<{status:string;coverage?:{reason?:string}}>>={
+        wix:()=>invoke(`/api/sync/wix?${query}`),
+        notion:()=>refreshNotionToCompletion(()=>invoke('/api/sync/notion'),read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`)),
+        commerce:()=>refreshNotionToCompletion(()=>invoke('/api/sync/commerce'),read=>setNotice(`Ventes : ${read} éléments lus, rapprochement en cours…`)),
+        receipts:()=>invoke(`/api/sync/receipts?${query}`),
+        inscriptions:()=>refreshLeadEntries((path,init)=>request(path,init),message=>setNotice(message)),
+        meta:async()=>{for(const period of metaRefreshPeriods(filters.from,filters.to)){const result=await invoke(`/api/sync/meta?${filtersQuery({...filters,...period})}`);if(result.status!=='complete')return result;}return {status:'complete'};},
+        quiz:()=>invoke(`/api/sync/analytics?${query}&type=quiz`),
+        masterclass:()=>invoke(`/api/sync/analytics?${query}&type=masterclass`),
+      };
+      const jobs=resultsRefreshSources(filters,commercePaused).map(source=>({source,work:work[source]()}));
       const tasks=await Promise.allSettled(jobs.map(job=>job.work));
-      const sources=tasks.map((r,i)=>({source:jobs[i].source,status:r.status==='rejected'?'failed':r.value.status,detail:r.status==='rejected'&&['notion','commerce'].includes(jobs[i].source)?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
-      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',pending:'lecture en cours, reprise disponible',empty:'aucune mesure retournée',failed:'échec'};
+      const sources=tasks.map((r,i)=>({source:jobs[i].source as string,status:r.status==='rejected'?(r.reason instanceof CockpitRequestError&&r.reason.status===423?'paused':'failed'):r.value.status,detail:r.status==='rejected'&&['notion','commerce'].includes(jobs[i].source)&&!(r.reason instanceof CockpitRequestError&&r.reason.status===423)?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
+      if(commercePaused)sources.push({source:'commerce',status:'paused',detail:undefined});
+      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',pending:'lecture en cours, reprise disponible',empty:'aucune mesure retournée',failed:'échec',paused:'lecture suspendue, dernière publication conservée'};
       const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Paiements reçus',commerce:'Ventes payées',meta:'Meta',inscriptions:'Inscriptions Wix'};
       setNotice(sources.map((s:{source:string;status:string;detail?:string})=>`${names[s.source]??s.source} : ${labels[s.status]??'échec'}${s.detail?` — ${s.detail}`:''}`).join(' · '));
       refresh();

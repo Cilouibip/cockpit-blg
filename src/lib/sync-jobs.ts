@@ -9,7 +9,8 @@ import {synchronizeWix} from './sync-wix';
 import {synchronizeWixTransactionCounts} from './wix-transaction-counts';
 import {postHogPeriod,postHogMasterclassPeriod} from './posthog-dashboard';
 import {synchronizeLeadEntries} from './sync-lead-entries';
-import {refreshNotionCommerce} from './sync-notion-commerce';
+import {refreshNotionCommerce,type CommerceRefreshResult} from './sync-notion-commerce';
+import {commerceReaderMode,type CommerceReaderMode} from './config';
 import {NOTION_BUSINESS_VERSION} from '../connectors/notion-business';
 import {META_ACCOUNT_PROFILE} from '../connectors/meta-account-analytics';
 import {WIX_PAYMENTS_ANALYTICS_MAPPING} from '../connectors/wix-payments-analytics';
@@ -85,8 +86,15 @@ type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'can
 type TickResult={status:string;safeError?:string};
 export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
 type TickOptions={now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
-/** Espace de noms et profil d'une unité, tels qu'enregistrés dans sync_runs ; null = unité non configurée (elle n'est pas planifiée, jamais un zéro). */
+/** Espace de noms et profil d'une unité planifiable ; null = unité non configurée ou suspendue (elle n'est pas planifiée, jamais un zéro).
+ * Le lecteur financier Notion reste hors planning tant que BLG_COMMERCE_READER n'est pas `active`. */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
+ if(job==='commerce'&&commerceReaderMode(env)==='paused')return null;
+ return configuredJobScope(job,env);
+}
+/** Espace de noms et profil tels qu'enregistrés dans sync_runs, d'après la seule configuration.
+ * Sert à relire les publications existantes, y compris celles d'une lecture suspendue. */
+export function configuredJobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
  const client=postHogClientProfile(env);
  const wix=(()=>{try{return wixLeadEntryConfig(env.WIX_LEAD_ENTRY_CONFIG);}catch{return null;}})();
  const history=notionClientHistoryConfig(env);
@@ -127,8 +135,28 @@ async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Data
   case 'forms':return synchronizeLeadEntries('forms',{db,env,fetcher:options.fetcher,maxPages:3});
   case 'quiz_entries':return synchronizeLeadEntries('quiz',{db,env,fetcher:options.fetcher,maxPages:3});
   case 'client_history':return synchronizeLeadEntries('client_history',{db,env,fetcher:options.fetcher,maxPages:3});
-  case 'commerce':return refreshNotionCommerce({db,config:notionCommerceConfig(env.NOTION_COMMERCE_CONFIG)!,token:env.NOTION_TOKEN??'',identitySecret:env.IDENTITY_HMAC_SECRET??'',fetcher:options.fetcher,maxPages:3});
+  case 'commerce':return commerceUnit(options);
  }
+}
+/** Une unité bornée du lecteur financier Notion, identique dans le tick et le passage de contrôle. */
+function commerceUnit(options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch}):Promise<CommerceRefreshResult>{
+ const {db,env}=options;
+ return refreshNotionCommerce({db,config:notionCommerceConfig(env.NOTION_COMMERCE_CONFIG)!,token:env.NOTION_TOKEN??'',identitySecret:env.IDENTITY_HMAC_SECRET??'',fetcher:options.fetcher,maxPages:3});
+}
+export type CommerceControlResult={job:'commerce';readerMode:CommerceReaderMode;status:string;safeError?:string;counts?:CommerceRefreshResult['counts'];coverage?:CommerceRefreshResult['coverage'];reason?:string};
+/** Passage de contrôle réservé (GET /api/jobs/commerce avec le bearer CRON_SECRET) : exactement une unité
+ * bornée du lecteur financier, y compris quand il est suspendu. Aucune autre voie ne contourne la pause. */
+export async function commerceControlPass(db:Database=database(),env:NodeJS.ProcessEnv=process.env,options:{budget?:Budget}={}):Promise<CommerceControlResult>{
+ if(env.COCKPIT_MODE==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+ if(!configuredJobScope('commerce',env))throw new AppError('Le rapprochement des ventes n’est pas configuré.',503,'commerce_missing');
+ const budget=options.budget??createSyncExecutionBudget(),readerMode=commerceReaderMode(env);
+ try{
+  let result:CommerceControlResult;
+  try{const unit=await commerceUnit({db,env,fetcher:budget.sourceFetch});result={job:'commerce',readerMode,status:unit.status,counts:unit.counts,coverage:unit.coverage,...(unit.reason?{reason:unit.reason}:{})};}
+  catch(error){result={job:'commerce',readerMode,status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};}
+  invalidateSourceSnapshots(db);
+  return result;
+ }finally{budget.dispose();}
 }
 /** A tick runs small persisted units while its shared budget permits it. No scheduler is enabled here.
  * Database calls have no abort signal today, so their own client timeout remains

@@ -6,7 +6,8 @@ import type { Database, Row } from '../src/lib/db';
 const time = Date.parse('2026-09-18T16:42:00Z');
 const iso = (at: number) => new Date(at).toISOString();
 const env = {
-  NODE_ENV: 'test', COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: '123', NOTION_TOKEN: 'synthetic',
+  // Lecteur des ventes explicitement actif : la pause par défaut est couverte par commerce-reader-pause.test.ts.
+  NODE_ENV: 'test', COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: '123', NOTION_TOKEN: 'synthetic', BLG_COMMERCE_READER: 'active',
   NOTION_COMMERCE_CONFIG: JSON.stringify({ clients: { dataSourceId: 'clients' }, payments: { dataSourceId: 'payments' }, schedule: { dataSourceId: 'schedule' }, parcours: { dataSourceId: 'parcours' } }),
 } as NodeJS.ProcessEnv;
 const commerceScope = jobScope('commerce', env)!;

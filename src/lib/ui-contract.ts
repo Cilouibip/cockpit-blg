@@ -50,7 +50,8 @@ export type Prospect = {
 };
 export type ProspectsResponse = { mode: DataMode; prospects: Prospect[]; updatedAt: string | null; coverage: string; notice?: string; pagination?: Pagination; stages?: string[] };
 export type Connection = {
-  id: string; name: string; status: 'connected' | 'partial' | 'missing' | 'error' | 'demo';
+  /** `paused` : lecture suspendue côté serveur ; les dates restent celles de la dernière publication réelle. */
+  id: string; name: string; status: 'connected' | 'partial' | 'missing' | 'error' | 'demo' | 'paused';
   summary: string; lastSyncAt: string | null; lastAttemptAt?: string | null; dataAsOf?: string | null; coverage: string; limits: string[]; canSync: boolean;
 };
 export type ConnectionsResponse = { mode: DataMode; connections: Connection[] };

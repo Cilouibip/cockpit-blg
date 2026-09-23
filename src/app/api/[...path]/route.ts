@@ -18,7 +18,7 @@ import { notionCommerceConfig } from '@/connectors/notion-commerce';
 import { synchronizeWix } from '@/lib/sync-wix';
 import { postHogPeriod,postHogMasterclassPeriod,postHogScopeFromFilters } from '@/lib/posthog-dashboard';
 import { synchronizeWixTransactionCounts } from '@/lib/wix-transaction-counts';
-import { tickSyncJobs } from '@/lib/sync-jobs';
+import { commerceControlPass, tickSyncJobs } from '@/lib/sync-jobs';
 import { synchronizeLeadEntries } from '@/lib/sync-lead-entries';
 import { postHogReportRequest,requestPostHogReport } from '@/lib/posthog-report-request';
 import { invalidateSourceWindow } from '@/lib/source-snapshots';
@@ -59,6 +59,8 @@ async function handle(request:Request){
    const supplied=request.headers.get('authorization')||'',expected='Bearer '+config.cronSecret;
    if(config.cronSecret.length<32||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError('Accès refusé.',401,'unauthorized');
    if(route==='jobs/tick'){const result=await tickSyncJobs();return json(result,200);} // Business status is consumed by the drain loop; API failures still use the error handler.
+   // Passage de contrôle réservé au bearer : seule voie qui lit les ventes Notion pendant la pause.
+   if(route==='jobs/commerce'){await rateLimit(config,'jobs','commerce',2,60);const result=await commerceControlPass();return json(result,syncHttpStatus(result.status));}
    const source=z.enum(['meta','notion','wix']).parse(route.slice(5));await rateLimit(config,'sync',source,2,60);const result=await syncSource(source);return json(result,syncHttpStatus(result.status));
   }
   requireUser(request,config);
@@ -167,6 +169,7 @@ async function handle(request:Request){
   }
   if(route==='sync/commerce'&&method==='POST'){
    if(config.mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+   if(config.commerceReader==='paused')throw new AppError('La lecture des ventes est suspendue.',423,'commerce_paused');
    const commerce=notionCommerceConfig(process.env.NOTION_COMMERCE_CONFIG);
    if(!commerce?.schedule)throw new AppError('Le rapprochement des ventes n’est pas configuré.',503,'commerce_missing');
    await rateLimit(config,'sync','commerce',60,60);

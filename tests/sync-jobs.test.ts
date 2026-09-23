@@ -63,7 +63,8 @@ test('a failed source is skipped so another due stream still progresses',async()
 // Inscriptions Wix, antériorité Client et ventes payées : planifiées seulement quand leur configuration existe ; une lecture partielle reprend dans le même tick, un échec reste visible.
 const leadConfig=JSON.stringify({formIds:['form-1'],quiz:{collectionId:'QuizRepondants',originFields:{ad:'publicite'}}});
 const commerceConfig=JSON.stringify({clients:{dataSourceId:'ds-clients'},payments:{dataSourceId:'ds-payments'},schedule:{dataSourceId:'ds-schedule'},parcours:{dataSourceId:'ds-parcours'}});
-const fullEnvironment={COCKPIT_MODE:'live',WIX_SITE_ID:'wix',WIX_API_KEY:'k',WIX_LEAD_ENTRY_CONFIG:leadConfig,NOTION_DATA_SOURCE_ID:'notion',NOTION_CLIENT_DATA_SOURCE_ID:'notion',NOTION_TOKEN:'t',NOTION_COMMERCE_CONFIG:commerceConfig} as unknown as unknown as NodeJS.ProcessEnv;
+// Lecteur des ventes explicitement actif : ces tests décrivent le comportement d’origine (la pause par défaut est couverte par commerce-reader-pause.test.ts).
+const fullEnvironment={COCKPIT_MODE:'live',WIX_SITE_ID:'wix',WIX_API_KEY:'k',WIX_LEAD_ENTRY_CONFIG:leadConfig,NOTION_DATA_SOURCE_ID:'notion',NOTION_CLIENT_DATA_SOURCE_ID:'notion',NOTION_TOKEN:'t',NOTION_COMMERCE_CONFIG:commerceConfig,BLG_COMMERCE_READER:'active'} as unknown as unknown as NodeJS.ProcessEnv;
 
 test('les unités inscriptions, antériorité Client et ventes payées ne sont planifiées qu’avec leur configuration',()=>{
  assert.equal(jobScope('meta_catalog',environment),null,'le catalogue Meta ne se planifie jamais sans jeton serveur');

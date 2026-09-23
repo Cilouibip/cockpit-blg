@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { AppError } from './errors';
 const passwordSchema = z.string().regex(/^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/);
+/** Lecteur financier Notion (« commerce ») : suspendu par défaut. Seule la valeur `active`
+ * rétablit la planification, Actualiser, Connexions et POST /api/sync/commerce. En pause, les
+ * publications déjà enregistrées restent lues ; seul GET /api/jobs/commerce (bearer CRON_SECRET)
+ * peut lancer un passage de contrôle borné. */
+export type CommerceReaderMode = 'paused' | 'active';
+export function commerceReaderMode(env: Record<string,string|undefined> = process.env): CommerceReaderMode {
+  return env.BLG_COMMERCE_READER?.trim() === 'active' ? 'active' : 'paused';
+}
 export function getConfig(env: Record<string,string|undefined> = process.env) {
   const demo = env.COCKPIT_MODE === 'demo';
   if (demo && env.VERCEL) throw new AppError('Le mode test local ne peut pas être déployé.',503,'invalid_mode');
@@ -23,6 +31,7 @@ export function getConfig(env: Record<string,string|undefined> = process.env) {
     allowedOrigins:(env.INGEST_ALLOWED_ORIGINS||'https://quizz.blg-studio.fr,https://www.blg-studio.fr').split(',').map(x=>x.trim()),
     supabaseUrl:env.SUPABASE_URL||'', supabaseSecret:env.SUPABASE_SECRET_KEY||'',
     databaseUrl:demo?env.DATABASE_URL||'':'',
+    commerceReader:commerceReaderMode(env),
   };
   if (demo) {
     let db:URL; try { db=new URL(config.databaseUrl); } catch { throw new AppError('Base de test locale absente.',503,'demo_database_missing'); }
