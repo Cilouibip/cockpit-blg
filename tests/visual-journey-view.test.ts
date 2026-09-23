@@ -4,6 +4,10 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { VisualJourneyMetric, VisualJourneyRate, VisualJourneyReport } from '../src/lib/visual-journey-contract';
 import { BookingDetail, FormDetail, VideoDetail, VisualJourneyView } from '../src/components/VisualJourneyView';
+import { unfinishedVisitsText } from '../src/components/JourneyPage';
+import { buildVisualJourneyReport } from '../src/lib/visual-journey-report';
+import { unfinishedVisualJourney } from '../src/lib/visual-journey-client';
+import { visualJourneyFixture } from './fixtures/visual-journey';
 
 const metric = (count: number | null, reason: string | null = null): VisualJourneyMetric => ({ count, available: count != null, reason });
 const rate = (numerator: number | null, denominator: number | null, reason: string | null = null): VisualJourneyRate => ({ numerator, denominator, rate: numerator != null && denominator ? numerator / denominator : null, available: numerator != null && denominator != null, reason });
@@ -91,4 +95,34 @@ test('partial data keeps good values and groups the missing explanation', () => 
   assert.match(html, /1[\u202f ]000/);
   assert.match(html, /À savoir sur ces chiffres/);
   assert.match(html, /Ouverture non mesurée sur cette période/);
+});
+
+test('après abandon, l’écran dit « Lecture des visites non terminée » et garde inscriptions et rendez-vous', () => {
+  const pendingText = 'La lecture des visites et de la vidéo est en cours.', input = visualJourneyFixture();
+  const pending = { ...buildVisualJourneyReport({ ...input, browser: null, browserError: pendingText, freshness: {
+    posthog: { observedAt: null, coveredThrough: null, status: 'running', reason: pendingText },
+    wix: input.freshness.wix,
+    appointments: { observedAt: '2026-09-18T11:50:00Z', coveredThrough: '2026-09-18T11:50:00Z', status: 'available', reason: null },
+  } }), loading: { resume: 'opaque', retryAfterMs: 5000 } };
+  const read = (report: VisualJourneyReport) => renderToStaticMarkup(createElement(VisualJourneyView, { report }));
+  const stop = (html: string, step: string) => html.match(new RegExp(`data-step="${step}"[\\s\\S]*?<strong[^>]*>([^<]*)</strong>`))?.[1];
+  const before = read(pending);
+  assert.match(before, /lecture en cours/, 'état de départ : la lecture tourne encore');
+  const text = unfinishedVisitsText(Date.parse('2026-09-23T12:05:00Z'));
+  assert.equal(text, 'Lecture des visites non terminée (tentative du 23 sept. 2026, 14:05).');
+  const after = read(unfinishedVisualJourney(pending, text));
+  assert.match(after, /Lecture des visites non terminée \(tentative du 23 sept\. 2026, 14:05\)/);
+  assert.match(after, /Page et vidéo : <strong>Non disponible<\/strong> · lecture non terminée/);
+  assert.doesNotMatch(after, /en cours|se chargent/);
+  assert.equal(stop(after, 'signup'), '2');
+  assert.equal(stop(after, 'call'), '1');
+  for (const step of ['page', 'form', 'watch']) assert.equal(stop(after, step), '—', `${step} : aucun zéro fabriqué`);
+});
+
+test('la durée de lecture des visites reste un détail technique, sans identifiant', () => {
+  const timing = (elapsedMs: number, cached: boolean): VisualJourneyReport['timing'] => ({ posthog: { outcome: 'complete', elapsedMs, resumed: true, periodDays: 7, queries: {
+    identity: { outcome: 'complete', elapsedMs, cached, cacheAgeMs: cached ? 60_000 : null }, overview: { outcome: 'complete', elapsedMs: 4_000, cached, cacheAgeMs: cached ? 60_000 : null } } } });
+  assert.match(renderToStaticMarkup(createElement(VisualJourneyView, { report: { ...fixture(), timing: timing(95_400, false) } })), /Dernière lecture : [^<]*· visites lues en 1 min 35 s/);
+  assert.match(renderToStaticMarkup(createElement(VisualJourneyView, { report: { ...fixture(), timing: timing(900, true) } })), /visites servies par le cache PostHog/);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(VisualJourneyView, { report: fixture() })), /visites lues|cache PostHog/);
 });

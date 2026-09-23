@@ -102,7 +102,7 @@ export function FormDetail({ report }: { report: VisualJourneyReport }) {
 
 function Freshness({ report }: { report: VisualJourneyReport }) {
   const labels = { posthog: 'Page et vidéo', wix: 'Inscriptions', appointments: 'Rendez-vous' } as const;
-  const status = { available: '', stale: ' · à actualiser', running: ' · lecture en cours', failed: ' · lecture interrompue', missing: ' · indisponible' } as const;
+  const status = { available: '', stale: ' · à actualiser', running: ' · lecture en cours', unfinished: ' · lecture non terminée', failed: ' · lecture interrompue', missing: ' · indisponible' } as const;
   return <div className="journey-source-freshness" aria-label="Fraîcheur des chiffres">{(Object.keys(labels) as Array<keyof typeof labels>).map(source => { const item = report.freshness[source]; return <span key={source}>{labels[source]} : <strong>{formatDate(item.coveredThrough ?? item.observedAt, true)}</strong>{status[item.status]}</span>; })}</div>;
 }
 
@@ -141,6 +141,19 @@ export function BookingDetail({ report }: { report: VisualJourneyReport }) {
   </>;
 }
 
+function durationText(milliseconds: number): string {
+  const seconds = Math.max(1, Math.round(milliseconds / 1000));
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
+}
+
+/** Technical wait of the live PostHog read: durations only. */
+function visitsTiming(report: VisualJourneyReport): string | null {
+  const timing = report.timing?.posthog;
+  if (timing?.outcome !== 'complete' || !timing.queries) return null;
+  if (timing.queries.identity.cached && timing.queries.overview.cached) return 'visites servies par le cache PostHog';
+  return timing.elapsedMs == null ? null : `visites lues en ${durationText(timing.elapsedMs)}`;
+}
+
 export function VisualJourneyView({ report }: { report: VisualJourneyReport }) {
   const stages = order.map((id, index): VisualJourneyStage => report.stages.find(stage => stage.id === id) ?? { id, label: stageLabels[id], count: null, availability: { available: false, reason: 'Mesure indisponible dans cette lecture.' }, fromPrevious: index === 0 ? null : { available: false, reason: 'Taux indisponible dans cette lecture.', numerator: null, denominator: null, rate: null } });
   const [selected, setSelected] = useState<VisualJourneyStageId>('page');
@@ -151,10 +164,11 @@ export function VisualJourneyView({ report }: { report: VisualJourneyReport }) {
     report.video.durationAvailability, report.video.started, report.video.finished, ...report.video.thresholds.map(row => row.fromStarted),
     report.booking.clicked, report.booking.calendar, report.booking.booked, report.booking.rates.calendarFromClicked, report.booking.rates.bookedFromCalendar,
   ].map(item => item.reason).filter((value): value is string => Boolean(value));
+  const timingText = visitsTiming(report);
   const reasons = [...new Set([...report.limits, ...report.stages.flatMap(stage => [stage.availability.reason, stage.fromPrevious?.reason]).filter((value): value is string => Boolean(value)), ...nestedReasons])];
   return <div className="visual-journey">
     <ol className="journey-route a-d-stage" aria-label="Du visiteur au rendez-vous">{stages.map((stage, index) => <li className="journey-route-fragment" key={stage.id}>{index > 0 && <div className="journey-edge" aria-label={rateDescription(stage.fromPrevious)} title={rateDescription(stage.fromPrevious)}><Icon name="arrow" /><b>{rateText(stage.fromPrevious)}</b><span className="blg-sr-only">{rateDescription(stage.fromPrevious)}</span></div>}<button type="button" className="journey-stop" data-step={stage.id} aria-pressed={selectedStage === stage.id} onClick={() => setSelected(stage.id)} aria-label={`${stage.label} : ${stage.availability.available ? formatNumber(stage.count) : 'indisponible'}. Voir le détail.`}><span className={`journey-node a-h-marker${selectedStage === stage.id ? ' a-luminous-marker' : ''}`}><Icon name={stage.id} /></span><strong title={stage.availability.reason ?? undefined}>{stage.availability.available ? formatNumber(stage.count) : '—'}</strong><span className="journey-stop-label">{stage.label}</span></button></li>)}</ol>
     <section className="journey-detail a-d-stage" aria-live="polite" aria-atomic="false">{selectedStage === 'page' ? <PageDetail report={report} /> : selectedStage === 'form' || selectedStage === 'signup' ? <FormDetail report={report} /> : selectedStage === 'watch' ? <VideoDetail report={report} /> : <BookingDetail report={report} />}<Freshness report={report} /></section>
-    <div className="journey-meta"><span>Dernière lecture : {formatDate(report.generatedAt, true)}</span>{reasons.length > 0 && <details><summary>À savoir sur ces chiffres</summary>{reasons.map(reason => <p key={reason}>{reason}</p>)}</details>}</div>
+    <div className="journey-meta"><span>Dernière lecture : {formatDate(report.generatedAt, true)}{timingText && ` · ${timingText}`}</span>{reasons.length > 0 && <details><summary>À savoir sur ces chiffres</summary>{reasons.map(reason => <p key={reason}>{reason}</p>)}</details>}</div>
   </div>;
 }

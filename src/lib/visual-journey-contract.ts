@@ -27,6 +27,30 @@ export interface VisualJourneyStage {
   fromPrevious: VisualJourneyRate | null;
 }
 
+export type VisualJourneyQueryOutcome = 'complete' | 'pending' | 'failed';
+
+/** Mesure technique de la lecture PostHog en direct : durées et statuts seulement,
+ * jamais d'identifiant de visiteur, de requête ou de secret. */
+export interface VisualJourneyPostHogTiming {
+  /** complete : les deux requêtes ont rendu ; pending : au moins une attend encore ;
+   * failed : une requête, ou le contrôle de son résultat, a échoué ; not_configured : aucune requête envoyée. */
+  outcome: VisualJourneyQueryOutcome | 'not_configured';
+  /** Millisecondes entre la première soumission de la requête la plus ancienne et la fin de cet appel. */
+  elapsedMs: number | null;
+  /** Vrai quand cet appel reprend des requêtes déjà soumises, sans nouveau calcul demandé. */
+  resumed: boolean;
+  periodDays: number;
+  queries: Record<'identity' | 'overview', {
+    outcome: VisualJourneyQueryOutcome;
+    /** Depuis la soumission initiale jusqu'à l'issue observée dans cet appel (borne haute pour un résultat relu). */
+    elapsedMs: number;
+    /** Valeur `is_cached` renvoyée par PostHog ; null si absente ou sans résultat. */
+    cached: boolean | null;
+    /** Âge du résultat en cache (`last_refresh`) au moment de la lecture ; null hors cache. */
+    cacheAgeMs: number | null;
+  }> | null;
+}
+
 export interface VisualJourneyReport {
   status: 'complete' | 'partial' | 'empty' | 'not_configured' | 'failed';
   generatedAt: string;
@@ -70,9 +94,12 @@ export interface VisualJourneyReport {
   freshness: Record<VisualJourneySource, {
     observedAt: string | null;
     coveredThrough: string | null;
-    status: 'available' | 'stale' | 'running' | 'failed' | 'missing';
+    /** `unfinished` est posé uniquement par le navigateur quand il cesse d'attendre
+     * une lecture `running` ; le serveur ne le renvoie jamais. */
+    status: 'available' | 'stale' | 'running' | 'unfinished' | 'failed' | 'missing';
     reason: string | null;
   }>;
+  timing?: { posthog: VisualJourneyPostHogTiming };
   coverage: {
     browserVisitors: number | null;
     browserSessions: number | null;
