@@ -9,24 +9,49 @@ import { jobScope } from '../src/lib/sync-jobs';
 import { kpiBookingQuery } from '../src/connectors/journey-analytics';
 import { leadEntryProfile, wixLeadEntryConfig } from '../src/connectors/wix-lead-entries';
 import { VISUAL_JOURNEY_FORM_ID } from '../src/lib/visual-journey-report';
+import type { Row } from '../src/lib/db';
+/** Double en mémoire de cockpit_publish_aggregate_state (migration 018), même règle que le SQL prouvé sur PostgreSQL
+ * (tests/state-*.integration.ts) : objet déjà courant = même ligne confirmée ou mise à jour, nouvel objet = ligne ajoutée,
+ * objet absent du périmètre = retiré de l'état courant, jamais effacé. */
+function stateKpiDatabase(...args: Parameters<typeof memoryKpiDatabase>) {
+ const memory = memoryKpiDatabase(...args), rpc = memory.db.rpc;
+ const key = (r: Row) => ['source','source_namespace','report_profile_key','metric_key','period_from','period_to','dimensions_key'].map(k => String(r[k])).join('|');
+ memory.db.rpc = async <T,>(name: string, input: Row): Promise<T> => {
+  if (name !== 'cockpit_publish_aggregate_state') return rpc<T>(name, input);
+  const run = memory.get('sync_runs').find(r => r.id === input.p_run)!;
+  if (['complete','empty'].includes(String(run.status))) return { status: run.status, duplicate: true } as T;
+  const rows = memory.get('source_aggregates'), metrics = String(input.p_metric_keys).replace(/[{}]/g, '').split(',');
+  for (const row of rows.filter(r => r.sync_run_id === run.id && !r.is_current)) {
+   const current = rows.find(r => r.is_current && key(r) === key(row));
+   if (current) { Object.assign(current, { ...row, id: current.id, is_current: true }); rows.splice(rows.indexOf(row), 1); }
+  }
+  for (const row of rows) if (row.is_current && row.sync_run_id !== run.id && metrics.includes(String(row.metric_key)) && String(row.period_from) >= String(run.period_from) && String(row.period_to) <= String(run.period_to)) row.is_current = false;
+  for (const row of rows) if (row.sync_run_id === run.id) row.is_current = true;
+  Object.assign(run, { status: 'complete', finished_at: run.started_at, pagination_complete: true, rows_rejected: 0 });
+  return { status: 'complete', duplicate: false } as T;
+ };
+ return memory;
+}
 const from='2026-09-20',to='2026-09-22',namespace='synthetic-account';
 const filters={from,to:'2026-09-21',source:'all',tunnel:'masterclass',campaign:'',compare:false} as const;
 const batch=(value:number,observedAt:string)=>({from,to,observedAt,rows:[{day:from,key:'120248692698770714',data:{campaignId:'120248692698770714',spend_eur:value,impressions:100,link_clicks:10,unique_link_clicks_campaign_sum:9,landing_page_views:8,booking_meta_attributed:0}}]});
 
-test('two completed cycles advance values; failed and corrupt publications retain the last verified result',async()=>{
- let at='2026-09-22T09:00:00Z';const memory=memoryKpiDatabase({},()=>at);
+test('two completed cycles update the same rows; a failed attempt keeps the last result; a corrupt current row is never shown',async()=>{
+ let at='2026-09-22T09:00:00Z';const memory=stateKpiDatabase({},()=>at);
  await syncKpiSource(memory.db,'meta',namespace,from,to,async()=>batch(10,at));
  at='2026-09-22T10:00:00Z';await syncKpiSource(memory.db,'meta',namespace,from,to,async()=>batch(12,at));
  let data=await readKpiSource(memory.db,'meta',namespace,from,to);assert.equal(data.days.get(from)?.rows[0].data.spend_eur,12);assert.equal(data.days.get(from)?.observedAt,at);
  at='2026-09-22T11:00:00Z';await assert.rejects(()=>syncKpiSource(memory.db,'meta',namespace,from,to,async()=>{throw new ConnectorError('UPSTREAM_HTTP_ERROR',503);}));
  data=await readKpiSource(memory.db,'meta',namespace,from,to);assert.equal(data.days.get(from)?.rows[0].data.spend_eur,12);assert.equal(data.latestAttempt?.status,'failed');
+ // Une seule ligne par objet : aucune version antérieure à rejouer. Une ligne courante altérée hors publication ne
+ // correspond plus au manifeste : le jour devient non mesuré, jamais une valeur corrompue ni un zéro.
+ assert.equal(memory.get('sync_runs').length,3);assert.equal(memory.get('source_aggregates').filter(r=>r.metric_key==='kpi_daily_row').length,1);
  const last=memory.get('source_aggregates').filter(r=>r.metric_key==='kpi_daily_row').at(-1)!;(last.dimensions as any).data.spend_eur=999;
- data=await readKpiSource(memory.db,'meta',namespace,from,to);assert.equal(data.days.get(from)?.rows[0].data.spend_eur,10);
- assert.equal(memory.get('sync_runs').length,3);assert.equal(memory.get('source_aggregates').filter(r=>r.metric_key==='kpi_daily_row').length,2);
+ data=await readKpiSource(memory.db,'meta',namespace,from,to);assert.equal(data.days.get(from),undefined);assert.ok(data.days.has('2026-09-21'),'les autres jours restent lisibles');
 });
 
 test('no manual JSON is needed; date gaps remain null and exports use exactly the displayed values',async()=>{
- const memory=memoryKpiDatabase({},()=> '2026-09-22T10:00:00Z');await syncKpiSource(memory.db,'meta',namespace,from,to,async()=>batch(10,'2026-09-22T10:00:00Z'));
+ const memory=stateKpiDatabase({},()=> '2026-09-22T10:00:00Z');await syncKpiSource(memory.db,'meta',namespace,from,to,async()=>batch(10,'2026-09-22T10:00:00Z'));
  const response=await readLiveKpiFunnel(memory.db,filters,{env:{NODE_ENV:'test',META_AD_ACCOUNT_ID:namespace},now:'2026-09-22T10:30:00Z'});
  assert.equal(response.status,'ready');if(response.status!=='ready')return;
  assert.equal(response.snapshot.metadata.mode,'automatic');assert.equal(response.snapshot.daily.length,2);assert.equal(response.snapshot.daily[0].spend_eur,10);assert.equal(response.snapshot.daily[1].spend_eur,null);assert.equal(response.snapshot.totals.spend_eur,null);assert.equal(response.snapshot.email_summary.all_three_forms.sent,null);
@@ -52,7 +77,7 @@ test('new streams use existing configured credentials; query preserves productio
 
 // JSONB returns a semantically identical object in a different key order.
 test('source manifests survive JSONB object-key reordering without losing covered days',async()=>{
- const memory=memoryKpiDatabase({},()=> '2026-09-22T10:00:00Z');
+ const memory=stateKpiDatabase({},()=> '2026-09-22T10:00:00Z');
  await syncKpiSource(memory.db,'meta',namespace,from,to,async()=>batch(10,'2026-09-22T10:00:00Z'));
  const reorder=(v:any):any=>Array.isArray(v)?v.map(reorder):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).reverse().map(([k,item])=>[k,reorder(item)])):v;
  for(const row of memory.get('source_aggregates'))row.dimensions=reorder(row.dimensions);

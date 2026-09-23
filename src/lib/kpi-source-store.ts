@@ -34,7 +34,14 @@ function canonical(value: unknown): unknown {
  return value;
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
-/** Only complete source responses become a publication. Earlier publications and failed attempts stay intact. */
+/** Métriques d'une publication KPI (lignes quotidiennes et manifeste par jour), au format tableau PostgreSQL :
+ * db.ts transmet un tableau JS en JSON, que PostgreSQL ne convertit pas en text[] ; la forme littérale est lue
+ * à l'identique par PostgreSQL et par PostgREST. */
+const KPI_STATE_METRICS = '{kpi_daily_row,kpi_daily_manifest}';
+/** Only complete source responses become a publication. Earlier publications and failed attempts stay intact.
+ * Les lignes sont préparées (sync_run_id = tentative, is_current = false) puis publiées en une transaction par
+ * cockpit_publish_aggregate_state (migration 018) : un objet inchangé n'ajoute aucune ligne, un objet modifié met à
+ * jour la même ligne, un objet absent est retiré de l'état courant sans être effacé. */
 export async function syncKpiSource(db: Database, source: KpiSource, namespace: string, from: string, to: string, read: () => Promise<KpiSourceBatch>) {
  const run = await db.rpc<string>('begin_sync_stream', { p_source: source, p_namespace: namespace, p_from: startOfParisDay(from), p_to: startOfParisDay(to), p_profile: KPI_PROFILE, p_stream: kpiStream(source), p_coverage_kind: 'aggregate_period', p_date_from: from, p_date_to: to });
  try {
@@ -57,44 +64,36 @@ export async function syncKpiSource(db: Database, source: KpiSource, namespace: 
   }
   if (rows.some(row => Buffer.byteLength(JSON.stringify(row.dimensions), 'utf8') > 3800)) throw new ConnectorError('KPI_ROW_TOO_LARGE');
   for (let i = 0; i < rows.length; i += 100) await db.upsert('source_aggregates', rows.slice(i, i + 100), 'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');
-  await db.rpc('finish_sync', { p_run: run, p_status: 'complete', p_read: batch.rows.length, p_rejected: 0, p_complete: true, p_error: null });
-  return { status: 'complete', runId: run, counts: { read: batch.rows.length }, observedAt: batch.observedAt };
+  const published = await db.rpc<{ status: string }>('cockpit_publish_aggregate_state', { p_run: run, p_metric_keys: KPI_STATE_METRICS, p_read: batch.rows.length });
+  return { status: published?.status === 'empty' ? 'empty' : 'complete', runId: run, counts: { read: batch.rows.length }, observedAt: batch.observedAt };
  } catch (error) {
   const code = safeConnectorError(error).replace(/[()]/g, '');
   await db.rpc('finish_sync', { p_run: run, p_status: 'failed', p_read: 0, p_rejected: 0, p_complete: false, p_error: code }).catch(() => undefined);
   throw error;
  }
 }
-/** Reads only selected periods, validates a whole day against its manifest, and never mixes run versions. */
+/** Reads only selected periods, validates a whole day against its manifest, and never mixes run versions.
+ * État courant (migration 018) : une ligne par objet, publiée atomiquement ; toutes les lignes courantes d'un jour
+ * portent la tentative de son manifeste. Un jour dont les lignes ne correspondent pas au manifeste reste non mesuré. */
 export async function readKpiSource(db: Database, source: KpiSource, namespace: string | undefined, from: string, to: string): Promise<KpiStoredSource> {
  const result: KpiStoredSource = { days: new Map(), latestAttempt: null };
  if (!namespace) return result;
  const eq = { source, source_namespace: namespace, stream_key: kpiStream(source), query_profile_key: KPI_PROFILE };
  const dates = kpiDays(from,to);
  const attempts = await db.select('sync_runs', { eq, order:'started_at,id',descending:true,limit:1 });result.latestAttempt=attempts[0]??null;
- const candidates: Row[] = [];
- // The last three complete publications covering each day suffice for corrupt-publication fallback.
- // Scan run metadata, not every historical aggregate version.
- const counts=new Map(dates.map(day=>[day,0]));
- for(let offset=0;offset<10000;offset+=1000){
-  const runs=await db.select('sync_runs',{eq:{...eq,status:'complete',pagination_complete:'true',rows_rejected:'0'},lt:{period_from:startOfParisDay(to)},gte:{period_to:startOfParisDay(from)},order:'started_at,id',descending:true,from:offset,limit:1000});
-  for(const run of runs){let wanted=false;for(const day of dates){if((counts.get(day)??0)<3&&Date.parse(String(run.period_from))<=Date.parse(startOfParisDay(day))&&Date.parse(String(run.period_to))>=Date.parse(startOfParisDay(nextDay(day)))){counts.set(day,counts.get(day)!+1);wanted=true;}}if(wanted)candidates.push(run);}
-  if(runs.length<1000||[...counts.values()].every(n=>n>=3))break;
+ const current = await pagedRows(db, 'source_aggregates', { eq: { source, source_namespace: namespace, report_profile_key: KPI_PROFILE, is_current: 'true' }, in: { metric_key: ['kpi_daily_row', 'kpi_daily_manifest'] }, gte: { period_from: startOfParisDay(from) }, lt: { period_from: startOfParisDay(to) }, order: 'period_from,metric_key,dimensions_key,id' });
+ const manifests = new Map<string, Row>(), data = new Map<string, Row[]>();
+ for (const row of current) {
+  const dimensions = row.dimensions as Row;
+  if (row.metric_key === 'kpi_daily_manifest') manifests.set(String(dimensions.day), row);
+  else { const day = String((dimensions as unknown as KpiSourceRow).day); data.set(day, [...(data.get(day) ?? []), row]); }
  }
- const manifests:Row[]=[];const dataByRun=new Map<string,Row[]>();
- for(const run of candidates){
-  const options={eq:{sync_run_id:String(run.id)},gte:{period_from:startOfParisDay(from)},lt:{period_from:startOfParisDay(to)},order:'period_from,dimensions_key'};
-  const rows=await pagedRows(db,'source_aggregates',options);
-  manifests.push(...rows.filter(r=>r.metric_key==='kpi_daily_manifest'));dataByRun.set(String(run.id),rows.filter(r=>r.metric_key==='kpi_daily_row'));
- }
- const selected=manifests.sort((a,b)=>String((b.dimensions as Row).observedAt).localeCompare(String((a.dimensions as Row).observedAt))||String(b.id).localeCompare(String(a.id)));
- for (const day of kpiDays(from, to)) {
-  for (const manifest of selected.filter(m => (m.dimensions as Row).day === day)) {
-   const info = manifest.dimensions as Row;
-   const rows = (dataByRun.get(String(manifest.sync_run_id))??[]).filter(r=>(r.dimensions as unknown as KpiSourceRow).day===day).map(r=>r.dimensions as unknown as KpiSourceRow).sort((a,b)=>a.key.localeCompare(b.key));
-   if (rows.length !== info.count || digest(rows) !== info.hash) continue;
-   result.days.set(day, { rows, observedAt: String(info.observedAt), runId: String(manifest.sync_run_id) }); break;
-  }
+ for (const day of dates) {
+  const manifest = manifests.get(day);if (!manifest) continue;
+  const info = manifest.dimensions as Row;
+  const rows = (data.get(day) ?? []).filter(r => String(r.sync_run_id) === String(manifest.sync_run_id)).map(r => r.dimensions as unknown as KpiSourceRow).sort((a, b) => a.key.localeCompare(b.key));
+  if (rows.length !== info.count || digest(rows) !== info.hash) continue;
+  result.days.set(day, { rows, observedAt: String(info.observedAt), runId: String(manifest.sync_run_id) });
  }
  return result;
 }

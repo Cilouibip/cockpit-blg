@@ -10,6 +10,8 @@ import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
 //   passée en échec « expired_worker », puis refus 55P03 si une tentative « running » existe, sinon insertion ;
 // - db.ts traduit 55P03 en AppError 409 « source_busy » ;
 // - finish_sync (001) : met à jour la seule tentative encore « running », sinon 55000 ;
+// - cockpit_publish_aggregate_state (018) : fusion dans l'état courant (même ligne confirmée ou mise à jour, nouvel objet ajouté,
+//   objet absent retiré) puis clôture ; une tentative déjà terminée renvoie son accusé sans rien changer ;
 // - source_aggregates (001) : clé unique (source, source_namespace, metric_key, period_from, period_to, dimensions_key, report_profile_key, sync_run_id) ;
 // - cockpit_claim_tick / cockpit_release_tick (017) : une ligne, réclamation si le bail est expiré ou déjà détenu par le même détenteur,
 //   libération par le seul détenteur.
@@ -51,6 +53,21 @@ function journalDatabase(clock: () => number) {
         const id = `run-${++sequence}`;
         runs.push({ id, source: args.p_source, source_namespace: args.p_namespace, stream_key: args.p_stream, query_profile_key: args.p_profile, period_from: args.p_from, period_to: args.p_to, started_at: new Date(now).toISOString(), status: 'running', pagination_complete: false, rows_rejected: 0 });
         return id as T;
+      }
+      if (name === 'cockpit_publish_aggregate_state') {
+        const row = runs.find(item => item.id === args.p_run);
+        if (!row) throw new AppError('L’état de cette opération a changé. Recharge puis réessaie.', 409, 'state_changed');
+        if (['complete', 'empty'].includes(String(row.status))) return { status: row.status, duplicate: true } as T;
+        if (row.status !== 'running') throw new AppError('L’état de cette opération a changé. Recharge puis réessaie.', 409, 'state_changed');
+        const table = get('source_aggregates'), business = (item: Row) => AGGREGATE_KEY.split(',').filter(key => key !== 'sync_run_id').map(key => String(item[key])).join('|');
+        for (const staged of table.filter(item => item.sync_run_id === row.id && !item.is_current)) {
+          const current = table.find(item => item.is_current && business(item) === business(staged));
+          if (current) { Object.assign(current, { ...staged, id: current.id, is_current: true }); table.splice(table.indexOf(staged), 1); }
+        }
+        for (const item of table) if (item.is_current && item.sync_run_id !== row.id && String(item.period_from) >= String(row.period_from) && String(item.period_to) <= String(row.period_to)) item.is_current = false;
+        for (const item of table) if (item.sync_run_id === row.id) item.is_current = true;
+        Object.assign(row, { status: 'complete', finished_at: new Date(now).toISOString(), pagination_complete: true, rows_rejected: 0 });
+        return { status: 'complete', duplicate: false } as T;
       }
       if (name === 'finish_sync') {
         const row = runs.find(item => item.id === args.p_run && item.status === 'running');
@@ -126,12 +143,12 @@ test('deux instances : le même flux dû est réclamé une fois ; la seconde ré
   const kpiRuns = get('sync_runs').filter(row => row.stream_key === 'kpi_meta_daily');
   assert.equal(kpiRuns.length, 1, 'le refus n’a rien écrit dans le journal');
   assert.equal(kpiRuns[0].status, 'complete');
-  assert.equal(calls.filter(call => call === 'rpc:finish_sync').length, 1, 'une seule publication');
+  assert.equal(calls.filter(call => call === 'rpc:cockpit_publish_aggregate_state').length, 1, 'une seule publication');
   assert.equal(get('source_aggregates').length, ROWS_PER_RUN, 'aucune ligne dupliquée');
   assert.ok(get('source_aggregates').every(row => row.sync_run_id === kpiRuns[0].id));
 });
 
-test('rejeu : réécrire les lignes d’une même tentative ne duplique rien ; une nouvelle tentative ajoute une version complète de sa fenêtre', async () => {
+test('rejeu : réécrire les lignes d’une même tentative ne duplique rien ; une nouvelle tentative identique n’ajoute aucune ligne', async () => {
   let clock = AT;
   const { db, get } = journalDatabase(() => clock);
   const first = await syncKpiSource(db, 'meta', 'meta', FROM, TO, async () => batch);
@@ -140,15 +157,19 @@ test('rejeu : réécrire les lignes d’une même tentative ne duplique rien ; u
   // Réponse perdue puis nouvel envoi des mêmes lignes : la clé de conflit contient sync_run_id, la ligne est remplacée.
   await db.upsert('source_aggregates', written.map(({ id: _id, ...row }) => row), AGGREGATE_KEY);
   assert.equal(get('source_aggregates').length, ROWS_PER_RUN, 'aucune ligne dupliquée au rejeu d’une tentative');
-  // Une tentative terminée ne peut pas être republiée : finish_sync refuse (55000, traduit en 409 state_changed).
+  // Une tentative terminée ne peut pas être republiée : finish_sync refuse (55000, traduit en 409 state_changed) ;
+  // la publication rejouée (accusé perdu) renvoie son accusé sans rien changer.
   await assert.rejects(db.rpc('finish_sync', { p_run: first.runId, p_status: 'complete', p_read: 2, p_rejected: 0, p_complete: true, p_error: null }), (error: AppError) => error.code === 'state_changed');
-  // Passage suivant, 30 minutes plus tard : une nouvelle tentative écrit sa propre version de la même fenêtre.
+  assert.deepEqual(await db.rpc('cockpit_publish_aggregate_state', { p_run: first.runId, p_metric_keys: '{kpi_daily_row,kpi_daily_manifest}', p_read: 2 }), { status: 'complete', duplicate: true });
+  const ids = get('source_aggregates').map(row => row.id).sort();
+  // Passage suivant, 30 minutes plus tard, source inchangée : aucune ligne de plus, les mêmes lignes portent la nouvelle tentative.
   clock += 30 * 60_000;
   const second = await syncKpiSource(db, 'meta', 'meta', FROM, TO, async () => batch);
   assert.notEqual(second.runId, first.runId);
-  assert.equal(get('source_aggregates').length, 2 * ROWS_PER_RUN, 'chaque tentative conserve sa version : volume proportionnel au nombre de passages');
-  assert.equal(new Set(get('source_aggregates').map(row => row.sync_run_id)).size, 2);
-  assert.equal(get('sync_runs').filter(row => row.status === 'complete' && row.query_profile_key === KPI_PROFILE).length, 2);
+  assert.equal(get('source_aggregates').length, ROWS_PER_RUN, 'volume indépendant du nombre de passages');
+  assert.deepEqual(get('source_aggregates').map(row => row.id).sort(), ids, 'mêmes lignes (mêmes identifiants)');
+  assert.ok(get('source_aggregates').every(row => row.sync_run_id === second.runId && row.is_current));
+  assert.equal(get('sync_runs').filter(row => row.status === 'complete' && row.query_profile_key === KPI_PROFILE).length, 2, 'seul le journal gagne une ligne');
 });
 
 test('reprise après échec : une tentative interrompue ne bloque le flux que dix minutes, puis la suivante publie', async () => {

@@ -35,9 +35,9 @@ before(async()=>{
  if(exists.rowCount)throw Error('Dedicated C3 database already exists; refusing to overwrite it');
  await admin.query(`CREATE DATABASE ${databaseName}`);created=true;
  worker=new Client({connectionString:targetUrl.href});other=new Client({connectionString:targetUrl.href});await worker.connect();await other.connect();
- const migrations=readdirSync('supabase/migrations').filter(f=>/^\d{3}_.*\.sql$/.test(f)&&Number(f.slice(0,3))<=13).sort();
+ // Toutes les migrations, dont 018 (cockpit_publish_posthog : état courant pour Masterclass, quiz inchangé).
+ const migrations=readdirSync('supabase/migrations').filter(f=>/^\d{3}_.*\.sql$/.test(f)).sort();
  for(const file of migrations)await worker.query(readFileSync('supabase/migrations/'+file,'utf8'));
- await worker.query(readFileSync('supabase/migrations/016_posthog_resumable_reports.sql','utf8'));
 });
 after(async()=>{await other?.end();await worker?.end();if(created){await new Promise(resolve=>setTimeout(resolve,5_500));await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()',[databaseName]);await admin.query(`DROP DATABASE ${databaseName}`);}await admin?.end();});
 
