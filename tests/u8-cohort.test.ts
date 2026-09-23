@@ -113,5 +113,64 @@ test('U8 commercial : règle actuelle cohortComplete, une seule inscription non 
   assert.deepEqual([snapshot.totals.calls_scheduled, snapshot.totals.calls_held, snapshot.totals.sales, snapshot.totals.cash_collected_eur], [null, null, null, null]);
   const coverage = snapshot.coverage.find(c => c.field_group === 'Rendez-vous et présence');
   assert.equal(coverage?.status, 'missing');
+  assert.equal(coverage?.detail, '1 inscription de la période non reliée à une personne : tout le bloc reste non mesuré (règle actuelle : toutes les inscriptions reliées).', 'la couverture chiffre les inscriptions non reliées');
   assert.equal(snapshot.totals.wix_form_submission_occurrences, 7, 'les occurrences restent mesurées');
+});
+
+// Ventes et cash sous pause : la dernière publication complète reste lue et datée ; rien n'est converti en zéro.
+import { buildNotionCommerceReport } from '../src/lib/notion-commerce-report';
+import { publishNotionCommerceReport } from '../src/lib/notion-commerce-storage';
+import { commerceConfig, payment, schedule, parcours, client, snapshot as commerceSnapshot } from './commerce-fixtures';
+
+async function commerceScenario(options: { reader?: string; observedAt?: string; now?: string } = {}) {
+  const at = '2026-09-23T08:50:00Z', observedAt = options.observedAt ?? '2026-09-22T12:55:00Z';
+  const memory = memoryKpiDatabase({
+    sync_runs: [
+      { ...formsRun, started_at: at, finished_at: at, period_to: at },
+      { ...notionRun, started_at: at, finished_at: at, period_to: at },
+      run('clients-run', 'notion', 'clients-ds', 'lead_entries_client_history', 'clients-profile', at),
+      { id: 'commerce-try', source: 'notion', source_namespace: 'synthetic-parcours', stream_key: 'commerce_reader_checkpoint', status: 'failed', pagination_complete: false, rows_rejected: 0, started_at: '2026-09-23T06:00:00Z', finished_at: '2026-09-23T06:00:45Z', error_code: 'COMMERCE_CHECKPOINT_TIMEOUT' },
+    ],
+    lead_source_observations: [
+      { ...registration({ identity: 'i-pa', person: 'pa', day: '2026-09-21' }) },
+      { id: 'client-link', external_id: 'client-a', family: 'client_history', source: 'notion', source_namespace: 'clients-ds', is_current: true, run_id: 'clients-run', published_at: at, mapping_profile: 'clients-profile', eligible: true, identity_key: 'i-pa', identity_state: 'linked', person_id: 'pa', occurred_day: '2026-01-01', occurred_at: '2026-01-01T10:00:00Z', properties: {} },
+    ],
+  }, () => '2026-09-22T12:56:00Z');
+  const report = buildNotionCommerceReport(commerceSnapshot({
+    clients: [client('client-a')], payments: [payment('payment-a', { day: '2026-09-21', rawDate: '2026-09-21' })],
+    schedules: [schedule('schedule-a', { day: '2026-09-21', rawDate: '2026-09-21' })], parcours: [parcours('parcours-a', { startDay: '2026-09-21', rawStart: '2026-09-21', closingDay: '2026-09-20', rawClosing: '2026-09-20' })],
+    startedAt: '2026-09-22T12:50:00Z', observedAt,
+  }));
+  await publishNotionCommerceReport(memory.db, commerceConfig, report);
+  const commerceEnv: NodeJS.ProcessEnv = { ...env, NOTION_CLIENT_DATA_SOURCE_ID: 'clients-ds', NOTION_COMMERCE_CONFIG: JSON.stringify(commerceConfig), ...(options.reader ? { BLG_COMMERCE_READER: options.reader } : {}) };
+  const response = await readLiveKpiFunnel(memory.db, { ...filters, from: '2026-09-21', to: '2026-09-23' }, { env: commerceEnv, now: options.now ?? '2026-09-23T09:00:00Z' });
+  assert.equal(response.status, 'ready'); if (response.status !== 'ready') throw Error('not ready');
+  return response.snapshot;
+}
+
+test('U8 ventes sous pause : lecture suspendue, dernière publication et dernière tentative datées, jours non couverts jamais à zéro', async () => {
+  const snapshot = await commerceScenario();
+  assert.deepEqual(snapshot.daily.map(d => [d.date, d.sales, d.cash_collected_eur]), [['2026-09-21', 1, 100], ['2026-09-22', null, null], ['2026-09-23', null, null]], 'le 22/09 n’est couvert que jusqu’à 14:55 ; le 23/09 pas du tout');
+  assert.equal(snapshot.totals.sales, null, 'un seul jour inconnu rend le total indisponible');
+  assert.equal(snapshot.totals.cash_collected_eur, null);
+  const line = snapshot.coverage.find(c => c.field_group === 'Ventes payées et cash')!;
+  assert.equal(line.status, 'available', 'la dernière publication complète reste valide et lue ; les jours qu’elle ne couvre pas sont non mesurés');
+  assert.match(line.reason!, /^Lecture suspendue \(réglage BLG_COMMERCE_READER\)/);
+  assert.match(line.reason!, /dernière publication complète du 22\/09\/2026 14:55/);
+  assert.match(line.reason!, /dernière tentative le 23\/09\/2026 08:00 \(échec\)/);
+  assert.equal(line.through, '2026-09-22T12:55:00Z');
+  assert.equal(line.stale, true, 'une publication de la veille est ancienne');
+  assert.equal(line.last_error, 'COMMERCE_CHECKPOINT_TIMEOUT');
+  const contracted = snapshot.coverage.find(c => c.field_group === 'CA contracté')!;
+  assert.match(contracted.reason!, /sans lien avec la pause des ventes/);
+  assert.equal(snapshot.totals.contracted_revenue_eur, null);
+});
+
+test('U8 ventes : lecteur actif avec tentative en échec, et publication couvrant toute la veille', async () => {
+  const active = await commerceScenario({ reader: 'active' });
+  const line = active.coverage.find(c => c.field_group === 'Ventes payées et cash')!;
+  assert.match(line.reason!, /^Dernier rapport valide conservé \(dernière publication complète du 22\/09\/2026 14:55\) ; dernière tentative le 23\/09\/2026 08:00 \(échec\)/);
+  const covered = await commerceScenario({ observedAt: '2026-09-22T22:30:00Z' });
+  assert.deepEqual(covered.daily.map(d => [d.sales, d.partial_day !== null]), [[1, false], [0, false], [0, true]], 'publiée à 00:30 le 23/09 : le 22/09 est entièrement couvert, le 23/09 est partiel et signalé');
+  assert.equal(covered.totals.sales, 1);
 });

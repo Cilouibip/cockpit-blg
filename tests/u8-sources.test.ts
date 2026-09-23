@@ -161,6 +161,7 @@ test('U8 détail par annonce : publicité, sinon lien identifié, sinon campagne
   assert.deepEqual([AD_VID52, AD_B, AD_V3].map(id => [byAd.get(id)?.label, byAd.get(id)?.booking_click_sessions, byAd.get(id)?.booking_confirmed_browser]), [['Annonce A', 4, 1], ['Annonce B', 3, 0], ['Annonce C', 2, 2]]);
   const link = rows.filter(r => r.label.startsWith('Lien identifié'));
   assert.equal(link.length, 1);
+  assert.equal(link[0].label, 'Lien identifié · Lien court A', 'le libellé du registre distingue deux liens');
   assert.deepEqual([link[0].ad_id, link[0].booking_click_sessions, link[0].booking_confirmed_browser], [null, 5, 1]);
   const campaign = rows.find(r => r.label === `Campagne ${CURRENT}`);
   assert.equal(campaign?.booking_click_sessions, 1);
