@@ -38,20 +38,25 @@ test('route du tick (base par défaut) : bail pris pour 90 s, passage exécuté,
   handler = (path, body) => {
     if (path === 'rpc/cockpit_claim_tick') { holders.push(body?.p_holder); assert.equal(body?.p_seconds, 90); return json(true); }
     if (path === 'rpc/cockpit_release_tick') { holders.push(body?.p_holder); return json(true); }
+    if (path === 'rpc/cockpit_cleanup_staged') { assert.equal(body?.p_limit, 5000); return json({ source_aggregates: 2, ad_daily: 1, meta_conversions_daily: 0, lead_source_observations: 3 }); }
     if (path.startsWith('sync_runs')) return json([]);
     return assert.fail('requête inattendue ' + path);
   };
   const summary = await tickSyncJobs(undefined, process.env, options(executed));
   assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: 90 }); assert.ok(executed.length >= 1 && executed.every(job => job === 'notion'), 'unités exécutées sous le bail');
   assert.equal(requests[0], 'rpc/cockpit_claim_tick'); assert.equal(requests.at(-1), 'rpc/cockpit_release_tick');
+  assert.equal(requests.at(-2), 'rpc/cockpit_cleanup_staged', 'nettoyage borné une fois, sous le bail, avant la réponse');
+  assert.equal(requests.filter(path => path === 'rpc/cockpit_cleanup_staged').length, 1);
+  assert.deepEqual(summary.cleanup, { deleted: { source_aggregates: 2, ad_daily: 1, meta_conversions_daily: 0, lead_source_observations: 3 } });
   assert.equal(holders.length, 2); assert.equal(holders[0], holders[1], 'libéré par le même détenteur'); assert.match(String(holders[0]), /^[0-9a-f-]{36}$/);
 });
 
 test('route du tick (base par défaut) : fonction inconnue de PostgREST (PGRST202), passage « process-only » signalé', async () => {
   requests.length = 0;const executed: string[] = [];
-  handler = path => path === 'rpc/cockpit_claim_tick' ? json({ code: 'PGRST202', message: 'Could not find the function' }, 404) : path.startsWith('sync_runs') ? json([]) : assert.fail('requête inattendue ' + path);
+  handler = path => path === 'rpc/cockpit_claim_tick' || path === 'rpc/cockpit_cleanup_staged' ? json({ code: 'PGRST202', message: 'Could not find the function' }, 404) : path.startsWith('sync_runs') ? json([]) : assert.fail('requête inattendue ' + path);
   const summary = await tickSyncJobs(undefined, process.env, options(executed));
-  assert.equal(summary.lock?.kind, 'process-only'); assert.ok(executed.length >= 1 && executed.every(job => job === 'notion'), 'passage exécuté malgré la fonction absente');
+  assert.equal(summary.lock?.kind, 'process-only');
+  assert.equal((summary.cleanup as { error?: string }).error, 'schema_missing', 'base sans 017 ni 019 : nettoyage absent signalé, passage exécuté'); assert.ok(executed.length >= 1 && executed.every(job => job === 'notion'), 'passage exécuté malgré la fonction absente');
   assert.ok(!requests.includes('rpc/cockpit_release_tick'), 'aucune libération d’un bail jamais pris');
 });
 
@@ -75,7 +80,7 @@ function journal(settings: NodeJS.ProcessEnv, query: URLSearchParams) {
 }
 test('route du tick (base par défaut) : réglage 30 et bail pris, la demi-heure s’applique', async () => {
   requests.length = 0;const executed: string[] = [], settings = { ...process.env, BLG_REFRESH_CADENCE_MINUTES: '30', META_AD_ACCOUNT_ID: 'synthetic-meta' } as NodeJS.ProcessEnv;
-  handler = (path, _body, query) => path === 'rpc/cockpit_claim_tick' || path === 'rpc/cockpit_release_tick' ? json(true) : path.startsWith('sync_runs') ? journal(settings, query) : assert.fail('requête inattendue ' + path);
+  handler = (path, _body, query) => path === 'rpc/cockpit_claim_tick' || path === 'rpc/cockpit_release_tick' ? json(true) : path === 'rpc/cockpit_cleanup_staged' ? json({ source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 }) : path.startsWith('sync_runs') ? journal(settings, query) : assert.fail('requête inattendue ' + path);
   const summary = await tickSyncJobs(undefined, settings, at40(executed));
   assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: 90 });
   assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
@@ -83,7 +88,7 @@ test('route du tick (base par défaut) : réglage 30 et bail pris, la demi-heure
 });
 test('route du tick (base par défaut) : réglage 30 et fonction du bail inconnue (PGRST202), cadence 60 appliquée et signalée', async () => {
   requests.length = 0;const executed: string[] = [], settings = { ...process.env, BLG_REFRESH_CADENCE_MINUTES: '30', META_AD_ACCOUNT_ID: 'synthetic-meta' } as NodeJS.ProcessEnv;
-  handler = (path, _body, query) => path === 'rpc/cockpit_claim_tick' ? json({ code: 'PGRST202', message: 'Could not find the function' }, 404) : path.startsWith('sync_runs') ? journal(settings, query) : assert.fail('requête inattendue ' + path);
+  handler = (path, _body, query) => path === 'rpc/cockpit_claim_tick' ? json({ code: 'PGRST202', message: 'Could not find the function' }, 404) : path === 'rpc/cockpit_cleanup_staged' ? json({ source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 }) : path.startsWith('sync_runs') ? journal(settings, query) : assert.fail('requête inattendue ' + path);
   const summary = await tickSyncJobs(undefined, settings, at40(executed));
   assert.equal(summary.lock?.kind, 'process-only');
   assert.deepEqual(summary.cadence, { pilotMinutes: 60, requestedMinutes: 30, degradedReason: CADENCE_DEGRADED_REASON, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });

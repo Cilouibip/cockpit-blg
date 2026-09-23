@@ -113,7 +113,24 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:R
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
-export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60;requestedMinutes?:30|60;degradedReason?:string};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
+export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60;requestedMinutes?:30|60;degradedReason?:string};cleanup?:StagedCleanupReport;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
+/** Nettoyage borné de la zone de préparation (migration 019, `cockpit_cleanup_staged`) : lignes jamais publiées de tentatives
+ * « failed »/« partial » terminées depuis plus de 24 h et commencées après la migration 18, au plus 5 000 par table et par passage. */
+export const STAGED_CLEANUP_LIMIT=5000;
+const STAGED_TABLES=['source_aggregates','ad_daily','meta_conversions_daily','lead_source_observations'] as const;
+export type StagedCleanupReport={deleted:Record<typeof STAGED_TABLES[number],number>}|{error:string;reason?:string};
+/** Une fois par passage, après les unités. Ne lève jamais : un échec (ou la fonction absente) est seulement signalé dans la
+ * réponse, le passage garde son statut ; le nettoyage suivant reprend au passage suivant. */
+async function cleanupStaged(db:Database):Promise<StagedCleanupReport>{
+ try{
+  const result=await db.rpc<Row|null>('cockpit_cleanup_staged',{p_limit:STAGED_CLEANUP_LIMIT},{timeoutMs:5_000});
+  const deleted=Object.fromEntries(STAGED_TABLES.map(table=>[table,Number(result?.[table])])) as Record<typeof STAGED_TABLES[number],number>;
+  return Object.values(deleted).every(n=>Number.isSafeInteger(n)&&n>=0)?{deleted}:{error:'CLEANUP_RESULT_INVALID'};
+ }catch(error){
+  if(error instanceof AppError&&error.code==='schema_missing')return {error:'schema_missing',reason:'Nettoyage borné absent de la base (migration 019 non appliquée) : aucune ligne préparée supprimée ; le passage continue.'};
+  return {error:error instanceof AppError&&error.code?safeCode(error.code):'CLEANUP_FAILED'};
+ }
+}
 /** Verrou d'un passage. Le verrou par défaut vit dans la mémoire du processus : il empêche deux passages simultanés
  * sur la même instance, pas entre deux instances. Entre instances, le bail partagé en base (migration 017) s'ajoute
  * aux verrous par flux (begin_sync_stream, cockpit_claim_*), qui restent inchangés. */
@@ -297,6 +314,8 @@ async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOption
    jobs.push(job);results.push(result);chunks.set(job,(chunks.get(job)??0)+1);
    if(!RESUMABLE.has(job)||result.status==='failed')excluded.add(job);
   }
+  // Une fois par passage, après les unités et avant la réponse ; jamais sans source configurée (aucun appel en base).
+  const cleanup=enabled.length?await cleanupStaged(db):undefined;
   const unitResults=results.map((result,index)=>({job:jobs[index],status:result.status}));
   const streams=syncStreamStates(finalRuns,now(),enabled,cadences);
   const finalStatuses=new Map(unitResults.map(unit=>[unit.job,unit.status]));
@@ -308,7 +327,7 @@ async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOption
   }
   const due=streams.some(s=>s.state==='due'),waiting=streams.some(s=>s.state==='waiting'),failed=streams.some(s=>s.state==='failed');
   const status=due||budgetStopped?'partial':waiting?'waiting':failed?'failed':enabled.length?'complete':'failed';
-  return {status,job:jobs.at(-1)??null,jobs,units:results.length,unitResults,cadence,streams,measurements,schedulerMeasurements:Object.fromEntries(Object.entries(schedulerMeasurements).map(([k,v])=>[k,Math.round(v)])) as typeof schedulerMeasurements,
+  return {status,job:jobs.at(-1)??null,jobs,units:results.length,unitResults,cadence,...(cleanup?{cleanup}:{}),streams,measurements,schedulerMeasurements:Object.fromEntries(Object.entries(schedulerMeasurements).map(([k,v])=>[k,Math.round(v)])) as typeof schedulerMeasurements,
    reason:status==='complete'?'Toutes les sources configurées ont une publication complète récente.':status==='waiting'?'Une lecture possède encore le verrou ; aucune fin globale annoncée.':status==='failed'?'Une source reste en échec ou aucune source n’est configurée ; le dernier rapport valide est conservé.':'Des lectures restent à terminer ; reprise au point enregistré.'};
  } finally {budget.dispose();}
 }

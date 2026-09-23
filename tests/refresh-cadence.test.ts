@@ -86,12 +86,13 @@ function readOnlyDatabase(rows: Row[], calls: string[]): Database {
   return {
     select: async (table, options) => { calls.push(`select:${table}`); return rows.filter(row => Object.entries(options?.eq ?? {}).every(([key, value]) => String(row[key]) === value) && Object.entries(options?.in ?? {}).every(([key, values]) => values.includes(String(row[key])))); },
     upsert: async () => { calls.push('upsert'); assert.fail('aucune écriture quand rien n’est dû'); },
-    rpc: async name => { calls.push(`rpc:${name}`); assert.fail('aucune réclamation quand rien n’est dû'); },
+    // Seul appel autre que le journal : le nettoyage borné de la zone de préparation (migration 019), une fois par passage.
+    rpc: async name => { calls.push(`rpc:${name}`); if (name === 'cockpit_cleanup_staged') return { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } as never; assert.fail('aucune réclamation quand rien n’est dû'); },
     probe: async () => {},
   };
 }
 
-test('tick sans travail : aucun appel source, aucune écriture, une seule lecture bornée du journal, réponse complete immédiate', async () => {
+test('tick sans travail : aucun appel source, aucune écriture métier, une seule lecture bornée du journal et un nettoyage borné, réponse complete immédiate', async () => {
   const enabled = ALL.filter(job => jobScope(job, liveEnv));
   assert.equal(enabled.length, 14, 'toutes les lectures sauf le lecteur des ventes suspendu');
   const at = Date.parse('2026-09-23T10:10:00Z'), rows = enabled.map(job => scoped(job, Date.parse('2026-09-23T10:00:05Z'))), calls: string[] = [];
@@ -105,11 +106,13 @@ test('tick sans travail : aucun appel source, aucune écriture, une seule lectur
   const elapsed = performance.now() - started;
   assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0); assert.deepEqual(summary.unitResults, []);
   assert.equal(executed, 0); assert.equal(sourceCalls, 0, 'aucun appel Meta, PostHog, Wix ou Notion');
-  assert.ok(calls.every(call => call === 'select:sync_runs'), 'seul le journal des lectures est consulté');
-  assert.equal(calls.length, 2 * enabled.length, 'deux lectures du journal par flux, en parallèle, une seule fois');
+  assert.deepEqual(calls.filter(call => call !== 'select:sync_runs'), ['rpc:cockpit_cleanup_staged'], 'seuls le journal et le nettoyage borné sont appelés');
+  assert.equal(calls.at(-1), 'rpc:cockpit_cleanup_staged', 'nettoyage après la lecture du journal');
+  assert.equal(calls.length, 2 * enabled.length + 1, 'deux lectures du journal par flux, en parallèle, une seule fois ; un nettoyage');
   assert.equal(summary.schedulerMeasurements?.dbReads, 2 * enabled.length);
   assert.ok(summary.streams?.every(stream => stream.state === 'complete' && !stream.stale));
   assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+  assert.deepEqual(summary.cleanup, { deleted: { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } });
   assert.ok(elapsed < 1000, `aucune attente dans le passage lui-même (${Math.round(elapsed)} ms avec une base en mémoire)`);
 });
 
