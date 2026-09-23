@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseSyncJob, jobScope, PILOT_REFRESH_JOBS, refreshCadenceMinutes, refreshCadences, syncStreamStates, tickSyncJobs, type SyncJob } from '../src/lib/sync-jobs';
+import { CADENCE_DEGRADED_REASON, chooseSyncJob, databaseTickLease, jobScope, PILOT_REFRESH_JOBS, refreshCadenceMinutes, refreshCadences, syncStreamStates, tickSyncJobs, type SharedTickLease, type SyncJob } from '../src/lib/sync-jobs';
+import { AppError } from '../src/lib/errors';
 import type { Database, Row } from '../src/lib/db';
 
 // Horloge simulée, données synthétiques : aucun identifiant ni chiffre réel.
@@ -79,40 +80,45 @@ const liveEnv = {
   WIX_LEAD_ENTRY_CONFIG: JSON.stringify({ formIds: ['form-1'], quiz: { collectionId: 'Quiz', originFields: { ad: 'publicite' } } }),
 } as unknown as NodeJS.ProcessEnv;
 const scoped = (job: SyncJob, at: number): Row => { const scope = jobScope(job, liveEnv)!; return { ...done(job, at), source_namespace: scope.namespace, query_profile_key: scope.profile }; };
+/** Bail partagé détenu (double) : seule configuration où la demi-heure s'applique. */
+const heldLease: SharedTickLease = { claim: async () => ({ state: 'acquired', release: async () => undefined }) };
 function readOnlyDatabase(rows: Row[], calls: string[]): Database {
   return {
     select: async (table, options) => { calls.push(`select:${table}`); return rows.filter(row => Object.entries(options?.eq ?? {}).every(([key, value]) => String(row[key]) === value) && Object.entries(options?.in ?? {}).every(([key, values]) => values.includes(String(row[key])))); },
     upsert: async () => { calls.push('upsert'); assert.fail('aucune écriture quand rien n’est dû'); },
-    rpc: async name => { calls.push(`rpc:${name}`); assert.fail('aucune réclamation quand rien n’est dû'); },
+    // Seul appel autre que le journal : le nettoyage borné de la zone de préparation (migration 019), une fois par passage.
+    rpc: async name => { calls.push(`rpc:${name}`); if (name === 'cockpit_cleanup_staged') return { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } as never; assert.fail('aucune réclamation quand rien n’est dû'); },
     probe: async () => {},
   };
 }
 
-test('tick sans travail : aucun appel source, aucune écriture, une seule lecture bornée du journal, réponse complete immédiate', async () => {
+test('tick sans travail : aucun appel source, aucune écriture métier, une seule lecture bornée du journal et un nettoyage borné, réponse complete immédiate', async () => {
   const enabled = ALL.filter(job => jobScope(job, liveEnv));
   assert.equal(enabled.length, 14, 'toutes les lectures sauf le lecteur des ventes suspendu');
   const at = Date.parse('2026-09-23T10:10:00Z'), rows = enabled.map(job => scoped(job, Date.parse('2026-09-23T10:00:05Z'))), calls: string[] = [];
   let sourceCalls = 0, executed = 0;
   const started = performance.now();
   const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), liveEnv, {
-    now: () => at,
+    now: () => at, sharedLease: heldLease,
     budget: { sourceFetch: async () => { sourceCalls++; return new Response('{}'); }, canStart: () => true, dispose: () => {} },
     execute: async () => { executed++; return { status: 'complete' }; },
   });
   const elapsed = performance.now() - started;
   assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0); assert.deepEqual(summary.unitResults, []);
   assert.equal(executed, 0); assert.equal(sourceCalls, 0, 'aucun appel Meta, PostHog, Wix ou Notion');
-  assert.ok(calls.every(call => call === 'select:sync_runs'), 'seul le journal des lectures est consulté');
-  assert.equal(calls.length, 2 * enabled.length, 'deux lectures du journal par flux, en parallèle, une seule fois');
+  assert.deepEqual(calls.filter(call => call !== 'select:sync_runs'), ['rpc:cockpit_cleanup_staged'], 'seuls le journal et le nettoyage borné sont appelés');
+  assert.equal(calls.at(-1), 'rpc:cockpit_cleanup_staged', 'nettoyage après la lecture du journal');
+  assert.equal(calls.length, 2 * enabled.length + 1, 'deux lectures du journal par flux, en parallèle, une seule fois ; un nettoyage');
   assert.equal(summary.schedulerMeasurements?.dbReads, 2 * enabled.length);
   assert.ok(summary.streams?.every(stream => stream.state === 'complete' && !stream.stale));
   assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+  assert.deepEqual(summary.cleanup, { deleted: { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } });
   assert.ok(elapsed < 1000, `aucune attente dans le passage lui-même (${Math.round(elapsed)} ms avec une base en mémoire)`);
 });
 
 test('tick sans travail entre deux créneaux : un flux Masterclass publié il y a 25 minutes n’est pas relu', async () => {
   const at = Date.parse('2026-09-23T10:25:00Z'), rows = ALL.filter(job => jobScope(job, liveEnv)).map(job => scoped(job, Date.parse('2026-09-23T10:00:05Z'))), calls: string[] = [];
-  const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), liveEnv, { now: () => at, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async () => assert.fail('rien n’est dû') });
+  const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), liveEnv, { now: () => at, sharedLease: heldLease, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async () => assert.fail('rien n’est dû') });
   assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0);
 });
 
@@ -122,4 +128,43 @@ test('tick : sans réglage, la réponse annonce le défaut de transition 60 ; 30
   const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), transitionEnv as NodeJS.ProcessEnv, { now: () => at, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async () => assert.fail('rien n’est dû à 40 minutes avec la cadence horaire') });
   assert.deepEqual(summary.cadence, { pilotMinutes: 60, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
   assert.equal(summary.status, 'complete'); assert.equal(summary.units, 0);
+});
+
+// Garde de la demi-heure (réserve Codex 3) : 30 n'est effectif que sous bail partagé détenu ; sinon 60, signalé.
+// Journal : tous les flux publiés à 10:00:05 ; passage à 10:40 : à 30, les six flux Masterclass sont dus ; à 60, aucun.
+async function passAt40(settings: NodeJS.ProcessEnv, sharedLease?: SharedTickLease | null) {
+  const at = Date.parse('2026-09-23T10:40:00Z'), rows = ALL.filter(job => jobScope(job, settings)).map(job => ({ ...done(job, Date.parse('2026-09-23T10:00:05Z')), source_namespace: jobScope(job, settings)!.namespace, query_profile_key: jobScope(job, settings)!.profile })), calls: string[] = [], executed: SyncJob[] = [];
+  const summary = await tickSyncJobs(readOnlyDatabase(rows, calls), settings, { now: () => at, ...(sharedLease !== undefined ? { sharedLease } : {}), budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} }, execute: async job => { executed.push(job); return { status: 'complete' }; } });
+  return { summary, executed };
+}
+test('garde de cadence : réglage 30 et bail partagé détenu, la demi-heure s’applique (flux Masterclass relus à 40 minutes)', async () => {
+  const { summary, executed } = await passAt40(liveEnv, heldLease);
+  assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: 90 });
+  assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+  assert.deepEqual([...new Set(executed)].sort(), [...PILOT].sort(), 'les six flux Masterclass, et eux seuls');
+  assert.ok(summary.streams?.every(stream => stream.stale === PILOT.includes(stream.job)), 'fraîcheur calculée à 30 pour les flux Masterclass, 60 pour les autres');
+});
+test('garde de cadence : réglage 30, base injectée sans bail partagé, cadence 60 appliquée et signalée', async () => {
+  const { summary, executed } = await passAt40(liveEnv);
+  assert.equal(summary.lock?.kind, 'process-only');
+  assert.deepEqual(summary.cadence, { pilotMinutes: 60, requestedMinutes: 30, degradedReason: CADENCE_DEGRADED_REASON, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+  assert.match(CADENCE_DEGRADED_REASON, /Bail partagé indisponible : cadence de transition 60 min appliquée/);
+  assert.deepEqual(executed, [], 'aucun flux Masterclass relu avant l’heure');
+  assert.ok(summary.streams?.every(stream => stream.state === 'complete' && !stream.stale), 'états calculés à 60');
+  assert.equal(summary.status, 'complete');
+});
+test('garde de cadence : réglage 30, fonction du bail absente (schema_missing), cadence 60 appliquée et signalée', async () => {
+  const missing: Database = { select: async () => [], upsert: async () => assert.fail('aucune écriture'), rpc: async () => { throw new AppError('Les tables du cockpit doivent être installées.', 503, 'schema_missing'); }, probe: async () => {} };
+  const { summary, executed } = await passAt40(liveEnv, databaseTickLease(missing));
+  assert.equal(summary.lock?.kind, 'process-only'); assert.match(String((summary.lock as { reason: string }).reason), /migration 017/);
+  assert.deepEqual(summary.cadence, { pilotMinutes: 60, requestedMinutes: 30, degradedReason: CADENCE_DEGRADED_REASON, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+  assert.deepEqual(executed, []);
+});
+test('garde de cadence : réglage 60 ou absent, rien ne change avec ou sans bail (aucune cadence demandée signalée)', async () => {
+  const { BLG_REFRESH_CADENCE_MINUTES: _unset, ...absent } = liveEnv;
+  for (const settings of [{ ...liveEnv, BLG_REFRESH_CADENCE_MINUTES: '60' }, absent] as NodeJS.ProcessEnv[]) for (const lease of [heldLease, undefined]) {
+    const { summary, executed } = await passAt40(settings, lease);
+    assert.deepEqual(summary.cadence, { pilotMinutes: 60, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
+    assert.deepEqual(executed, []);
+  }
 });

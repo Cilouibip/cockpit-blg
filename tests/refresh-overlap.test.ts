@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProcessTickLock, databaseTickLease, jobScope, tickSyncJobs, TICK_LEASE_SECONDS, type SyncJob, type TickSummary } from '../src/lib/sync-jobs';
+import { createProcessTickLock, databaseTickLease, jobScope, STAGED_CLEANUP_LIMIT, tickSyncJobs, TICK_LEASE_SECONDS, type SyncJob, type TickSummary } from '../src/lib/sync-jobs';
 import { syncKpiSource, KPI_PROFILE, type KpiSourceBatch } from '../src/lib/kpi-source-store';
 import { AppError } from '../src/lib/errors';
 import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
@@ -14,7 +14,8 @@ import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
 //   objet absent retiré) puis clôture ; une tentative déjà terminée renvoie son accusé sans rien changer ;
 // - source_aggregates (001) : clé unique (source, source_namespace, metric_key, period_from, period_to, dimensions_key, report_profile_key, sync_run_id) ;
 // - cockpit_claim_tick / cockpit_release_tick (017) : une ligne, réclamation si le bail est expiré ou déjà détenu par le même détenteur,
-//   libération par le seul détenteur.
+//   libération par le seul détenteur ;
+// - cockpit_cleanup_staged (019) : accusé des lignes supprimées par table (ici aucune ; la règle SQL est prouvée sur PostgreSQL).
 const AGGREGATE_KEY = 'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id';
 function journalDatabase(clock: () => number) {
   const tables = new Map<TableName, Row[]>(), get = (table: TableName) => { if (!tables.has(table)) tables.set(table, []); return tables.get(table)!; };
@@ -46,6 +47,7 @@ function journalDatabase(clock: () => number) {
         if (lease.holder !== args.p_holder) return false as T;
         Object.assign(lease, { holder: null, until: now });return true as T;
       }
+      if (name === 'cockpit_cleanup_staged') return { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } as T;
       if (name === 'begin_sync_stream') {
         const same = (row: Row) => row.source === args.p_source && row.source_namespace === args.p_namespace && row.stream_key === args.p_stream && row.query_profile_key === args.p_profile;
         for (const row of runs) if (same(row) && row.status === 'running' && Date.parse(String(row.started_at)) < now - 600_000) Object.assign(row, { status: 'failed', finished_at: new Date(now).toISOString(), error_code: 'expired_worker' });
@@ -253,4 +255,50 @@ test('deux instances avec bail partagé : un seul passage lit le journal et réc
   assert.deepEqual(winner.unitResults, [{ job: 'kpi_meta', status: 'complete' }]); assert.equal(winner.lock?.kind, 'shared');
   assert.equal(sourceReads, 1);
   assert.equal(calls.filter(call => call === 'rpc:begin_sync_stream').length, 1, 'une seule réclamation du flux');
+});
+
+// Nettoyage borné de la zone de préparation (migration 019, réserve Codex 2) : une fois par passage, après les unités et avant la
+// réponse ; un échec du nettoyage ne fait jamais échouer le passage ; aucun appel sans passage (waiting) ni sans source configurée.
+test('nettoyage borné : appelé une fois par passage, après les unités, avant la libération du bail ; accusé dans la réponse', async () => {
+  const { db, get, calls } = journalDatabase(() => AT);seed(get);
+  const args: Row[] = [];
+  const spied: Database = { ...db, rpc: async <T>(name: string, input: Row) => { if (name === 'cockpit_cleanup_staged') args.push(input); return db.rpc<T>(name, input); } };
+  const summary = await tickSyncJobs(spied, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(spied), now: () => AT, budget: budget(), execute: (job, ctx) => syncKpiSource(ctx.db, 'meta', 'meta', FROM, TO, async () => batch) });
+  assert.deepEqual(summary.unitResults, [{ job: 'kpi_meta', status: 'complete' }]); assert.equal(summary.status, 'complete');
+  assert.equal(calls.filter(call => call === 'rpc:cockpit_cleanup_staged').length, 1, 'une seule fois par passage');
+  assert.deepEqual(args, [{ p_limit: STAGED_CLEANUP_LIMIT }]); assert.equal(STAGED_CLEANUP_LIMIT, 5000);
+  assert.ok(calls.indexOf('rpc:cockpit_cleanup_staged') > calls.lastIndexOf('rpc:cockpit_publish_aggregate_state'), 'après les unités');
+  assert.deepEqual(calls.slice(-2), ['rpc:cockpit_cleanup_staged', 'rpc:cockpit_release_tick'], 'avant la réponse, sous le bail');
+  assert.deepEqual(summary.cleanup, { deleted: { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 } });
+});
+
+test('nettoyage borné : un échec (base, fonction absente, réponse invalide) est signalé sans faire échouer le passage', async () => {
+  const failures: [unknown, TickSummary['cleanup']][] = [
+    [new AppError('La base de données est indisponible.', 503, 'database_unavailable'), { error: 'database_unavailable' }],
+    [new AppError('Le chargement des données a été interrompu. Réessaie.', 503, 'database_query_interrupted'), { error: 'database_query_interrupted' }],
+    [new Error('panne quelconque'), { error: 'CLEANUP_FAILED' }],
+    ['réponse', { error: 'CLEANUP_RESULT_INVALID' }],
+  ];
+  for (const [failure, expected] of failures) {
+    const { db, get } = journalDatabase(() => AT);seed(get);
+    const broken: Database = { ...db, rpc: async <T>(name: string, input: Row) => { if (name === 'cockpit_cleanup_staged') { if (failure === 'réponse') return { source_aggregates: -1 } as T; throw failure; } return db.rpc<T>(name, input); } };
+    const summary = await tickSyncJobs(broken, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(broken), now: () => AT, budget: budget(), execute: (job, ctx) => syncKpiSource(ctx.db, 'meta', 'meta', FROM, TO, async () => batch) });
+    assert.equal(summary.status, 'complete', 'le passage garde son statut'); assert.deepEqual(summary.unitResults, [{ job: 'kpi_meta', status: 'complete' }]);
+    assert.deepEqual(summary.cleanup, expected);
+  }
+  const { db, get } = journalDatabase(() => AT);seed(get);
+  const missing: Database = { ...db, rpc: async <T>(name: string, input: Row) => { if (name === 'cockpit_cleanup_staged') throw new AppError('Les tables du cockpit doivent être installées.', 503, 'schema_missing'); return db.rpc<T>(name, input); } };
+  const summary = await tickSyncJobs(missing, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(missing), now: () => AT, budget: budget(), execute: (job, ctx) => syncKpiSource(ctx.db, 'meta', 'meta', FROM, TO, async () => batch) });
+  assert.equal(summary.status, 'complete', 'fonction absente : passage complet, nettoyage seulement signalé');
+  assert.equal((summary.cleanup as { error: string }).error, 'schema_missing'); assert.match(String((summary.cleanup as { reason: string }).reason), /migration 019 non appliquée/);
+});
+
+test('nettoyage borné : aucun appel quand le passage ne s’exécute pas (bail refusé) ni sans source configurée', async () => {
+  const { db, get, calls, lease } = journalDatabase(() => AT);seed(get);
+  Object.assign(lease, { holder: 'autre-instance', until: AT + 60_000 });
+  const waiting = await tickSyncJobs(db, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: noWork });
+  assert.equal(waiting.status, 'waiting'); assert.equal(waiting.cleanup, undefined); assert.ok(!calls.includes('rpc:cockpit_cleanup_staged'));
+  const untouched: Database = { select: async () => assert.fail('aucune lecture'), upsert: async () => assert.fail('aucune écriture'), rpc: async () => assert.fail('aucune RPC'), probe: async () => {} };
+  const none = await tickSyncJobs(untouched, { COCKPIT_MODE: 'live' } as unknown as NodeJS.ProcessEnv, { lock: createProcessTickLock(), now: () => AT, budget: budget(), execute: noWork });
+  assert.equal(none.status, 'failed'); assert.equal(none.cleanup, undefined);
 });

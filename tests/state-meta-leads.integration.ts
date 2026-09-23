@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
-import { postgresDatabase } from '../src/lib/db';
+import { postgresDatabase, type Database, type Row } from '../src/lib/db';
 import { synchronizeMetaAds } from '../src/lib/sync';
+import { databaseTickLease, tickSyncJobs, type SyncJob } from '../src/lib/sync-jobs';
+import { syncKpiSource, type KpiSourceBatch } from '../src/lib/kpi-source-store';
 
 // PostgreSQL jetable local uniquement ; données synthétiques. Publicités par jour (ad_daily, meta_conversions_daily)
 // et inscriptions Wix (lead_entries_forms). 1) Lectures v_ad_daily / v_meta_conversions_daily identiques avant et après la
@@ -206,4 +208,131 @@ test('non-accumulation inscriptions (lead_entries_forms) : identique, modifié, 
   assert.equal(await total(), 5);assert.equal((await current()).length, 4);
   note(flow, 'tentative interrompue', 4, 5, '(la reprise publie la page préparée : un nouvel objet)');
   console.log('STATE_REPORT ' + JSON.stringify(report));
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 019 : nettoyage borné de la zone de préparation, indépendant de toute publication réussie (réserve Codex 2).
+// Horloge : la migration 18 est datée de 10 jours ; « avant 018 » = tentatives datées de 12 jours ; « plus de 24 h » = 25 h.
+const MIGRATION_019 = fs.readFileSync('supabase/migrations/019_bounded_staging_cleanup.sql', 'utf8');
+const cleanup = async (limit?: number) => (await one(`SELECT cockpit_cleanup_staged(${limit === undefined ? '' : 'p_limit=>$1'}) AS r`, limit === undefined ? [] : [limit])).r as Record<string, number>;
+const age = (runs: string[], interval: string) => sql.query(`UPDATE sync_runs SET started_at=started_at-interval '${interval}', finished_at=finished_at-interval '${interval}' WHERE id=ANY($1)`, [runs]);
+const cleanupReport: Record<string, Record<string, unknown>> = {};
+function leadIn(ns: string, id: string, updated = '2026-08-01T00:00:00Z') {
+  const value = { source: 'wix', sourceNamespace: ns, family: 'forms', externalId: id, containerId: 'synthetic-form', contactId: null, sourceStatus: 'CONFIRMED', identityKey: null, occurredAt: '2026-06-01T10:00:00Z', sourceUpdatedAt: updated, eligible: true, properties: { dateBasis: 'submission_created' } };
+  const hash = createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return { ...value, payloadHash: hash, sourcePayloadHash: hash };
+}
+const claimAs = async (ns: string, profile: string) => (await one('SELECT cockpit_claim_lead_entries($1,$2,$3) r', [ns, 'forms', profile])).r as Claim;
+/** Tentative d'inscriptions laissée en échec avec une observation jamais publiée : bail expiré puis changement de profil (009). */
+async function failedLeadRun(ns: string, id: string) {
+  const c = await claimAs(ns, 'cleanup-v1');await stage(c, [leadIn(ns, id)], false, 0);
+  await sql.query("UPDATE sync_runs SET lease_until=now()-interval '1 second' WHERE id=$1", [c.runId]);
+  const next = await claimAs(ns, 'cleanup-v2');
+  assert.equal((await one('SELECT status, error_code FROM sync_runs WHERE id=$1', [c.runId])).error_code, 'superseded_profile');
+  return { failed: c.runId, running: next };
+}
+
+test('migration 019 : lignes préparées des tentatives failed et partial de plus de 24 h supprimées, au plus p_limit par table ; complete, courantes, publiées, en cours et antérieures à 018 intactes', async () => {
+  await sql.query(MIGRATION_019);
+  await sql.query("UPDATE cockpit_migrations SET applied_at=now()-interval '10 days' WHERE version=18");
+  const ns = '444', from = '2026-09-10', to = '2026-09-12', window = days(from, 2);
+  const records = (spend: number) => window.flatMap(d => [adRow(ns, '1', d, spend), adRow(ns, '2', d, spend)]);
+  // Antérieure à 018 : tentative en échec, datée de 12 jours (commencée avant l'application de 018) APRÈS la publication
+  // d'état ci-dessous : le nettoyage propre à 018 (à chaque publication, tentatives failed de plus de 24 h du même flux, sans
+  // condition sur la date de 018) l'aurait sinon supprimée ; ce test isole la règle de 019 (voir livraison U4c, section 6).
+  const legacyFailed = await legacyMeta(ns, from, to, records(1), 'failed');
+  // Publication d'état (lignes courantes) puis tentative complète de l'ancien chemin (lignes non courantes d'une tentative complete).
+  const published = await publishMeta(ns, from, to, records(100));await age([legacyFailed], '12 days');
+  const legacyComplete = await legacyMeta(ns, from, to, records(100), 'complete');await age([legacyComplete], '2 days');
+  // Lecture incomplète (20 pages atteintes) : clôture « partial », jamais reprise ; puis une tentative « failed ».
+  const partial = await begin(ns, from, to);await importPage(partial, records(7));
+  await sql.query("SELECT finish_sync($1,'partial',4,0,false,'PAGE_LIMIT_REACHED')", [partial]);
+  const failed = await legacyMeta(ns, from, to, records(8), 'failed');
+  await age([partial, failed], '25 hours');
+  const recent = await legacyMeta(ns, from, to, records(9), 'failed');
+  // Inscriptions : une observation jamais publiée d'une tentative en échec (plus de 24 h), une d'une tentative en cours,
+  // les observations publiées et courantes ; une observation antérieure à 018.
+  // Publiées : deux observations, puis une modification réelle de kept-b (version d'audit publiée, non courante) ; datées de 2 jours.
+  const site = 'site-cleanup';const c = await claimAs(site, 'cleanup-v1');await stage(c, [leadIn(site, 'kept-a'), leadIn(site, 'kept-b')]);await publishLeads(c);
+  const c2 = await claimAs(site, 'cleanup-v1');await stage(c2, [leadIn(site, 'kept-b', '2026-08-02T00:00:00Z')]);await publishLeads(c2);
+  await age([c.runId, c2.runId], '2 days');
+  const leads = await failedLeadRun(site, 'staged-failed');await stage(leads.running, [leadIn(site, 'staged-running')], false, 0);
+  await age([leads.failed], '25 hours');
+  const old = await failedLeadRun('site-before-018', 'staged-old');await age([old.failed], '12 days');
+  const byRun = async (table: string, column: string, run: string) => n(table, `${column}=$1`, [run]);
+  const snapshot = async () => ({
+    ad: { legacyFailed: await byRun('ad_daily', 'sync_run_id', legacyFailed), current: await n('ad_daily', `is_current AND ${inNs(ns)}`), legacyComplete: await byRun('ad_daily', 'sync_run_id', legacyComplete), partial: await byRun('ad_daily', 'sync_run_id', partial), failed: await byRun('ad_daily', 'sync_run_id', failed), recent: await byRun('ad_daily', 'sync_run_id', recent) },
+    conversions: { partial: await byRun('meta_conversions_daily', 'sync_run_id', partial), failed: await byRun('meta_conversions_daily', 'sync_run_id', failed), others: await n('meta_conversions_daily', `sync_run_id<>ALL($1) AND ${inNs(ns)}`, [[partial, failed]]) },
+    leads: { published: await n('lead_source_observations', `source_namespace=$1 AND published_at IS NOT NULL`, [site]), publishedNotCurrent: await n('lead_source_observations', `source_namespace=$1 AND published_at IS NOT NULL AND NOT is_current`, [site]), failed: await byRun('lead_source_observations', 'run_id', leads.failed), running: await byRun('lead_source_observations', 'run_id', leads.running.runId), before018: await byRun('lead_source_observations', 'run_id', old.failed) },
+  });
+  const before = await snapshot();
+  assert.deepEqual(before.ad, { legacyFailed: 4, current: 4, legacyComplete: 4, partial: 4, failed: 4, recent: 4 });
+  assert.deepEqual(before.leads, { published: 3, publishedNotCurrent: 1, failed: 1, running: 1, before018: 1 });
+  const currentIds = (await sql.query(`SELECT id, spend_minor FROM ad_daily WHERE is_current AND ${inNs(ns)} ORDER BY id`)).rows, readBefore = await view(ns), conversionsBefore = await conversionsView(ns);
+  // Borne par table et par appel : 8 lignes éligibles par table Meta, 5 supprimées au premier appel, 3 au suivant.
+  const first = await cleanup(5);
+  assert.deepEqual(first, { source_aggregates: 0, ad_daily: 5, meta_conversions_daily: 5, lead_source_observations: 1 });
+  const second = await cleanup();
+  assert.deepEqual(second, { source_aggregates: 0, ad_daily: 3, meta_conversions_daily: 3, lead_source_observations: 0 });
+  assert.deepEqual(await cleanup(), { source_aggregates: 0, ad_daily: 0, meta_conversions_daily: 0, lead_source_observations: 0 }, 'rejouable : plus rien d’éligible');
+  const after = await snapshot();
+  assert.deepEqual(after.ad, { ...before.ad, partial: 0, failed: 0 }, 'seules les tentatives partial et failed de plus de 24 h, commencées après 018');
+  assert.deepEqual(after.conversions, { ...before.conversions, partial: 0, failed: 0 });
+  assert.deepEqual(after.leads, { ...before.leads, failed: 0 }, 'publiées, en cours et antérieures à 018 intactes');
+  assert.deepEqual((await sql.query(`SELECT id, spend_minor FROM ad_daily WHERE is_current AND ${inNs(ns)} ORDER BY id`)).rows, currentIds, 'lignes courantes intactes');
+  assert.deepStrictEqual(await view(ns), readBefore, 'v_ad_daily inchangée');assert.deepStrictEqual(await conversionsView(ns), conversionsBefore, 'v_meta_conversions_daily inchangée');
+  assert.ok(published.run);
+  await assert.rejects(cleanup(0), { code: '23514' });await assert.rejects(cleanup(5001), { code: '23514' });
+  cleanupReport.meta_leads = { before, after, calls: [first, second] };
+});
+
+test('migration 019 : pannes répétées sans aucune publication réussie, passages réels du tick ; lignes préparées bornées à la dernière tentative de moins de 24 h', async () => {
+  const pdb = postgresDatabase(target.href), env = { COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: 'kpi-cleanup', META_ACCESS_TOKEN: 'synthetic' } as unknown as NodeJS.ProcessEnv;
+  const ns = 'kpi-cleanup', from = '2026-09-10', to = '2026-09-13';
+  const batch = (value: number): KpiSourceBatch => ({ from, to, observedAt: '2026-09-13T08:00:00Z', rows: days(from, 3).flatMap(day => [{ day, key: 'c1', data: { spend: value } }, { day, key: 'c2', data: { spend: value } }]) });
+  // Publication impossible (panne en fin de tentative) : les 9 lignes préparées restent, la tentative passe « failed ».
+  const failing = (db: Database): Database => ({ ...db, rpc: async <T,>(fn: string, args: Row) => { if (fn === 'cockpit_publish_aggregate_state') throw new Error('panne synthétique'); return db.rpc<T>(fn, args); } });
+  const staged = () => n('source_aggregates', `source_namespace=$1 AND NOT is_current`, [ns]);
+  const after018 = () => n('source_aggregates', `source_namespace=$1 AND NOT is_current AND sync_run_id IN (SELECT id FROM sync_runs WHERE started_at>=(SELECT applied_at FROM cockpit_migrations WHERE version=18))`, [ns]);
+  const current = () => sql.query(`SELECT id, value, dimensions FROM source_aggregates WHERE source_namespace=$1 AND is_current ORDER BY id`, [ns]).then(r => r.rows);
+  // État de départ : une publication réussie (9 lignes courantes, datée de 2 jours), une tentative en échec antérieure à 018.
+  const ok = await syncKpiSource(pdb, 'meta', ns, from, to, async () => batch(1));await age([ok.runId], '2 days');
+  await assert.rejects(syncKpiSource(failing(pdb), 'meta', ns, from, to, async () => batch(2)));
+  const oldRun = (await one(`SELECT id FROM sync_runs WHERE source_namespace=$1 AND status='failed'`, [ns])).id;await age([oldRun], '12 days');
+  const reference = await current();assert.equal(reference.length, 9);
+  let pass = 0;const passes: Record<string, unknown>[] = [];
+  const tick = async () => {
+    pass++;const summary = await tickSyncJobs(pdb, env, { sharedLease: databaseTickLease(pdb), now: () => Date.now() + 20 * 60_000, budget: { sourceFetch: async () => assert.fail('aucune lecture source'), canStart: () => true, dispose: () => {} },
+      execute: async (job: SyncJob, ctx) => job === 'kpi_meta' ? syncKpiSource(failing(ctx.db), 'meta', ns, from, to, async () => batch(10 + pass)) : { status: 'complete' } });
+    assert.equal(summary.lock?.kind, 'shared');assert.deepEqual(summary.unitResults.find(unit => unit.job === 'kpi_meta'), { job: 'kpi_meta', status: 'failed' });
+    const row = { pass, deleted: (summary.cleanup as { deleted: Record<string, number> }).deleted.source_aggregates, stagedAfter018: await after018(), stagedTotal: await staged(), current: (await current()).length };
+    passes.push(row);return row;
+  };
+  const failedRuns = async () => (await sql.query(`SELECT id FROM sync_runs WHERE source_namespace=$1 AND status='failed' AND id<>$2 ORDER BY started_at`, [ns, oldRun])).rows.map(r => r.id as string);
+  // Trois pannes consécutives dans la journée : rien n'a 24 h, rien n'est supprimé ; 27 lignes préparées (+ 9 antérieures à 018).
+  for (let i = 0; i < 3; i++) assert.equal((await tick()).deleted, 0);
+  assert.equal(await after018(), 27);assert.equal(await staged(), 36);
+  // 25 heures plus tard, toujours aucune publication réussie : le passage suivant échoue encore et supprime les 27 lignes.
+  await age(await failedRuns(), '25 hours');
+  const fourth = await tick();
+  assert.equal(fourth.deleted, 27);assert.equal(fourth.stagedAfter018, 9, 'bornées aux lignes de la dernière tentative en échec de moins de 24 h');
+  assert.equal(await staged(), 9 + 9, 'les 9 lignes antérieures à 018 restent');
+  // Encore deux pannes puis 25 heures : même borne, indépendante du nombre de pannes.
+  await tick();await tick();await age(await failedRuns(), '25 hours');
+  const seventh = await tick();assert.equal(seventh.deleted, 27);assert.equal(seventh.stagedAfter018, 9);
+  assert.deepEqual(await current(), reference, 'lignes courantes de la dernière publication réussie intactes');
+  assert.equal(await n('sync_runs', `source_namespace=$1 AND status='failed'`, [ns]), 8, 'le journal garde toutes les tentatives (aucune purge de sync_runs)');
+  cleanupReport.kpi_tick = { passes };
+});
+
+test('migration 019 : droits service_role seulement, fonction rejouable, une inscription', async () => {
+  for (const role of ['anon', 'authenticated']) assert.equal((await one('SELECT has_function_privilege($1,$2,\'EXECUTE\') AS ok', [role, 'public.cockpit_cleanup_staged(integer)'])).ok, false, role);
+  assert.equal((await one('SELECT has_function_privilege($1,$2,\'EXECUTE\') AS ok', ['service_role', 'public.cockpit_cleanup_staged(integer)'])).ok, true);
+  await sql.query(MIGRATION_019);await sql.query(MIGRATION_019);
+  assert.equal(await n('cockpit_migrations', 'version=19'), 1);
+  for (const role of ['anon', 'authenticated']) {
+    await sql.query('BEGIN');
+    try { await sql.query(`SET LOCAL ROLE ${role}`);await assert.rejects(sql.query('SELECT cockpit_cleanup_staged()'), { code: '42501' }); } finally { await sql.query('ROLLBACK'); }
+  }
+  console.log('CLEANUP_REPORT ' + JSON.stringify(cleanupReport));
 });

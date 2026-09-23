@@ -1,8 +1,10 @@
 # Actualisation toutes les 30 minutes : analyse et procédure de bascule
 
-Document de travail pour Codex. Rien n'est activé : le code est local, le déclencheur est préparé dans `supabase/manual/`, les migrations 017 (verrou partagé du tick) et 018 (état courant par identifiant stable) sont préparées dans `supabase/migrations/` et testées sur PostgreSQL 17 jetable, non appliquées. Le workflow GitHub est inchangé. La collecte actuelle (GitHub, départs à 17, 37 et 57 minutes) reste en service jusqu'à la bascule décrite en section 5.
+Document de travail pour Codex. Rien n'est activé : le code est local, le déclencheur est préparé dans `supabase/manual/`, les migrations 017 (verrou partagé du tick), 018 (état courant par identifiant stable) et 019 (nettoyage borné de la zone de préparation, reprise de l'état courant après retour arrière) sont préparées dans `supabase/migrations/` et testées sur PostgreSQL 17 jetable, non appliquées. Le workflow GitHub est inchangé. La collecte actuelle (GitHub, départs à 17, 37 et 57 minutes) reste en service jusqu'à la bascule décrite en section 5.
 
 Mise à jour du lot U4b (23 septembre) : défaut de transition à 60 minutes (30 seulement sur activation explicite, section 2), verrou partagé du tick branché (section 3), plus aucune version complète par passage pour les six flux Masterclass (section 4).
+
+Mise à jour du lot U4c-garde (23 septembre) : la demi-heure n'est effective que sous bail partagé détenu, sinon 60 signalé (section 2) ; nettoyage borné de la zone de préparation à chaque passage, indépendant des publications réussies (section 4, migration 019) ; marche exacte du retour arrière après nouvelles écritures et reprise de l'état courant (section 7).
 
 Principe : un déclenchement toutes les 30 minutes ne prouve pas une actualisation toutes les 30 minutes. La seule preuve est la table `sync_runs` : date de la dernière publication complète de chaque flux (`status` `complete` ou `empty`, `pagination_complete`).
 
@@ -58,13 +60,15 @@ Cas courant (rien de nouveau) : avec un déclenchement toutes les 2 minutes, 16 
 
 ## 2. Cadence par flux
 
-Réglage serveur unique `BLG_REFRESH_CADENCE_MINUTES`. Défaut de transition : absent, vide, `60` ou toute valeur autre que `30` = 60 minutes, comportement horaire actuel à l'identique. `30` (espaces ignorés) est la seule activation de la demi-heure. Aucune valeur ne descend sous 30 minutes. 60 n'est pas la cible finale : c'est l'état sûr tant que les conditions ci-dessous ne sont pas réunies. La réponse du tick expose `cadence` (`pilotMinutes`, `pilotJobs`) pour vérifier le réglage réellement lu.
+Réglage serveur unique `BLG_REFRESH_CADENCE_MINUTES`. Défaut de transition : absent, vide, `60` ou toute valeur autre que `30` = 60 minutes, comportement horaire actuel à l'identique. `30` (espaces ignorés) est la seule activation de la demi-heure. Aucune valeur ne descend sous 30 minutes. 60 n'est pas la cible finale : c'est l'état sûr tant que les conditions ci-dessous ne sont pas réunies. La réponse du tick expose `cadence` (`pilotMinutes`, `pilotJobs`) pour vérifier le réglage réellement appliqué.
+
+Garde (lot U4c-garde, `passCadence` dans `sync-jobs.ts`) : la demi-heure n'est effective que si le passage détient le bail partagé (`lock.kind` = `shared`). Avec `30` et sans bail détenu (fonctions de 017 absentes : `process-only` ; base injectée sans bail), le passage tourne avec les cadences de 60 et la réponse porte `"cadence":{"pilotMinutes":60,"requestedMinutes":30,"degradedReason":"Bail partagé indisponible : cadence de transition 60 min appliquée.",…}`. Avec `60` ou sans réglage, rien ne change (`requestedMinutes` absent). Les réponses `waiting` et le passage sans source configurée annoncent la cadence demandée. Le tableau garde la cadence demandée (`refreshCadences`) : si les données n'arrivent pas à 30, il les affiche « anciennes », le retard n'est pas masqué. Preuves : `tests/refresh-cadence.test.ts` (bail détenu = 30 ; base injectée sans bail = 60 signalé ; fonction absente = 60 signalé ; 60 inchangé) et `tests/state-tick-lease.test.ts` sur le chemin réel de la route (fetch doublé : bail pris = 30 ; PGRST202 = 60 signalé) ; contre-épreuve : garde retirée, ces trois tests échouent.
 
 Activer 30 (`BLG_REFRESH_CADENCE_MINUTES=30` en production, puis redéploiement) est une étape explicite, possible seulement quand les trois conditions sont constatées :
 
 1. migrations 017 et 018 appliquées en production (contrôle 5.1.1 : `cockpit_migrations` contient 17 et 18) ;
 2. observation à 60 conforme (section 6, critères des flux horaires) avec le code de ce lot déployé, y compris le volume de 6.6 : aucune croissance des tables métier pour une source inchangée ;
-3. verrou partagé constaté actif : `lock.kind` = `shared` dans les réponses du tick relevées dans `net._http_response` (section 3.2), jamais `process-only`.
+3. verrou partagé constaté actif : `lock.kind` = `shared` dans les réponses du tick relevées dans `net._http_response` (section 3.2), jamais `process-only`. Sans lui, `30` reste sans effet (garde ci-dessus) : la réponse porte alors `requestedMinutes` = 30 et `degradedReason`.
 
 Flux qui conditionnent le pilotage Masterclass (lu dans `kpi-funnel-live.ts`, `visual-journey-analytics.ts`, `ad-funnel.ts`, `posthog-dashboard.ts`) :
 
@@ -100,7 +104,7 @@ Champ `lock` de la réponse du tick, à contrôler dans `net._http_response` (se
 |---|---|
 | `"lock":{"kind":"shared","leaseSeconds":90}` | bail pris ; un seul passage à la fois, toutes instances confondues |
 | `status` `waiting`, `reason` « Un autre passage détient le verrou partagé en base… » | bail détenu par un autre passage : aucune lecture du journal ni des sources, aucune écriture |
-| `"lock":{"kind":"process-only","reason":"…migration 017 non appliquée…"}` | fonctions absentes de la base (codes « fonction inconnue » 42883 ou PGRST202, traduits en `schema_missing` par `db.ts`) : le passage continue avec le seul verrou de processus ; les verrous par flux protègent toujours les données. À corriger avant d'activer 30 |
+| `"lock":{"kind":"process-only","reason":"…migration 017 non appliquée…"}` | fonctions absentes de la base (codes « fonction inconnue » 42883 ou PGRST202, traduits en `schema_missing` par `db.ts`) : le passage continue avec le seul verrou de processus ; les verrous par flux protègent toujours les données. Cadence 60 appliquée même si `30` est demandé (`cadence.requestedMinutes`, `cadence.degradedReason`). À corriger avant d'activer 30 |
 | HTTP 503 | base injoignable pendant la réclamation : aucune lecture, erreur visible comme toute panne de stockage (contrat existant de la route) |
 
 Le bail est pris par défaut pour la base de production (appel sans base, c'est-à-dire la route du tick). Un appel qui injecte sa propre base (tests, scripts) le reçoit explicitement (`sharedLease`), sinon sa réponse l'indique en `process-only`. Aucun passage ne commence de réclamation s'il n'a aucune source configurée.
@@ -116,7 +120,7 @@ Sur PostgreSQL 17 (`tests/state-tick-lease.integration.ts`) : deux réclamations
 
 ### 3.3 Passage sans travail (`tests/refresh-cadence.test.ts`)
 
-Quand rien n'est dû : aucun appel Meta, PostHog, Wix ou Notion, aucune écriture métier ni dans le journal `sync_runs`, deux lectures du journal par flux en parallèle, réponse `complete`. Depuis le lot U4b, le passage réclame puis rend le bail partagé (mise à jour de l'unique ligne de `cockpit_tick_lease`, aucune ligne ajoutée). C'est ce qui rend acceptable un déclenchement toutes les 2 minutes.
+Quand rien n'est dû : aucun appel Meta, PostHog, Wix ou Notion, aucune écriture métier ni dans le journal `sync_runs`, deux lectures du journal par flux en parallèle, réponse `complete`. Depuis le lot U4b, le passage réclame puis rend le bail partagé (mise à jour de l'unique ligne de `cockpit_tick_lease`, aucune ligne ajoutée). Depuis le lot U4c-garde, il appelle aussi une fois `cockpit_cleanup_staged` (section 4) : rien n'est supprimé tant qu'aucune tentative en échec n'a plus de 24 heures. C'est ce qui rend acceptable un déclenchement toutes les 2 minutes.
 
 ## 4. Données : état courant par identifiant stable (migration 018)
 
@@ -135,7 +139,8 @@ Modèle « préparation puis publication atomique » :
 - Publication (une transaction, tentative verrouillée) : pour chaque ligne préparée comparée à la ligne courante de même clé (valeurs `numeric`/`jsonb`, jamais un texte sérialisé) : identique = ligne courante confirmée (`sync_run_id` = tentative) ; différente = ligne courante mise à jour en place (même `id`) ; absente = la ligne préparée devient courante ; la ligne préparée fusionnée est supprimée. Une ligne courante du périmètre absente de la tentative passe `is_current` = false, jamais effacée. Puis clôture `complete`/`empty`, `rows_written` = lignes courantes du périmètre, `checkpoint.state` = `{inserted, changed, confirmed, retired, cleaned}`.
 - Pourquoi la confirmation met à jour `sync_run_id` : les lecteurs SQL existants (`cockpit_source_window`, `v_ad_daily`, `v_meta_conversions_daily`, `004` et l'attribution) lisent « les lignes de la dernière tentative complète couvrant la période ». Les lignes courantes portent toujours cette tentative : ces lecteurs restent exacts sans modification (prouvé par test, contre-épreuve comprise).
 - Rejeu : une publication rejouée après un accusé perdu renvoie l'accusé déjà enregistré sans rien changer. Tentative interrompue : ses lignes préparées restent invisibles, la tentative passe en échec au bout de 10 minutes (`expired_worker`) et la suivante publie normalement.
-- Nettoyage borné de la zone de préparation : chaque publication supprime au plus 5 000 lignes préparées de tentatives `failed` du même flux, âgées de plus de 24 h. Jamais une ligne d'une tentative `complete`/`empty`, jamais une ligne courante ou retirée. Les tentatives `partial` de `ad_daily` (lecture incomplète) ne sont pas nettoyées par ce lot.
+- Nettoyage borné de la zone de préparation, à la publication (018) : chaque publication supprime au plus 5 000 lignes préparées de tentatives `failed` du même flux, commencées depuis plus de 24 h. Jamais une ligne d'une tentative `complete`/`empty`, jamais une ligne courante ou retirée. Limite constatée (lot U4c-garde) : cette règle n'a pas de condition sur la date de 018, elle supprime donc aussi les lignes de tentatives `failed` écrites avant la migration (lignes jamais lues, mais héritées).
+- Nettoyage borné indépendant du succès (migration 019, lot U4c-garde) : `cockpit_cleanup_staged(p_limit)` est appelée une fois par passage du tick, après les unités et avant la réponse. Elle supprime uniquement les lignes jamais publiées (`source_aggregates`, `ad_daily`, `meta_conversions_daily` : `NOT is_current` ; `lead_source_observations` : `published_at IS NULL AND NOT is_current`) de tentatives terminales en échec (`failed` ou `partial`, aucune réclamation ne reprend ces tentatives), terminées depuis plus de 24 h et commencées après l'application de 018 (`cockpit_migrations.applied_at`, aucune purge héritée), au plus 5 000 lignes par table et par passage. Jamais une ligne d'une tentative `complete`, `empty` ou `running`. Réponse du tick : `"cleanup":{"deleted":{"source_aggregates":n,"ad_daily":n,"meta_conversions_daily":n,"lead_source_observations":n}}` ; un échec est seulement signalé (`"cleanup":{"error":"…"}`, `schema_missing` si 019 n'est pas appliquée) et ne fait jamais échouer le passage. Effet : des pannes répétées sans aucun succès gardent au plus les lignes préparées des tentatives des dernières 24 h (prouvé par de vrais passages du tick sur PostgreSQL, `tests/state-meta-leads.integration.ts`). `notion_import_rows` (préparation Notion) n'a pas de nettoyage des tentatives en échec : hors de ce lot.
 - Lignes anciennes conservées : les versions écrites avant la migration restent en place (non courantes), aucune purge. La reprise (dans 018) a marqué courante, pour chaque clé, la ligne de la dernière tentative complète couvrant sa période (KPI, Masterclass en période exacte, `ad_daily`, conversions) ; les lignes quiz restent par tentative.
 - Inscriptions (migration 020) : une modification réelle, une re-liaison d'identité ou une reclassification par un profil revu met à jour la ligne courante en place ; aucune copie de fiche n'est conservée. Les changements métier (`source`, `identity`, `eligibility`) sont tracés dans `lead_source_observation_changes` (anciennes date source, empreintes, mapping, personne, état, éligibilité ; jamais `properties`) ; une re-dérivation purement technique (profil de mapping, propriétés recalculées) ne laisse que le compteur `mappingChanged` de la tentative. Une absence dans une lecture par delta ne retire rien. Retour arrière : bloc en fin de 020 (corps 018), sans suppression de données.
 - `sync_runs` garde une ligne par tentative (journal technique, voir la livraison U4b pour l'estimation et la proposition de rétention, rien n'est purgé).
@@ -144,8 +149,8 @@ Modèle « préparation puis publication atomique » :
 
 ### 5.1 Prérequis
 
-1. Migrations 017 et 018 appliquées AVANT le déploiement du code de ce lot (le code appelle `cockpit_publish_aggregate_state`, `cockpit_publish_meta_daily` et lit `is_current`). Contrôle : `SELECT version, applied_at FROM cockpit_migrations WHERE version IN (17, 18);` renvoie deux lignes. Relevé 6.6 enregistré juste avant et juste après la migration 018 (la reprise ne supprime rien).
-2. Ce lot relu, fusionné et déployé en production sans `BLG_REFRESH_CADENCE_MINUTES` (ou avec `60`) : cadence horaire, mêmes flux. Contrôle : `cadence.pilotMinutes` = 60 et `lock.kind` = `shared` dans la réponse d'un passage.
+1. Migrations 017, 018 et 019 appliquées AVANT le déploiement du code de ce lot (le code appelle `cockpit_publish_aggregate_state`, `cockpit_publish_meta_daily`, `cockpit_cleanup_staged` et lit `is_current` ; sans 019, le tick signale seulement `cleanup.error` = `schema_missing`). Contrôle : `SELECT version, applied_at FROM cockpit_migrations WHERE version IN (17, 18, 19);` renvoie trois lignes. Relevé 6.6 enregistré juste avant et juste après la migration 018 (la reprise ne supprime rien).
+2. Ce lot relu, fusionné et déployé en production sans `BLG_REFRESH_CADENCE_MINUTES` (ou avec `60`) : cadence horaire, mêmes flux. Contrôle : `cadence.pilotMinutes` = 60, `lock.kind` = `shared` et `cleanup.deleted` présent dans la réponse d'un passage.
 3. Valeur de `CRON_SECRET` : celle de Vercel Production, au moins 32 caractères. Si elle n'est pas relisible, en créer une nouvelle et la poser au même moment dans Vercel (puis redéployer), dans le secret GitHub `CRON_SECRET` (recours manuel) et dans Vault (étape 5.2.2).
 4. Quotas du plan Vercel relevés (page Usage) : estimation 720 appels par jour, environ 5 à 10 minutes de fonction active par heure. Repère Hobby : 1 000 000 d'appels, 4 h de CPU actif et 360 Go-heures de mémoire par mois. Aucune dépense nouvelle attendue sur Supabase (extensions incluses).
 5. Relevé de départ : requêtes 6.1 et 6.6 enregistrées.
@@ -159,7 +164,7 @@ Modèle « préparation puis publication atomique » :
 5. Dans les minutes qui suivent : section E, `cron.schedule('cockpit-refresh-tick', '*/2 * * * *', ...)`. Facultatif : la tâche de purge de l'historique pg_cron à 7 jours.
 6. Contrôle des trois premières exécutions : section F (`cron.job_run_details`, `net._http_response`).
 7. Observation à cadence horaire (au moins 24 heures) : chaque flux publié dans l'heure (6.1, 6.2), `lock.kind` = `shared` sur toutes les réponses, 6.6 sans croissance des tables métier pour une source inchangée.
-8. Activation de 30 minutes, seulement si les trois conditions de la section 2 sont constatées : `BLG_REFRESH_CADENCE_MINUTES=30` en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 dans `net._http_response`.
+8. Activation de 30 minutes, seulement si les trois conditions de la section 2 sont constatées : `BLG_REFRESH_CADENCE_MINUTES=30` en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 et aucun `cadence.requestedMinutes` dans `net._http_response` (sinon la demi-heure n'est pas appliquée : bail partagé indisponible).
 9. Observation 24 à 48 heures (section 6), puis décision.
 
 ### 5.3 Modification exacte de `.github/workflows/hourly-sync.yml` (au moment de l'étape 5.2.4)
@@ -269,11 +274,20 @@ SELECT date_trunc('day', r.started_at) AS jour, count(*) AS lignes_ad_daily
 -- Remarque : une ligne confirmée porte la dernière tentative ; ces requêtes montrent où vivent les lignes, la croissance réelle
 -- se lit sur le total ci-dessus relevé chaque jour.
 
--- Lignes préparées orphelines (tentatives non publiées) : doivent rester bornées et disparaître 24 h après l'échec.
-SELECT 'source_aggregates' AS t, r.status, count(*) AS lignes, min(r.started_at) AS plus_ancienne
+-- Lignes préparées orphelines (tentatives non publiées) : doivent rester bornées et disparaître 24 h après l'échec
+-- (celles d'avant 018 restent : aucune purge héritée par 019).
+SELECT 'source_aggregates' AS t, r.status, count(*) AS lignes, min(r.finished_at) AS plus_ancienne
   FROM source_aggregates a JOIN sync_runs r ON r.id = a.sync_run_id WHERE NOT a.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2
-UNION ALL SELECT 'ad_daily', r.status, count(*), min(r.started_at)
-  FROM ad_daily d JOIN sync_runs r ON r.id = d.sync_run_id WHERE NOT d.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2;
+UNION ALL SELECT 'ad_daily', r.status, count(*), min(r.finished_at)
+  FROM ad_daily d JOIN sync_runs r ON r.id = d.sync_run_id WHERE NOT d.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2
+UNION ALL SELECT 'meta_conversions_daily', r.status, count(*), min(r.finished_at)
+  FROM meta_conversions_daily d JOIN sync_runs r ON r.id = d.sync_run_id WHERE NOT d.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2
+UNION ALL SELECT 'lead_source_observations', r.status, count(*), min(r.finished_at)
+  FROM lead_source_observations o JOIN sync_runs r ON r.id = o.run_id WHERE o.published_at IS NULL AND r.status IN ('running','failed','partial') GROUP BY 1, 2;
+-- Lignes éligibles au nettoyage borné et pas encore supprimées (attendu : 0, ou moins de 5 000 par table en rattrapage).
+SELECT count(*) AS eligibles_source_aggregates FROM sync_runs f JOIN source_aggregates x ON x.sync_run_id = f.id
+ WHERE f.status IN ('failed','partial') AND f.finished_at < now() - interval '24 hours'
+   AND f.started_at >= (SELECT applied_at FROM cockpit_migrations WHERE version = 18) AND NOT x.is_current;
 
 SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) AS taille
   FROM pg_class WHERE relname IN ('source_aggregates','ad_daily','meta_conversions_daily','lead_source_observations','sync_runs','cockpit_tick_lease');
@@ -288,8 +302,8 @@ SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) AS taille
 - Requête 6.4 vide ; requête 6.5 vide hors cas Notion expliqué.
 - Chaque échec de 6.3 suivi d'une publication complète en moins de 40 minutes, sinon panne de source à traiter à part.
 - Au moins 95 % des réponses `net._http_response` en 200 sans dépassement de délai.
-- Usage Vercel dans les quotas du plan, aucune facturation additionnelle ; 6.6 : total des tables métier stable pour une source inchangée (seule `sync_runs` croît d'une ligne par tentative), lignes préparées orphelines bornées.
-- `lock.kind` = `shared` sur toutes les réponses du tick relevées.
+- Usage Vercel dans les quotas du plan, aucune facturation additionnelle ; 6.6 : total des tables métier stable pour une source inchangée (seule `sync_runs` croît d'une ligne par tentative), lignes préparées orphelines bornées (aucune ligne éligible au nettoyage restante au-delà d'un passage), `cleanup.error` absent des réponses du tick.
+- `lock.kind` = `shared` sur toutes les réponses du tick relevées ; à 30, aucun `cadence.requestedMinutes` (demi-heure réellement appliquée).
 
 Si l'écart maximal dépasse 45 minutes de façon répétée : relever `measurements` dans les réponses du tick pour identifier l'unité lente ; le déclenchement toutes les minutes est l'option suivante (la route de 60 s peut alors toucher le déclenchement suivant, le verrou de processus et les verrous par flux s'appliquent).
 
@@ -304,9 +318,21 @@ Ordre sans chevauchement : arrêter pg_cron d'abord, rétablir GitHub ensuite.
    - KPI : il écrit une version complète par passage (lignes `is_current` = false) et clôt par `finish_sync` ; son lecteur lit cette dernière version, donc des données justes, mais le volume par passage revient et `is_current` n'est plus tenu à jour pour ces tentatives ;
    - Masterclass et inscriptions : les fonctions SQL de 018 restent en place et continuent de publier dans l'état courant (le code antérieur appelle les mêmes RPC) ;
    - `ad_daily` : `finish_sync` clôt la tentative sans publication d'état ; `v_ad_daily` lit les lignes de cette dernière tentative, justes ; les lignes courantes gardent une tentative plus ancienne et ne sont plus lues tant que l'ancien code tourne.
-   Revenir ensuite au code de ce lot : la publication suivante de chaque flux fusionne à nouveau les lignes préparées dans l'état courant ; les versions écrites entre-temps restent non courantes (aucune purge).
-5. Migrations : ne jamais les retirer en supprimant des données. 018 : les colonnes `is_current`, les index partiels et les nouvelles fonctions peuvent rester (inutilisés par le code antérieur) ; pour revenir aux fonctions antérieures sans toucher aux lignes, réappliquer par `CREATE OR REPLACE` les corps de `cockpit_publish_posthog` (016) et de `cockpit_stage_lead_entries` / `cockpit_publish_lead_entries` (009). 017 : son retour arrière est en fin de fichier (fonctions et table du bail, sans donnée métier) ; avec le code de ce lot encore déployé, le tick passe alors en `process-only`, signalé dans sa réponse.
+   Revenir ensuite au code de ce lot : la publication suivante de chaque flux fusionne à nouveau les lignes préparées dans l'état courant, mais seulement dans sa fenêtre, et le nouveau lecteur KPI lit l'état courant : sans reprise, il afficherait jusqu'à cette publication (et, hors de la fenêtre, durablement) les valeurs d'avant le retour arrière. Marche exacte ci-dessous (7.1).
+5. Migrations : ne jamais les retirer en supprimant des données. 019 : son retour arrière est en fin de fichier (deux fonctions, aucune donnée ; redéployer d'abord un code qui n'appelle plus `cockpit_cleanup_staged`, sinon le tick signale seulement `cleanup.error`). 018 : les colonnes `is_current`, les index partiels et les nouvelles fonctions peuvent rester (inutilisés par le code antérieur) ; pour revenir aux fonctions antérieures sans toucher aux lignes, réappliquer par `CREATE OR REPLACE` les corps de `cockpit_publish_posthog` (016) et de `cockpit_stage_lead_entries` / `cockpit_publish_lead_entries` (009). 017 : son retour arrière est en fin de fichier (fonctions et table du bail, sans donnée métier) ; avec le code de ce lot encore déployé, le tick passe alors en `process-only`, signalé dans sa réponse.
+
+### 7.1 Retour arrière du code puis redéploiement, avec écritures entre les deux (lot U4c-garde)
+
+Prouvé par `tests/state-rollback.integration.ts` (PostgreSQL 17 jetable, dans `npm run test:db`) :
+
+1. Retour arrière du code (redéploiement de la version antérieure), migrations laissées en place. Aucune action en base. Avant toute écriture de l'ancien code, l'ancien lecteur KPI (copie de `7bc6a68`), `v_ad_daily`, `v_meta_conversions_daily` et `cockpit_source_window` Masterclass lisent exactement ce que lit le nouveau, y compris après des collectes du nouveau chemin (valeur modifiée, objet disparu, objet apparu, tentative interrompue).
+2. Écritures de l'ancien code : KPI et publicités par jour par `finish_sync complete` (une version complète par passage, lignes non courantes), lues par l'ancien lecteur et les vues ; Masterclass et inscriptions par les mêmes RPC qu'aujourd'hui (fonctions de 018 en base : état courant tenu). Le nouveau lecteur KPI ne voit pas ces tentatives.
+3. Redéploiement du code de ce lot. Le passage suivant reprend normalement (aucune erreur). Le rejeu de la migration 018 ne suffit pas à reprendre les données de la transition : il ne complète que les clés sans ligne courante et laisse le nouveau lecteur sur les valeurs d'avant le retour arrière (constat prouvé par le même test).
+4. Reprise de l'état courant, une fois, juste après le redéploiement (SQL, rôle `service_role` ou propriétaire) : `SELECT public.cockpit_resume_current_state();` (migration 019). Pour chaque jour KPI, jour de publicités, profil de conversions et période exacte Masterclass, les lignes que lisent les anciens lecteurs deviennent courantes, les autres lignes courantes sont retirées (`is_current` = false, jamais effacées). Aucune ligne ajoutée ni supprimée ; les publications attendent la fin de l'appel (verrou des trois tables, lectures non bloquées) ; un second appel ne change rien (réponse à zéro). Réponse : `{"kpi":{"periods":n,"retired":n,"promoted":n},"masterclass":{…},"ad_daily":{…},"meta_conversions_daily":{…}}`, à conserver avec le relevé 6.6.
+5. Contrôle : relevé 6.6 (totaux inchangés par la reprise), tableau quotidien identique à celui affiché par l'ancien code juste avant le redéploiement ; la collecte suivante du nouveau chemin n'ajoute aucune ligne pour une source inchangée.
+
+Coût : comme la reprise de 018, l'appel parcourt les périodes de `source_aggregates`, `ad_daily` et `meta_conversions_daily` (mesure sur volume réel à faire, lot U4c-volume) ; à lancer hors pointe.
 
 ## 8. Pourquoi ce SQL n'est ramassé par rien
 
-`scripts/migrate-local.ts` et tous les tests d'intégration lisent `readdirSync('supabase/migrations')`, sans parcours récursif ; aucun ne lit `supabase/manual/`. Les migrations 017 et 018 sont, elles, dans `supabase/migrations/` : elles sont lues par ces scripts et tests locaux, et s'appliquent en production par le coordinateur (section 5.1.1). Le dépôt n'a pas de `supabase/config.toml` et le CI (`ci.yml`) lance seulement `npm run check` et `npm run test:db`. Le fichier du déclencheur commence en plus par une garde qui arrête une exécution d'un bloc.
+`scripts/migrate-local.ts` et tous les tests d'intégration lisent `readdirSync('supabase/migrations')`, sans parcours récursif ; aucun ne lit `supabase/manual/`. Les migrations 017, 018 et 019 sont, elles, dans `supabase/migrations/` : elles sont lues par ces scripts et tests locaux, et s'appliquent en production par le coordinateur (section 5.1.1). Le dépôt n'a pas de `supabase/config.toml` et le CI (`ci.yml`) lance seulement `npm run check` et `npm run test:db`. Le fichier du déclencheur commence en plus par une garde qui arrête une exécution d'un bloc.
