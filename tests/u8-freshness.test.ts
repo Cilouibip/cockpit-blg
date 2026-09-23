@@ -27,7 +27,7 @@ const withCadence = (minutes?: '30' | '60'): NodeJS.ProcessEnv => ({ ...baseEnv,
 const run = (id: string, source: string, namespace: string, stream: string, profileKey: string, at: string): Row => ({ id, source, source_namespace: namespace, stream_key: stream, query_profile_key: profileKey, status: 'complete', pagination_complete: true, rows_rejected: 0, started_at: at, finished_at: at, period_to: at });
 const registration = (index: number, day: string): Row => ({ id: `obs-${index}`, external_id: `entry-${index}`, family: 'forms', source: 'wix', source_namespace: 'site', source_container_id: VISUAL_JOURNEY_FORM_ID, is_current: true, run_id: 'forms-run', published_at: '2026-09-20T00:00:00Z', mapping_profile: profile, eligible: true, identity_key: `identity-${index}`, identity_state: 'linked', person_id: `person-${index}`, occurred_day: day, occurred_at: `${day}T08:00:00Z`, properties: { origin: { source: 'facebook', medium: 'paid_social' } } });
 
-type Ages = { meta?: number; posthog?: number; email?: number; forms?: number; notion?: number };
+type Ages = { meta?: number; posthog?: number; email?: number; forms?: number; notion?: number; emailObservedAt?: string };
 /** Chaque flux est publié un certain nombre de minutes avant NOW ; la période couvre deux jours passés et la journée en cours. */
 async function scenario(ages: Ages = {}, extra: { metaObservedAt?: string } = {}) {
   const at = (minutes: number | undefined, fallback: number) => minutesBefore(NOW, minutes ?? fallback);
@@ -45,9 +45,9 @@ async function scenario(ages: Ages = {}, extra: { metaObservedAt?: string } = {}
   const phAt = at(ages.posthog, 15);
   clock = phAt;
   await syncKpiSource(memory.db, 'posthog', baseEnv.POSTHOG_PROJECT_ID, days[0], windowTo, async () => ({ from: days[0], to: windowTo, observedAt: phAt, rows: days.flatMap(day => ['click', 'confirmed'].map(kind => ({ day, key: `${day}-${kind}`, data: { kind, ad: '', campaign: '', source: 'facebook', medium: 'paid_social', link: '', isTest: false, sessions: kind === 'click' ? 4 : 1 } }))) }));
-  const emailAt = at(ages.email, 45);
+  const emailAt = ages.emailObservedAt ?? at(ages.email, 45), emailTo = Date.parse(emailAt) < Date.parse('2026-09-22T00:00:00Z') ? '2026-09-22' : windowTo;
   clock = emailAt;
-  await syncKpiSource(memory.db, 'wix', baseEnv.WIX_SITE_ID, days[0], windowTo, async () => ({ from: days[0], to: windowTo, observedAt: emailAt, rows: days.map(day => ({ day, key: `${day}-message`, data: { identity: 'identity-1', message: 'message-1', sent: 1, delivered: 1, opens: 1, clicks: 0 } })) }));
+  await syncKpiSource(memory.db, 'wix', baseEnv.WIX_SITE_ID, days[0], emailTo, async () => ({ from: days[0], to: emailTo, observedAt: emailAt, rows: days.filter(day => Date.parse(emailAt) > Date.parse(`${day}T00:00:00Z`) - 7_200_000).flatMap(day => [{ day, key: `${day}-cohort`, data: { identity: 'identity-1', message: 'message-1', sent: 1, delivered: 1, opens: 1, clicks: 0 } }, { day, key: `${day}-outside`, data: { identity: 'identity-outside', message: 'message-1', sent: 2, delivered: 2, opens: 0, clicks: 1 } }]) }));
   return memory;
 }
 async function snapshotFor(env: NodeJS.ProcessEnv, ages: Ages = {}, extra: { metaObservedAt?: string } = {}) {
@@ -159,4 +159,15 @@ test('U8 détail par annonce : sans lecture complète des clics bilan, aucune da
   const withData = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot: read }));
   assert.ok(withData.includes('Sessions de clic bilan ; lecture automatique. · lu jusqu’au '));
   assert.equal(response.snapshot.daily.every(d => d.booking_clicks === null), true, 'aucune session lue : non mesuré, pas zéro');
+});
+
+test('U8 emails : deux périmètres (séquence complète, contacts inscrits de la période), non mesurés si un jour n’est pas couvert', async () => {
+  const snapshot = await snapshotFor(withCadence('30'));
+  assert.deepEqual(snapshot.email_summary.all_three_forms, { sent: 9, delivered: 9, opens_sum_by_message: 3, clicks_sum_by_message: 3 });
+  assert.deepEqual(snapshot.email_summary.facebook_form_recipient_filter, { submissions: 2, distinct_emails: 2, sent: 3, delivered: 3, opens: 3, clicks: 0 }, 'seuls les destinataires dont la clé figure parmi les inscriptions de la période');
+  assert.equal(block(snapshot, 'Activité email').status, 'available');
+  const partial = await snapshotFor(withCadence('30'), { emailObservedAt: '2026-09-21T15:00:00Z' });
+  assert.deepEqual(partial.email_summary.all_three_forms, { sent: null, delivered: null, opens_sum_by_message: null, clicks_sum_by_message: null }, 'le 21/09 lu à 17:00 et le 22/09 non lu : totaux non mesurés');
+  assert.equal(partial.email_summary.facebook_form_recipient_filter.sent, null);
+  assert.equal(block(partial, 'Activité email').status, 'missing');
 });
