@@ -1,3 +1,9 @@
+## 23 septembre 2026 : isolation locale du lecteur financier Notion
+
+`commerceReaderMode` (config) lit `BLG_COMMERCE_READER` ; défaut `paused`. `jobScope('commerce')` renvoie `null` en pause ; `configuredJobScope` garde le profil pour relire les publications (Connexions). `commerceControlPass` exécute une unité `commerce` identique au tick, derrière `GET /api/jobs/commerce` (bearer `CRON_SECRET`, limite 2/min). `POST /api/sync/commerce` : 423 `commerce_paused`. Connexions : statut `paused`, `canSync` faux, dates issues de `sync_runs`. Cockpit : `resultsRefreshSources` et `commerceReaderPaused` pilotent Actualiser. `readStoredBusiness` et `buildAdFunnel` capturent l'échec de lecture du rapport des ventes.
+
+Aucun changement de `sync-notion-commerce.ts`, du stockage, des formules, des migrations ni des workflows. Tests : 523 unitaires, typage, compilation ; 59 PostgreSQL 17 locaux. Commits locaux sur `fable/lot-urgent`, sans push.
+
 ## 22 septembre 2026 — intégration revue du tableau automatique et de l’historique archivé
 
 Le tableau conserve les vues existantes et lit les relevés automatiques des sources, avec les mêmes dates, filtres et essais. Le commerce conserve séparément un Client historique absent uniquement après lecture de sa page confirmant archive et corbeille dans la source attendue. Les données du dernier miroir publié sont conservées ; toute autre disparition reste bloquante. Aucun changement des sources Notion, des ventes ou des paiements. Les erreurs HTTP après une page sauvegardée restent lisibles et la reprise est préservée.

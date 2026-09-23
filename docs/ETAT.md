@@ -1,3 +1,25 @@
+## 23 septembre 2026 : Isolation du lecteur financier Notion (local)
+
+Le lecteur des ventes Notion (`commerce`) échoue à chaque passage depuis le 22 septembre : la recherche de son point de reprise est trop lente sur la table des agrégats. Il consomme le budget du passage horaire et le fait terminer en échec. Ce lot l'isole côté serveur sans toucher à la correction de fond (index, réécriture), ni aux migrations, ni aux sources.
+
+Réglage serveur unique `BLG_COMMERCE_READER`. Absent, vide ou toute autre valeur que `active` : lecture suspendue. `active` rétablit exactement le comportement précédent.
+
+En pause :
+- planning : le passage horaire ne planifie plus, ne lit plus et n'exécute plus l'unité `commerce` ; son état ne compte plus dans le résultat du passage. Les autres unités (CA Wix, paiements reçus, inscriptions, suivi commercial, antériorité client, Meta, PostHog, tableau quotidien) sont inchangées ;
+- appel direct : `POST /api/sync/commerce` répond 423, code `commerce_paused`, « La lecture des ventes est suspendue. » ;
+- Actualiser (Résultats) : l'état lu dans Connexions retire la lecture des ventes ; toutes les autres lectures partent comme avant. Si Connexions ne répond pas, le serveur refuse de lui-même et l'avis affiche « lecture suspendue » ;
+- Connexions : la carte « Notion · ventes payées » affiche « Lecture suspendue », la date réelle de la dernière publication complète et de la dernière tentative lues dans `sync_runs`, sans bouton de lecture.
+
+Contrôle réservé : `GET /api/jobs/commerce` avec le bearer `CRON_SECRET` (même vérification que `jobs/tick`, deux appels par minute au plus) exécute une seule unité bornée du lecteur, identique à celle du passage horaire (trois pages Notion au plus, budget de 45 secondes), même en pause, et renvoie son statut, ses compteurs et un code d'échec lisible. Une session de l'interface ne suffit pas ; aucune autre voie ne contourne la pause.
+
+Lectures conservées : la dernière publication des ventes reste lue. « Nouveaux clients », « Nouvelles ventes payées », les colonnes ventes et encaissé du détail par publicité et du tableau quotidien gardent la date de leur propre rapport. Aucune carte n'est masquée par déduction, aucune date n'est figée.
+
+Résilience : une erreur de lecture du rapport des ventes ne fait plus échouer `/api/dashboard` ni `/api/ad-funnel`. Seules les mesures ventes deviennent indisponibles, avec leur raison, jamais remplacées par zéro ; les autres blocs restent servis.
+
+Validation locale : 523 tests unitaires (514 existants et 9 nouveaux : réglage, planning, passage de contrôle, route, Connexions avec deux dates, Actualiser, Résultats et détail par publicité en échec), typage et compilation de production réussis. 59 tests PostgreSQL 17 réussis sur une base locale jetable (aucun ne vise directement les fichiers modifiés). Les deux jeux de données existants qui décrivent la planification des ventes portent désormais `BLG_COMMERCE_READER=active`.
+
+Limites : local uniquement, rien de publié. Au déploiement sans variable, la lecture des ventes est suspendue (voulu). La fin des échecs du passage horaire et la cadence réelle ne sont pas prouvées en production. Le passage de contrôle échouera tant que la correction de fond n'est pas faite. Les ventes affichées restent celles de la dernière publication complète.
+
 ## 22 septembre 2026 — intégration revue du tableau automatique et de l’historique archivé
 
 Le tableau conserve les vues existantes et lit les relevés automatiques des sources, avec les mêmes dates, filtres et essais. Le commerce conserve séparément un Client historique absent uniquement après lecture de sa page confirmant archive et corbeille dans la source attendue. Les données du dernier miroir publié sont conservées ; toute autre disparition reste bloquante. Aucun changement des sources Notion, des ventes ou des paiements. Les erreurs HTTP après une page sauvegardée restent lisibles et la reprise est préservée.
