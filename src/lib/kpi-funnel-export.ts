@@ -29,5 +29,5 @@ export function kpiFunnelCsv(snapshot: KpiFunnelSnapshot): string {
  const all=snapshot.email_summary.all_three_forms,cohort=snapshot.email_summary.facebook_form_recipient_filter;
  lines.push(['Séquence complète',all.sent,all.delivered,all.opens_sum_by_message,all.clicks_sum_by_message],['Contacts de la landing',cohort.sent,cohort.delivered,cohort.opens,cohort.clicks]);
  lines.push([],['Définitions']);for(const [key,value] of Object.entries(snapshot.definitions))lines.push([key,value]);
- return '﻿'+lines.map(line=>line.map(cell).join(';')).join('\r\n');
+ return '\uFEFF'+lines.map(line=>line.map(cell).join(';')).join('\r\n');
 }

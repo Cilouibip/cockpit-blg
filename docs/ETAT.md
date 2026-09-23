@@ -1,3 +1,11 @@
+## 23 septembre 2026 : tableau « Suivi quotidien du funnel », colonne par colonne (local, revue requise)
+
+Chaque colonne du tableau a sa source, sa définition, son flux automatique, sa fraîcheur et sa preuve (livraison U8). Les blocs sont désormais datés par la plus ancienne des lectures dont ils dépendent et marqués « ancien » dès qu'une lecture dépasse la cadence réelle de son flux (réglage des flux pilotes, une heure pour Notion et les ventes), au lieu d'un seuil fixe d'une heure. L'heure de chaque bloc est visible au-dessus du tableau, la plus ancienne des blocs disponibles en tête, et l'export Excel reprend ces lignes.
+
+Un jour passé lu en cours de journée n'est plus présenté comme complet : il reste « Non mesuré » (le jour en cours reste partiel et signalé). Chaque taux affiché rapproche deux mesures du même bloc et du même jour. Ventes et cash : « Lecture suspendue (réglage BLG_COMMERCE_READER) » avec la date de la dernière publication complète et de la dernière tentative ; les jours qu'elle ne couvre pas restent non mesurés et les totaux indisponibles. CTA oral, offres faites et CA contracté restent non mesurés avec leur responsable et leur prochaine étape. Aucune nouvelle collecte, aucune définition nouvelle, colonnes inchangées.
+
+Validation locale : 569 tests (21 nouveaux), typage et compilation ; contre-épreuves faites (campagne actuelle retirée du périmètre, seuil fixe d'une heure). Limites : aucune lecture réelle ; conversion Meta, cadence réelle et données réelles (CP3) à constater par Codex ; règle de cohorte des rendez-vous (une inscription non reliée rend le bloc non mesuré) soumise à arbitrage.
+
 ## 23 septembre 2026 : Parcours, lecture des visites via le cache PostHog (local, revue requise)
 
 Le Parcours Masterclass demande désormais à PostHog son cache récent pour les deux lectures des visites : une réouverture ou un « Réessayer » de la même période est servi immédiatement une fois le calcul précédent terminé. Le navigateur attend jusqu'à 4 minutes (14 appels au plus) au lieu de 2. S'il s'arrête sans résultat, l'écran l'écrit clairement : « Lecture des visites non terminée », avec l'heure de la tentative et le bouton Réessayer ; les inscriptions et rendez-vous restent affichés, aucun zéro n'est ajouté. Un résultat servi par le cache est daté de son calcul.
