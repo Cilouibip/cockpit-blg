@@ -46,7 +46,24 @@ function rateText(rate: VisualJourneyRate | null): string {
 
 function rateDescription(rate: VisualJourneyRate | null): string {
   if (!rate?.available || rate.numerator == null || rate.denominator == null) return rate?.reason || 'Taux indisponible';
-  return `${formatNumber(rate.numerator)} sur ${formatNumber(rate.denominator)} : ${rateText(rate)}`;
+  // D3 option A : le taux porte sur les activités jusqu'à sa couverture ; les personnes plus récentes sont hors taux.
+  const excluded = rate.excludedAfterCoverage ?? 0;
+  const coverage = rate.coveredThrough ? ` · activités jusqu’au ${formatDate(rate.coveredThrough, true)}` : '';
+  const outside = excluded > 0 ? ` ; ${formatNumber(excluded)} personne${excluded > 1 ? 's' : ''} plus récente${excluded > 1 ? 's' : ''} hors taux` : '';
+  return `${formatNumber(rate.numerator)} sur ${formatNumber(rate.denominator)} : ${rateText(rate)}${coverage}${outside}`;
+}
+
+/** Une ligne sous le parcours : jusqu'où portent les taux, et quand les compteurs ont été lus. */
+function rateCoverageText(report: VisualJourneyReport, stages: VisualJourneyStage[]): string | null {
+  const rates = [...stages.map(stage => stage.fromPrevious), report.form.rates.startedFromOpened, report.form.rates.registeredFromStarted, report.booking.rates.calendarFromClicked, report.booking.rates.bookedFromCalendar]
+    .filter((rate): rate is VisualJourneyRate => !!rate);
+  const counters = `Compteurs : lecture du ${formatDate(report.generatedAt, true)}.`;
+  if (!rates.some(rate => rate.available)) {
+    const reason = rates.find(rate => rate.reason)?.reason?.trim().replace(/\.$/, '');
+    return `Taux indisponibles${reason ? ` : ${reason}` : ''}. ${counters}`;
+  }
+  const oldest = rates.filter(rate => rate.available && rate.coveredThrough).map(rate => rate.coveredThrough!).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+  return oldest ? `Taux : activités jusqu’au ${formatDate(oldest, true)}. ${counters}` : null;
 }
 
 function secondsText(seconds: number): string {
@@ -165,9 +182,11 @@ export function VisualJourneyView({ report }: { report: VisualJourneyReport }) {
     report.booking.clicked, report.booking.calendar, report.booking.booked, report.booking.rates.calendarFromClicked, report.booking.rates.bookedFromCalendar,
   ].map(item => item.reason).filter((value): value is string => Boolean(value));
   const timingText = visitsTiming(report);
+  const coverageText = rateCoverageText(report, stages);
   const reasons = [...new Set([...report.limits, ...report.stages.flatMap(stage => [stage.availability.reason, stage.fromPrevious?.reason]).filter((value): value is string => Boolean(value)), ...nestedReasons])];
   return <div className="visual-journey">
     <ol className="journey-route a-d-stage" aria-label="Du visiteur au rendez-vous">{stages.map((stage, index) => <li className="journey-route-fragment" key={stage.id}>{index > 0 && <div className="journey-edge" aria-label={rateDescription(stage.fromPrevious)} title={rateDescription(stage.fromPrevious)}><Icon name="arrow" /><b>{rateText(stage.fromPrevious)}</b><span className="blg-sr-only">{rateDescription(stage.fromPrevious)}</span></div>}<button type="button" className="journey-stop" data-step={stage.id} aria-pressed={selectedStage === stage.id} onClick={() => setSelected(stage.id)} aria-label={`${stage.label} : ${stage.availability.available ? formatNumber(stage.count) : 'indisponible'}. Voir le détail.`}><span className={`journey-node a-h-marker${selectedStage === stage.id ? ' a-luminous-marker' : ''}`}><Icon name={stage.id} /></span><strong title={stage.availability.reason ?? undefined}>{stage.availability.available ? formatNumber(stage.count) : '—'}</strong><span className="journey-stop-label">{stage.label}</span></button></li>)}</ol>
+    {coverageText && <p className="journey-rate-coverage">{coverageText}</p>}
     <section className="journey-detail a-d-stage" aria-live="polite" aria-atomic="false">{selectedStage === 'page' ? <PageDetail report={report} /> : selectedStage === 'form' || selectedStage === 'signup' ? <FormDetail report={report} /> : selectedStage === 'watch' ? <VideoDetail report={report} /> : <BookingDetail report={report} />}<Freshness report={report} /></section>
     <div className="journey-meta"><span>Dernière lecture : {formatDate(report.generatedAt, true)}{timingText && ` · ${timingText}`}</span>{reasons.length > 0 && <details><summary>À savoir sur ces chiffres</summary>{reasons.map(reason => <p key={reason}>{reason}</p>)}</details>}</div>
   </div>;
