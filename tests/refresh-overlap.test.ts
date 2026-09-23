@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProcessTickLock, jobScope, tickSyncJobs, type SyncJob, type TickSummary } from '../src/lib/sync-jobs';
+import { createProcessTickLock, databaseTickLease, jobScope, tickSyncJobs, TICK_LEASE_SECONDS, type SyncJob, type TickSummary } from '../src/lib/sync-jobs';
 import { syncKpiSource, KPI_PROFILE, type KpiSourceBatch } from '../src/lib/kpi-source-store';
 import { AppError } from '../src/lib/errors';
 import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
@@ -10,11 +10,14 @@ import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
 //   passée en échec « expired_worker », puis refus 55P03 si une tentative « running » existe, sinon insertion ;
 // - db.ts traduit 55P03 en AppError 409 « source_busy » ;
 // - finish_sync (001) : met à jour la seule tentative encore « running », sinon 55000 ;
-// - source_aggregates (001) : clé unique (source, source_namespace, metric_key, period_from, period_to, dimensions_key, report_profile_key, sync_run_id).
+// - source_aggregates (001) : clé unique (source, source_namespace, metric_key, period_from, period_to, dimensions_key, report_profile_key, sync_run_id) ;
+// - cockpit_claim_tick / cockpit_release_tick (017) : une ligne, réclamation si le bail est expiré ou déjà détenu par le même détenteur,
+//   libération par le seul détenteur.
 const AGGREGATE_KEY = 'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id';
 function journalDatabase(clock: () => number) {
   const tables = new Map<TableName, Row[]>(), get = (table: TableName) => { if (!tables.has(table)) tables.set(table, []); return tables.get(table)!; };
   const calls: string[] = [];let sequence = 0;
+  const lease = { holder: null as string | null, until: -Infinity };
   const matches = (row: Row, options: SelectOptions = {}) => Object.entries(options.eq ?? {}).every(([key, value]) => String(row[key]) === value) && Object.entries(options.in ?? {}).every(([key, values]) => values.includes(String(row[key])));
   const db: Database = {
     async select(table, options = {}) {
@@ -33,6 +36,14 @@ function journalDatabase(clock: () => number) {
     async rpc<T>(name: string, args: Row): Promise<T> {
       calls.push(`rpc:${name}`);
       const runs = get('sync_runs'), now = clock();
+      if (name === 'cockpit_claim_tick') {
+        if (!(lease.until <= now || lease.holder === args.p_holder)) return false as T;
+        Object.assign(lease, { holder: String(args.p_holder), until: now + Number(args.p_seconds) * 1000 });return true as T;
+      }
+      if (name === 'cockpit_release_tick') {
+        if (lease.holder !== args.p_holder) return false as T;
+        Object.assign(lease, { holder: null, until: now });return true as T;
+      }
       if (name === 'begin_sync_stream') {
         const same = (row: Row) => row.source === args.p_source && row.source_namespace === args.p_namespace && row.stream_key === args.p_stream && row.query_profile_key === args.p_profile;
         for (const row of runs) if (same(row) && row.status === 'running' && Date.parse(String(row.started_at)) < now - 600_000) Object.assign(row, { status: 'failed', finished_at: new Date(now).toISOString(), error_code: 'expired_worker' });
@@ -51,7 +62,7 @@ function journalDatabase(clock: () => number) {
     },
     probe: async () => {},
   };
-  return { db, get, calls };
+  return { db, get, calls, lease };
 }
 
 const env = { COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: 'meta', META_ACCESS_TOKEN: 'synthetic' } as unknown as NodeJS.ProcessEnv;
@@ -153,4 +164,72 @@ test('reprise après échec : une tentative interrompue ne bloque le flux que di
   const runs = get('sync_runs');
   assert.deepEqual(runs.map(row => [row.status, row.error_code ?? null]), [['failed', 'expired_worker'], ['complete', null]]);
   assert.ok(get('source_aggregates').every(row => row.sync_run_id === resumed.runId), 'la tentative abandonnée n’a laissé aucune ligne publiée');
+});
+
+// Bail partagé de niveau passage (migration 017), branché dans tickSyncJobs après le verrou de processus.
+const noWork = async () => assert.fail('aucune unité ne doit être lancée');
+test('bail partagé refusé : réponse waiting, aucune lecture du journal ni de source, aucune écriture', async () => {
+  const { db, get, calls, lease } = journalDatabase(() => AT);seed(get);
+  Object.assign(lease, { holder: 'autre-instance', until: AT + 60_000 });
+  const summary = await tickSyncJobs(db, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: noWork });
+  assert.equal(summary.status, 'waiting'); assert.equal(summary.units, 0); assert.deepEqual(summary.unitResults, []);
+  assert.match(String(summary.reason), /verrou partagé en base/);
+  assert.deepEqual(calls, ['rpc:cockpit_claim_tick'], 'une seule réclamation du bail, rien d’autre');
+  assert.equal(lease.holder, 'autre-instance', 'le bail d’autrui reste intact');
+});
+
+test('bail pris : libéré dans le finally, après une unité qui lève comme après une erreur du journal', async () => {
+  const { db, get, calls, lease } = journalDatabase(() => AT);seed(get);
+  const summary = await tickSyncJobs(db, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: async () => { throw new Error('unité interrompue'); } });
+  assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: TICK_LEASE_SECONDS });
+  assert.equal(TICK_LEASE_SECONDS, 90);
+  assert.deepEqual(summary.unitResults, [{ job: 'kpi_meta', status: 'failed' }]);
+  assert.equal(calls[0], 'rpc:cockpit_claim_tick', 'le bail précède toute lecture');
+  assert.equal(calls.at(-1), 'rpc:cockpit_release_tick', 'libéré en dernier');
+  assert.equal(lease.holder, null);
+  // Exception hors unité : la lecture du journal échoue, le passage lève, le bail est quand même rendu.
+  const broken: Database = { ...db, select: async () => { throw new AppError('La base de données est indisponible.', 503, 'database_unavailable'); } };
+  await assert.rejects(tickSyncJobs(broken, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: noWork }), (error: AppError) => error.code === 'database_unavailable');
+  assert.equal(calls.filter(call => call === 'rpc:cockpit_release_tick').length, 2);
+  assert.equal(lease.holder, null, 'aucun bail orphelin');
+});
+
+test('fonction absente (migration 017 non appliquée) : passage exécuté avec le seul verrou de processus, signalé dans la réponse', async () => {
+  const { db, get } = journalDatabase(() => AT);seed(get);
+  const missing: Database = { ...db, rpc: async <T>(name: string, args: Row) => { if (name === 'cockpit_claim_tick') throw new AppError('Les tables du cockpit doivent être installées.', 503, 'schema_missing'); return db.rpc<T>(name, args); } };
+  const summary = await tickSyncJobs(missing, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(missing), now: () => AT, budget: budget(), execute: (job, ctx) => syncKpiSource(ctx.db, 'meta', 'meta', FROM, TO, async () => batch) });
+  assert.equal(summary.lock?.kind, 'process-only'); assert.match(String((summary.lock as { reason: string }).reason), /migration 017/);
+  assert.deepEqual(summary.unitResults, [{ job: 'kpi_meta', status: 'complete' }]);
+});
+
+test('autre erreur du bail : l’erreur remonte (HTTP non 2xx par la route), aucune lecture', async () => {
+  const { db, get, calls } = journalDatabase(() => AT);seed(get);
+  const down: Database = { ...db, rpc: async <T>(name: string, args: Row) => { if (name === 'cockpit_claim_tick') { calls.push('rpc:cockpit_claim_tick'); throw new AppError('Supabase ne répond pas.', 503, 'database_unavailable'); } return db.rpc<T>(name, args); } };
+  await assert.rejects(tickSyncJobs(down, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(down), now: () => AT, budget: budget(), execute: noWork }), (error: AppError) => error.code === 'database_unavailable');
+  assert.deepEqual(calls, ['rpc:cockpit_claim_tick']);
+});
+
+test('verrou de processus toujours premier : instance occupée, aucun appel au bail en base', async () => {
+  const { db, get, calls } = journalDatabase(() => AT);seed(get);
+  const lock = createProcessTickLock();const held = lock.acquire();assert.ok(held);
+  const summary = await tickSyncJobs(db, env, { lock, sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: noWork });
+  assert.equal(summary.status, 'waiting'); assert.match(String(summary.reason), /cette instance/);
+  assert.deepEqual(calls, [], 'ni bail, ni journal');
+  held!();
+});
+
+test('deux instances avec bail partagé : un seul passage lit le journal et réclame le flux, l’autre répond waiting sans rien lire', async () => {
+  const { db, get, calls } = journalDatabase(() => AT);seed(get);
+  const release = gate(), started = gate();let sourceReads = 0;
+  const first = tickSyncJobs(db, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(db), now: () => AT, budget: budget(), execute: (job, ctx) => syncKpiSource(ctx.db, 'meta', 'meta', FROM, TO, async () => { sourceReads++; started.open(); await release.opened; return batch; }) });
+  await started.opened;
+  let secondCalls = 0;
+  const other: Database = { select: async (...args) => { secondCalls++; return db.select(...args); }, upsert: async (...args) => { secondCalls++; return db.upsert(...args); }, rpc: async (...args) => { if (args[0] !== 'cockpit_claim_tick') secondCalls++; return db.rpc(...args); }, probe: db.probe };
+  const second = await tickSyncJobs(other, env, { lock: createProcessTickLock(), sharedLease: databaseTickLease(other), now: () => AT, budget: budget(), execute: noWork });
+  release.open();const winner = await first;
+  assert.equal(second.status, 'waiting'); assert.deepEqual(second.unitResults, []);
+  assert.equal(secondCalls, 0, 'la seconde instance ne lit ni n’écrit rien, pas même le journal');
+  assert.deepEqual(winner.unitResults, [{ job: 'kpi_meta', status: 'complete' }]); assert.equal(winner.lock?.kind, 'shared');
+  assert.equal(sourceReads, 1);
+  assert.equal(calls.filter(call => call === 'rpc:begin_sync_stream').length, 1, 'une seule réclamation du flux');
 });
