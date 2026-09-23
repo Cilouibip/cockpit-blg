@@ -6,6 +6,21 @@ export function memoryKpiDatabase(initial: Partial<Record<TableName,Row[]>> = {}
  const db:Database={select:async(t,o)=>structuredClone(select(t,o)),upsert:async(t,rows,conflict='id')=>{for(const row of rows){const keys=conflict.split(','),prior=get(t).find(r=>keys.every(k=>r[k]===row[k]));if(prior)Object.assign(prior,structuredClone(row));else get(t).push({id:`row-${++sequence}`,...structuredClone(row)});}},rpc:async<T>(name:string,args:Row):Promise<T>=>{
   if(name==='begin_sync_stream'){const id=`run-${++sequence}`;get('sync_runs').push({id,source:args.p_source,source_namespace:args.p_namespace,stream_key:args.p_stream,query_profile_key:args.p_profile,period_from:args.p_from,period_to:args.p_to,started_at:clock(),status:'running'});return id as T;}
   if(name==='finish_sync'){const row=get('sync_runs').find(r=>r.id===args.p_run);if(!row)throw Error('RUN_MISSING');Object.assign(row,{status:args.p_status,finished_at:clock(),pagination_complete:args.p_complete,rows_rejected:args.p_rejected,error_code:args.p_error});return null as T;}
+  // Publication d'état des flux KPI (migration 018) : même règle que la fonction SQL cockpit_publish_aggregate_state,
+  // réduite aux tables du double. Identique = ligne courante confirmée, différente = mise à jour en place, nouvelle = promue,
+  // absente du périmètre = retirée (is_current=false, conservée) ; rejeu d'une tentative terminée = accusé sans changement.
+  if(name==='cockpit_publish_aggregate_state'){
+   const run=get('sync_runs').find(r=>r.id===args.p_run);if(!run)throw Error('RUN_MISSING');
+   if(['complete','empty'].includes(String(run.status)))return {status:run.status,duplicate:true,rowsWritten:run.rows_written} as T;
+   const rows=get('source_aggregates'),metrics=String(args.p_metric_keys).replace(/[{}]/g,'').split(',');
+   const key=(r:Row)=>['source','source_namespace','report_profile_key','metric_key','period_from','period_to','dimensions_key'].map(k=>String(r[k])).join('|');
+   for(const row of rows.filter(r=>r.sync_run_id===run.id&&!r.is_current)){const current=rows.find(r=>r.is_current&&key(r)===key(row));if(current){Object.assign(current,{...row,id:current.id,is_current:true});rows.splice(rows.indexOf(row),1);}}
+   for(const row of rows)if(row.is_current&&row.sync_run_id!==run.id&&metrics.includes(String(row.metric_key))&&String(row.period_from)>=String(run.period_from)&&String(row.period_to)<=String(run.period_to))row.is_current=false;
+   for(const row of rows)if(row.sync_run_id===run.id)row.is_current=true;
+   const current=rows.filter(r=>r.is_current&&r.sync_run_id===run.id).length;
+   Object.assign(run,{status:current?'complete':'empty',finished_at:clock(),pagination_complete:true,rows_rejected:0,rows_written:current,error_code:null});
+   return {status:run.status,duplicate:false,rowsWritten:current} as T;
+  }
   throw Error('UNEXPECTED_RPC');
  },probe:async()=>{}};
  return {db,tables,get,select};
