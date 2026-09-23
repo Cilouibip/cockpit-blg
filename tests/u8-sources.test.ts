@@ -73,7 +73,8 @@ test('U8 Meta : lecteur quotidien = campagne × jour, 7 jours clic / 1 jour vue 
   const insight = (campaign_id: string, actions?: { action_type: string; value: string }[]) => ({ account_id: '123', campaign_id, date_start: from, date_stop: from, spend: '12.34', impressions: '1000', inline_link_clicks: '40', unique_inline_link_clicks: '35', ...(actions ? { actions } : {}) });
   const fetcher = (async (input: URL | RequestInfo) => {
     const url = new URL(String(input)); urls.push(url);
-    const body = url.pathname.endsWith('/insights')
+    const body = url.pathname.endsWith('/insights') && url.searchParams.get('level') === 'account' ? { data: [] } // U8b : lecture niveau compte (u8-ctru)
+      : url.pathname.endsWith('/insights')
       ? { data: [
         insight(CURRENT, [{ action_type: 'landing_page_view', value: '30' }, { action_type: 'schedule', value: '9' }, { action_type: 'offsite_conversion.custom.2154825181913636', value: '2' }]),
         insight(OLD_A, [{ action_type: 'landing_page_view', value: '3' }]),

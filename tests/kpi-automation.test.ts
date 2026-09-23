@@ -83,3 +83,20 @@ test('source manifests survive JSONB object-key reordering without losing covere
  for(const row of memory.get('source_aggregates'))row.dimensions=reorder(row.dimensions);
  assert.equal((await readKpiSource(memory.db,'meta',namespace,from,to)).days.get(from)?.rows[0].data.spend_eur,10);
 });
+
+// U8b · budget Meta par passage : lectures séquentielles (jamais en parallèle), durée simulée sur une horloge virtuelle.
+test('U8b budget Meta : un passage KPI fait 9 lectures au lieu de 2 (7 de plus), l’une après l’autre ; durée simulée',async()=>{
+ const {readKpiMeta}=await import('../src/connectors/kpi-meta');
+ const latency=800;let calls=0,inFlight=0,maxInFlight=0,virtualMs=0;
+ const fetcher:typeof fetch=async input=>{
+  const url=new URL(String(input));calls++;inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);virtualMs+=latency;
+  await new Promise(resolve=>setImmediate(resolve));inFlight--;
+  return new Response(JSON.stringify(url.pathname.endsWith('/insights')?{data:[]}:{account_id:'123',currency:'EUR',timezone_name:'Europe/Paris'}));
+ };
+ const batch=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic'},fetcher);
+ assert.equal(calls,9,'identité + campagne × jour + compte × jour + 6 fenêtres');assert.equal(maxInFlight,1,'aucune lecture parallèle');
+ assert.equal(virtualMs,9*latency,'7,2 s simulées à 800 ms par lecture, contre 1,6 s avant U8b');
+ assert.equal(batch.windows?.length,6);
+ const none=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic',BLG_KPI_MASTERCLASS_CAMPAIGN_IDS:'pas-un-id'},fetcher);
+ assert.equal(none.windows,undefined,'aucune campagne Masterclass : aucune lecture de plus');
+});

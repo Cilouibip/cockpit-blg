@@ -33,3 +33,24 @@ test('ad report: a complete read is published atomically, an incomplete read is 
   else { assert.equal(result.coverage.complete, false); assert.deepEqual(calls, ['begin_sync_stream', 'import_meta_page', 'finish_sync'], 'lignes rejetées : aucune publication'); }
  }
 });
+
+test('U8b KPI Meta : le passage automatique lit aussi le jour en cours au niveau compte et les fenêtres finissant hier et aujourd’hui (Paris)', async () => {
+ const {synchronizeKpi}=await import('../src/lib/sync-kpi');
+ const {memoryKpiDatabase}=await import('./helpers/kpi-memory');
+ const {readKpiWindows}=await import('../src/lib/kpi-source-store');
+ const today=Temporal.Now.plainDateISO('Europe/Paris'),memory=memoryKpiDatabase();
+ const ranges:{level:string|null;daily:boolean;range:{since:string;until:string}}[]=[];
+ const fetcher:typeof fetch=async input=>{
+  const url=new URL(String(input));
+  if(url.pathname.endsWith('/insights')){ranges.push({level:url.searchParams.get('level'),daily:url.searchParams.get('time_increment')==='1',range:JSON.parse(url.searchParams.get('time_range')!)});return new Response(JSON.stringify({data:[]}));}
+  return new Response(JSON.stringify({account_id:'123',currency:'EUR',timezone_name:'Europe/Paris'}));
+ };
+ const result=await synchronizeKpi('meta',{db:memory.db,fetcher,env:{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic'}});
+ assert.equal(result.status,'complete');
+ assert.deepEqual(ranges.filter(r=>r.daily).map(r=>[r.level,r.range.until]),[['campaign',today.toString()],['account',today.toString()]]);
+ const windows=ranges.filter(r=>!r.daily).map(r=>`${r.range.since}→${r.range.until}`);
+ const expected=[today.subtract({days:1}),today].flatMap(end=>[3,7,30].map(length=>`${end.subtract({days:length-1})}→${end}`));
+ assert.deepEqual(windows,expected,'3, 7, 30 jours finissant hier puis aujourd’hui');
+ const stored=await readKpiWindows(memory.db,'meta','123');
+ assert.equal(stored.size,6);assert.ok([...stored.values()].every(w=>w.data===null),'fenêtre sans diffusion : lue vide, jamais une somme de jours');
+});

@@ -2,7 +2,8 @@ import { Temporal } from '@js-temporal/polyfill';
 import type { Database, Row } from './db';
 import type { DashboardFilters } from './ui-contract';
 import { KPI_ADDITIVE_FIELDS, KPI_BLOCKS, KPI_COUNT_FIELDS, KPI_FUNNEL_SCHEMA_VERSION, KPI_RATIO_KEYS, KPI_SUMMARY_KEYS, kpiCountReason, kpiFunnelSnapshotSchema, kpiRatios, type KpiBlockCoverage, type KpiCountField, type KpiFunnelDay, type KpiFunnelSnapshot, type KpiFunnelSummary, type KpiFunnelResponse, type KpiMeasures } from './kpi-funnel-contract';
-import { kpiDays, nextDay, pagedRows, readKpiSource, type KpiStoredSource } from './kpi-source-store';
+import { kpiDays, kpiWindowId, nextDay, pagedRows, readKpiSource, readKpiWindows, type KpiStoredSource, type KpiStoredWindow } from './kpi-source-store';
+import { KPI_MASTERCLASS_CAMPAIGNS, kpiAccountRowKey, kpiCampaignSetKey, kpiMasterclassCampaigns } from '../connectors/kpi-meta';
 import { canonicalRegistrationOrigins, observationOrigin, originMatchesSelection } from './ad-funnel';
 import { reconcileAcquisitionPeople } from './results-acquisition';
 import { isExcludedTestTraffic } from './traffic-scope';
@@ -15,8 +16,8 @@ import { refreshCadences, type SyncJob } from './sync-jobs';
 import { commerceReaderMode } from './config';
 import { KPI_DETAIL_COLUMNS, KPI_EXCEL_COLUMNS, frenchDay, parisMinute } from './kpi-funnel-export';
 
-// Campaign scope already used by the reviewed masterclass table, plus the explicitly prepared replacement campaign.
-export const KPI_MASTERCLASS_CAMPAIGNS = ['120248692698770714','120248692706180714','120248808857790714'];
+// Périmètre des campagnes Masterclass : défini avec le lecteur Meta (lectures niveau compte et fenêtres du même jeu).
+export { KPI_MASTERCLASS_CAMPAIGNS };
 const record = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 const complete = (row: Row) => ['complete','empty'].includes(String(row.status)) && row.pagination_complete === true && Number(row.rows_rejected ?? 0) === 0;
 const missing = () => Object.fromEntries(KPI_COUNT_FIELDS.map(key => [key, null])) as KpiMeasures;
@@ -28,6 +29,14 @@ const rowRatios = (values: KpiMeasures, blocks: KpiBlockCoverage, grain: 'day' |
  const { ratios, reasons } = kpiRatios(values, blocks, { grain, termReasons });
  const counts = Object.fromEntries(KPI_COUNT_FIELDS.filter(key => values[key] === null).map(key => [key, kpiCountReason(key, blocks, grain, termReasons[key])]));
  return { ratios, blocks, reasons: { ...counts, ...reasons } as Record<string,string> };
+};
+/** Comptes uniques Meta d'une ligne : publiés seulement s'ils ne dépassent pas les totaux de la même ligne (uniques ≤ clics lien,
+ * comptes touchés ≤ impressions) ; sinon non mesurés avec le motif. Renvoie les motifs des comptes laissés non mesurés. */
+const uniqueCounts = (values: KpiMeasures, unique: { reach: number | null; clicks: number | null } | null, missingReason: string): Partial<Record<KpiCountField,string>> => {
+ if (!unique || unique.reach === null || unique.clicks === null) return { meta_reach: missingReason, meta_unique_link_clicks: missingReason };
+ if ((values.impressions !== null && unique.reach > values.impressions) || (values.link_clicks !== null && unique.clicks > values.link_clicks)) { const reason = 'CTR unique non mesuré : lecture Meta incohérente (comptes uniques supérieurs aux totaux de la même période).'; return { meta_reach: reason, meta_unique_link_clicks: reason }; }
+ values.meta_reach = unique.reach; values.meta_unique_link_clicks = unique.clicks;
+ return {};
 };
 const isoParis = (value: string) => Temporal.Instant.from(value).toZonedDateTimeISO('Europe/Paris').toString({ timeZoneName: 'never', calendarName: 'never' });
 const freshThrough = (source: KpiStoredSource) => [...source.days.values()].map(v=>v.observedAt).sort()[0] ?? null;
@@ -44,7 +53,7 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
  const covers = (at: string | null | undefined, date: string) => !!at && (date === today ? Date.parse(startOfParisDay(date)) < Date.parse(at) : Date.parse(at) >= Date.parse(startOfParisDay(nextDay(date))));
  const failures: string[] = [];
  const source = async (kind: 'meta'|'posthog'|'wix', namespace: string | undefined) => { try { return await readKpiSource(db,kind,namespace,filters.from,to); } catch { failures.push(kind); return { days: new Map(), latestAttempt: null } as KpiStoredSource; } };
- const [meta, posthog, email, leadRows, prospects, runs, ads, links, appointments, commerce] = await Promise.all([
+ const [meta, posthog, email, leadRows, prospects, runs, ads, links, appointments, commerce, windows] = await Promise.all([
   source('meta',env.META_AD_ACCOUNT_ID?.replace(/^act_/,'')), source('posthog',env.POSTHOG_PROJECT_ID), source('wix',env.WIX_SITE_ID),
   pagedRows(db,'lead_source_observations',{eq:{is_current:'true'},order:'occurred_day,id'}),
   pagedRows(db,'prospects',{eq:env.NOTION_DATA_SOURCE_ID?{source:'notion',source_namespace:env.NOTION_DATA_SOURCE_ID}:undefined,order:'id',columns:['id','external_id','source','source_namespace','person_id','business','archived']}),
@@ -53,6 +62,7 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
   pagedRows(db,'link_revisions',{order:'id',columns:['id','campaign','medium','label']}),
   pagedRows(db,'appointments',{order:'id'}),
   readNotionCommerceReport(db,{...filters,source:'all',campaign:'',tunnel:'all'},env).catch(()=>null),
+  readKpiWindows(db,'meta',env.META_AD_ACCOUNT_ID?.replace(/^act_/,'')).catch(()=>{failures.push('meta (fenêtres)');return new Map<string,KpiStoredWindow>();}),
  ]);
  const completeRuns = runs.filter(complete), runById = new Map(completeRuns.map(r=>[r.id,r]));
  const latest = (stream: string, namespace?: string) => completeRuns.filter(r=>r.stream_key===stream&&(!namespace||r.source_namespace===namespace)).sort((a,b)=>String(b.finished_at).localeCompare(String(a.finished_at)))[0];
@@ -80,7 +90,7 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
  const clientPeople=new Map([...clientCandidates].filter(([,ids])=>ids.size===1).map(([key,ids])=>[key,[...ids][0]]));
  const cohortPayments = (commerce?.paidSales?.details??[]).filter(p=>p.clientIds.length===1&&people.has(clientPeople.get(p.clientIds[0])??''));
  const moneyAvailable = cohortComplete&&!!notionRun&&!!clientsRun&&!!commerce?.available&&!!commerce.paidSales;
- const campaigns = (env.BLG_KPI_MASTERCLASS_CAMPAIGN_IDS?.trim()||undefined)?.split(',').map(v=>v.trim()).filter(v=>/^\d+$/.test(v)) ?? KPI_MASTERCLASS_CAMPAIGNS;
+ const campaigns = kpiMasterclassCampaigns(env);
  const metaCampaigns = filters.campaign.startsWith('meta:') ? [filters.campaign.slice(5)] : campaigns;
  const metaSupported = ['all','paid'].includes(filters.source)&&(!filters.campaign||filters.campaign==='all'||filters.campaign.startsWith('meta:'));
  const unlinked=requests.filter(r=>!(r.identity_state==='linked'&&r.person_id)).length;
@@ -109,7 +119,11 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
    commerce:formsAvailable&&!!notionRun&&!!clientsRun&&!!commerce?.available&&!!commerce.paidSales&&[commerceAt,clientsAt,formsAt,notionAt].every(at=>covers(at,date)),
    posthog:!!ph&&covers(ph.observedAt,date),
   };
-  if(blocks.meta){const rows=metaDay!.rows.filter(r=>metaCampaigns.includes(String(r.data.campaignId)));for(const key of ['spend_eur','impressions','link_clicks','unique_link_clicks_campaign_sum','landing_page_views','booking_meta_attributed','outbound_clicks'] as const)values[key]=rows.length?sum(rows.map(r=>number(r.data[key]))):null;if(!rows.length)for(const key of ['spend_eur','impressions','link_clicks'] as const)termReasons[key]='Non mesuré : aucune ligne des campagnes Masterclass lue pour ce jour (jamais zéro).';termReasons.meta_reach=reachReason;termReasons.meta_unique_link_clicks=reachReason;}
+  if(blocks.meta){const rows=metaDay!.rows.filter(r=>metaCampaigns.includes(String(r.data.campaignId)));for(const key of ['spend_eur','impressions','link_clicks','unique_link_clicks_campaign_sum','landing_page_views','booking_meta_attributed','outbound_clicks'] as const)values[key]=rows.length?sum(rows.map(r=>number(r.data[key]))):null;if(!rows.length)for(const key of ['spend_eur','impressions','link_clicks'] as const)termReasons[key]='Non mesuré : aucune ligne des campagnes Masterclass lue pour ce jour (jamais zéro).';
+   // CTRU du jour : comptes uniques du niveau compte (dédoublonnés entre campagnes) ; pour une seule campagne, sa propre ligne. Jamais une somme d'uniques.
+   const account=metaDay!.rows.find(r=>r.key===kpiAccountRowKey(metaCampaigns)),single=metaCampaigns.length===1&&rows.length===1?rows[0]:null;
+   const unique=account?{reach:number(account.data.reach),clicks:number(account.data.unique_link_clicks)}:single?{reach:number(single.data.reach),clicks:number(single.data.unique_link_clicks_campaign_sum)}:null;
+   Object.assign(termReasons,uniqueCounts(values,unique,reachReason));}
   if(blocks.forms){const day=requestsOn(date,date);values.wix_form_submission_occurrences=day.length;values.registrants=distinctContacts(day);if(values.registrants===null)termReasons.registrants=identityReason;}
   if(blocks.posthog){const rows=ph!.rows.filter(r=>!isExcludedTestTraffic({includeTests},r.data)&&matches(observationOrigin({origin:{...r.data,linkId:r.data.link},firstTouch:null})));values.booking_clicks=rows.filter(r=>r.data.kind==='click').reduce((n,r)=>n+Number(r.data.sessions),0);values.booking_confirmed_browser=rows.filter(r=>r.data.kind==='confirmed').reduce((n,r)=>n+Number(r.data.sessions),0);}
   if(cohortComplete&&blocks.notion){
@@ -140,7 +154,11 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
   // Inscrits : contacts distincts de toute la fenêtre, jamais la somme des jours.
   values.registrants=days.every(d=>d.registrants!==null)?distinctContacts(requestsOn(from,lastDay)):null;
   for(const field of KPI_COUNT_FIELDS)if(values[field]===null){const reason=days.find(d=>d.reasons[field])?.reasons[field];if(reason)termReasons[field]=reason;}
-  termReasons.meta_reach=termReasons.meta_unique_link_clicks='CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours).';
+  // CTRU du récapitulatif : lecture Meta de la fenêtre entière (dates égales, même jeu de campagnes), jamais une moyenne ni une somme de jours.
+  const window=windows.get(kpiWindowId(from,nextDay(lastDay),kpiCampaignSetKey(metaCampaigns)));
+  const windowReason=!window?'CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours).':!covers(window.observedAt,lastDay)?'CTR unique non mesuré : la lecture de la fenêtre précède la fin de son dernier jour.':!blocks.meta?'CTR unique non mesuré : Diffusion Meta ne couvre pas toute la fenêtre.':null;
+  if(windowReason){termReasons.meta_reach=termReasons.meta_unique_link_clicks=windowReason;}
+  else Object.assign(termReasons,uniqueCounts(values,window!.data?{reach:number(window!.data.reach),clicks:number(window!.data.unique_link_clicks)}:values.impressions===0?{reach:0,clicks:0}:null,'CTR unique non mesuré : la lecture de la fenêtre ne donne pas les comptes uniques (ou aucune diffusion alors que les jours en montrent).'));
   return {key,label,from,to:lastDay,within_period:true,partial_day:days.some(d=>d.partial_day)?'Inclut la journée en cours ou à venir':null,...values,...rowRatios(values,blocks,'window',termReasons)};
  });
  const totals = {...Object.fromEntries(KPI_COUNT_FIELDS.map(field=>[field,summaries[0][field]])) as KpiMeasures,wix_distinct_contacts:null as number|null,wix_repeat_occurrences:null as number|null};
@@ -158,6 +176,9 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
   coverage.push({field_group,status:available?'available':'missing',...(through?{through,stale:dated.some(p=>Date.parse(now)-Date.parse(p.at)>=cadences[p.job])}:{}),reason,...(detail?{detail}:{}),...(attempt?{last_attempt:String(attempt.started_at),...(attempt.status==='failed'?{last_error:String(attempt.error_code??'SYNC_UNIT_FAILED')}:{})}:{})});
  };
  cover('Diffusion Meta',[{at:freshThrough(meta),job:'kpi_meta'}],metaSupported&&daily.every(r=>r.spend_eur!==null),metaSupported?'Campagnes masterclass identifiées ; absence de ligne différente de zéro.':'Ce filtre ne permet pas de répartir la dépense campagne. Les mesures Meta restent non mesurées.',meta.latestAttempt);
+ const setWindows=[...windows.values()].filter(w=>w.key===kpiCampaignSetKey(metaCampaigns)).sort((a,b)=>a.to.localeCompare(b.to)||a.from.localeCompare(b.from));
+ const ends=[...new Set(setWindows.map(w=>frenchDay(Temporal.PlainDate.from(w.to).subtract({days:1}).toString())))];
+ cover('Fenêtres Meta (CTR unique)',[{at:setWindows.map(w=>w.observedAt).sort()[0]??null,job:'kpi_meta'}],metaSupported&&setWindows.length>0,setWindows.length?`Lectures Meta de la fenêtre entière (niveau compte, campagnes Masterclass) : ${[...new Set(setWindows.map(w=>Temporal.PlainDate.from(w.from).until(Temporal.PlainDate.from(w.to)).days))].sort((a,b)=>a-b).join(', ')} jours finissant le ${ends.join(' et le ')}. Un récapitulatif sans fenêtre lue reste non mesuré, jamais une moyenne ni une somme de jours.`:'Aucune fenêtre lue à la source pour ce jeu de campagnes : CTR unique des récapitulatifs non mesuré.');
  cover('Occurrences du formulaire Wix',[{at:formsAt,job:'forms'}],formsAvailable,'Formulaire de la masterclass actuelle ; occurrences et contacts distincts restent séparés.');
  cover('Clics bilan et confirmations navigateur',[{at:freshThrough(posthog),job:'kpi_posthog'}],daily.every(r=>r.booking_clicks!==null),'Sessions, première origine et essais explicites ; ce ne sont pas des rendez-vous réalisés.',posthog.latestAttempt);
  cover('Rendez-vous et présence',[{at:notionAt,job:'notion'},{at:formsAt,job:'forms'}],cohortComplete&&!!notionRun,`${people.size} contacts raccordés pour ${identities.size} contacts distincts de la période.`,null,cohortNote);
