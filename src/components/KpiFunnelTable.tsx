@@ -11,6 +11,7 @@ const count = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
 const money = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const percent = new Intl.NumberFormat('fr-FR', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 2 });
 const multiple = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const unitCost = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const day = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' });
 const instant = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
 
@@ -26,7 +27,7 @@ function cellContent(row: KpiRow, column: Pick<KpiColumn,'id'|'format'|'field'|'
   const value = kpiCellValue(row, column), reason = kpiCellReason(row, column) ?? undefined;
   if (value === 'na') return <span className="kpi-funnel-na" title={reason}>Sans objet</span>;
   if (value === null) return <span className="kpi-funnel-missing" title={reason}>Non mesuré</span>;
-  return column.format === 'money' ? money.format(value) : column.format === 'percent' ? percent.format(value) : column.format === 'multiple' ? multiple.format(value) : count.format(value);
+  return column.format === 'money' ? (column.ratio ? unitCost : money).format(value) : column.format === 'percent' ? percent.format(value) : column.format === 'multiple' ? multiple.format(value) : count.format(value);
 }
 
 const groupSize = (group: KpiGroupKey) => KPI_EXCEL_COLUMNS.filter(column => column.group === group).length;

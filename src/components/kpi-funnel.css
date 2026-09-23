@@ -106,7 +106,7 @@
 #atelier-a .kpi-funnel .kpi-g-offres { --kpi-group-color:var(--kpi-offres); }
 #atelier-a .kpi-funnel .kpi-g-ventes { --kpi-group-color:var(--kpi-ventes); }
 #atelier-a .kpi-funnel-excel td[class*="kpi-g-"],#atelier-a .kpi-funnel-excel thead tr:last-child th[class*="kpi-g-"] { background:color-mix(in srgb,var(--kpi-group-color) 5%,var(--a-paper)); }
-#atelier-a .kpi-funnel-excel thead .kpi-group-heading { background:color-mix(in srgb,var(--kpi-group-color) 16%,white); }
+#atelier-a .kpi-funnel-excel thead .kpi-group-heading { background:color-mix(in srgb,var(--kpi-group-color) 16%,white); text-align:left; }
 #atelier-a .kpi-funnel-excel .kpi-funnel-summary td[class*="kpi-g-"] { background:color-mix(in srgb,var(--kpi-group-color) 12%,white); }
 #atelier-a .kpi-funnel-excel .kpi-funnel-summary th,#atelier-a .kpi-funnel-excel .kpi-funnel-summary td { padding-block:12px; border-bottom:1px solid #cfd3dc; }
 #atelier-a .kpi-funnel-excel .kpi-summary-last_7_days th,#atelier-a .kpi-funnel-excel .kpi-summary-last_7_days td { border-bottom:2px solid #aeb3bf; }
