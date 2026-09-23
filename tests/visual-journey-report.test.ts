@@ -206,10 +206,11 @@ test('une lecture récente antérieure à une inscription ne prouve pas zéro re
  fixture.freshness.appointments={observedAt:'2026-09-18T11:41:00Z',coveredThrough:'2026-09-18T11:40:00Z',status:'available',reason:null};
  const report=buildVisualJourneyReport(fixture);assert.equal(report.booking.booked.count,null);
  // Option A : l'inscription de 11:50, postérieure à la couverture Wix (10:31), sort des deux termes du taux inscription → vidéo.
+ // U6b : la couverture de ce taux est min(Wix 10:31, lecture PostHog 12:00) = 10:31 ; le motif nomme les deux sources.
  assert.equal(report.form.registered.count,1,'le compteur garde toute la sélection');
  assert.equal(report.stages[3].fromPrevious?.rate,null);
  assert.equal(report.stages[3].fromPrevious?.excludedAfterCoverage,1);
- assert.match(report.stages[3].fromPrevious?.reason??'',/Aucune activité antérieure à la couverture des inscriptions du 18 sept\. 2026, 12:31/);
+ assert.match(report.stages[3].fromPrevious?.reason??'',/Aucune activité antérieure à la couverture des inscriptions et de la lecture navigateur du 18 sept\. 2026, 12:31/);
  assert.equal(report.stages[4].fromPrevious?.rate,null,'sans inscrit relié à une vidéo postérieure, aucun taux RDV');
 });
 

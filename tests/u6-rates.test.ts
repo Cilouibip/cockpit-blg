@@ -24,19 +24,19 @@ const minuteLater = (hhmm: string) => at(`${hhmm.slice(0, 3)}${String(Number(hhm
 type Freshness = VisualJourneyReport['freshness']['wix'];
 const covered = (coveredThrough: string | null, status: Freshness['status'] = 'available', reason: string | null = null): Freshness => ({ observedAt: coveredThrough, coveredThrough, status, reason });
 
-function threePeople(): VisualJourneyProjectionInput {
+function threePeople(people: Plan[] = PLAN): VisualJourneyProjectionInput {
   const input = visualJourneyFixture();
   const browser = input.browser![0], registration = input.registrations![0];
-  input.browser = PLAN.map((plan, index) => ({
+  input.browser = people.map((plan, index) => ({
     ...browser, browserId: `browser-${index}`, visitorId: VISITORS[index], sessionId: `session-${index}`, firstSeenAt: at(plan.open), lastSeenAt: at(plan.open),
     pageAt: at(plan.open), ctaAt: null, formOpenAt: at(plan.open), formStartAt: minuteLater(plan.open), videoStartAt: plan.video && at(plan.video),
     bookingClickAt: plan.calendar && at(plan.calendar), bookingOpenAt: plan.calendar && at(plan.calendar), sections: ['hero'], ctaPlacements: [],
   }));
-  input.registrations = PLAN.flatMap((plan, index) => plan.registered ? [{
+  input.registrations = people.flatMap((plan, index) => plan.registered ? [{
     ...registration, id: `registration-${index}`, personId: `person-${index}`, occurredAt: at(plan.registered), publishedAt: at(plan.registered),
     origin: { ...registration.origin, visitor: VISITORS[index], session: `session-${index}` },
   }] : []);
-  input.appointments = PLAN.flatMap((plan, index) => plan.booked ? [{ id: `booking-${index}`, personId: `person-${index}`, bookedAt: at(plan.booked), status: 'unknown', observedAt: input.generatedAt }] : []);
+  input.appointments = people.flatMap((plan, index) => plan.booked ? [{ id: `booking-${index}`, personId: `person-${index}`, bookedAt: at(plan.booked), status: 'unknown', observedAt: input.generatedAt }] : []);
   input.freshness = { posthog: covered(at('11:30')), wix: covered(at('10:00')), appointments: covered(at('10:00')) };
   return input;
 }
@@ -176,4 +176,92 @@ test('U6 (g) Résultats affiche la base de date de chaque compteur de rendez-vou
   const source = readFileSync(new URL('../src/components/ResultsPage.tsx', import.meta.url), 'utf8');
   assert.match(source, /<th>RDV réservés<\/th>[\s\S]*<th>RDV réalisés<\/th>/, 'le tableau garde ses en-têtes, sans colonne ajoutée');
   assert.match(source, /RDV réservés par date de réservation, RDV réalisés par date du créneau[^<]*un écart entre les deux n’est pas une erreur\./);
+});
+
+// U6b : le taux inscription → vidéo est borné par min(W, heure de LECTURE PostHog), car son numérateur dépend
+// de cette lecture. A s'inscrit et démarre la vidéo avant la lecture ; B ouvre le formulaire avant la lecture
+// (08:50, début 08:51 : dernier événement observé) mais s'inscrit à 09:30, après la lecture de 09:00 et avant
+// W (10:00) : son éventuel démarrage vidéo n'est pas encore lu.
+const READ_PLAN: Plan[] = [
+  { open: '08:00', registered: '08:05', video: '08:10', calendar: '08:20', booked: '08:25' },
+  { open: '08:50', registered: '09:30', video: null, calendar: null, booked: null },
+];
+function readBeforeWix(observedAt: string | null = at('09:00')): VisualJourneyProjectionInput {
+  const input = threePeople(READ_PLAN);
+  input.freshness.posthog = { observedAt, coveredThrough: at('08:51'), status: 'available', reason: null };
+  return input;
+}
+const journeyHtml = (input: VisualJourneyProjectionInput) => renderToStaticMarkup(createElement(VisualJourneyView, { report: buildVisualJourneyReport(input) }));
+
+test('U6b (h) lecture PostHog antérieure à la couverture Wix : l’inscrit postérieur à la lecture sort des deux termes, heure = lecture', () => {
+  for (const observedAt of [at('09:00'), '2026-09-18T11:00:00+02:00']) {
+    const report = buildVisualJourneyReport(readBeforeWix(observedAt));
+    // Sans la correction : 1 sur 2 à 10:00, B compté comme « n'a pas regardé » (contraire à D3).
+    assert.deepEqual(report.stages[3].fromPrevious, optionA(1, 1, at('09:00'), 1), `inscription → vidéo : 1 sur 1 à l'heure de lecture (${observedAt})`);
+    assert.deepEqual(report.stages.map(stage => stage.count), [2, 2, 2, 1, 1], 'les compteurs gardent toute la sélection');
+    // Les quatre autres taux (population définie par un événement PostHog lu) et les taux navigateur ne changent pas.
+    assert.deepEqual(report.stages[2].fromPrevious, optionA(2, 2, at('10:00'), 0));
+    assert.deepEqual(report.form.rates.registeredFromStarted, optionA(2, 2, at('10:00'), 0));
+    assert.deepEqual(report.stages[4].fromPrevious, optionA(1, 1, at('10:00'), 0));
+    assert.deepEqual(report.booking.rates.bookedFromCalendar, optionA(1, 1, at('10:00'), 0));
+    assert.deepEqual(report.stages[1].fromPrevious, optionA(2, 2, at('08:51'), 0), 'taux navigateur : dernier événement observé, inchangé');
+  }
+  // Tous les inscrits postérieurs à la lecture : indisponible avec l'heure, jamais 0 %.
+  const late = readBeforeWix(at('08:00'));
+  assert.deepEqual(buildVisualJourneyReport(late).stages[3].fromPrevious, { numerator: 0, denominator: 0, rate: null, available: false, reason: 'Aucune activité antérieure à la couverture des inscriptions et de la lecture navigateur du 18 sept. 2026, 10:00.', coveredThrough: at('08:00'), excludedAfterCoverage: 2 });
+});
+
+test('U6b (i) lecture PostHog postérieure ou égale à la couverture Wix : résultat inchangé, heure = W, jamais le dernier événement observé', () => {
+  // B ne démarre pas la vidéo avant la lecture de 10:30 : son absence est prouvée jusqu'à W = 10:00.
+  for (const observedAt of [at('10:30'), at('10:00')]) {
+    const report = buildVisualJourneyReport(readBeforeWix(observedAt));
+    assert.deepEqual(report.stages[3].fromPrevious, optionA(1, 2, at('10:00'), 0), `lecture ${observedAt} : le dernier événement observé (08:51) ne borne pas la population`);
+  }
+  // Scénario U6 (a), lecture PostHog à 11:30 : identique à la livraison U6.
+  assert.deepEqual(buildVisualJourneyReport(threePeople()).stages[3].fromPrevious, optionA(1, 1, at('10:00'), 1));
+});
+
+test('U6b (j) heure de lecture PostHog inconnue avec navigateur disponible : taux inscription → vidéo indisponible avec un motif navigateur', () => {
+  for (const observedAt of [null, 'pas une date']) {
+    const report = buildVisualJourneyReport(readBeforeWix(observedAt));
+    assert.deepEqual(report.stages[3].fromPrevious, { numerator: null, denominator: 2, rate: null, available: false, reason: "L'heure de lecture navigateur est inconnue.", coveredThrough: null, excludedAfterCoverage: 0 }, String(observedAt));
+    assert.equal(report.stages[3].count, 1, 'le compteur de démarrages vidéo reste lisible');
+    assert.deepEqual(report.stages[2].fromPrevious, optionA(2, 2, at('10:00'), 0), 'les autres taux ne dépendent pas de l’heure de lecture');
+    assert.deepEqual(report.stages[4].fromPrevious, optionA(1, 1, at('10:00'), 0));
+  }
+  // Navigateur absent : motif navigateur existant, inchangé.
+  const absent = readBeforeWix(null); absent.browser = null; absent.browserError = 'Visites illisibles.';
+  assert.equal(buildVisualJourneyReport(absent).stages[3].fromPrevious?.reason, 'Visites illisibles.');
+});
+
+test('U6b (k) la vue reflète la plus ancienne couverture : heure de lecture PostHog quand elle précède W', () => {
+  let html = journeyHtml(readBeforeWix());
+  assert.match(html, /1 sur 1 : 100 % · activités jusqu’au 18 sept\. 2026, 11:00 ; 1 personne plus récente hors taux/, 'flèche inscription → vidéo à l’heure de lecture (09:00 UTC)');
+  assert.doesNotMatch(html, /1 sur 2 : 50 %/);
+  // Règle U6 inchangée : la ligne prend la plus ancienne couverture des taux disponibles, ici celle des taux navigateur (dernier événement 08:51 UTC).
+  assert.match(html, /class="journey-rate-coverage">Taux : activités jusqu’au 18 sept\. 2026, 10:51\./);
+  // Isolation : sans taux navigateur disponible, la plus ancienne couverture est celle du taux inscription → vidéo, donc P et non W.
+  const isolated = readBeforeWix();
+  for (const row of isolated.browser!) Object.assign(row, { pageAt: null, formOpenAt: null, formStartAt: null, bookingClickAt: null });
+  html = journeyHtml(isolated);
+  assert.match(html, /class="journey-rate-coverage">Taux : activités jusqu’au 18 sept\. 2026, 11:00\. Compteurs : lecture du 18 sept\. 2026, 14:00\.</);
+});
+
+test('U6b (l) 0 % sur la population couverte avec « S’inscrivent » à « — » : le compteur porte un motif qui nomme la mise à jour des inscriptions', () => {
+  // Deux ouvertures du formulaire avant W (10:00) sans inscription, une après : zéro inscrit, couverture Wix incomplète sur la sélection.
+  const zeroSignup = () => threePeople(['08:00', '09:00', '11:00'].map(open => ({ open, registered: null, video: null, calendar: null, booked: null })));
+  const report = buildVisualJourneyReport(zeroSignup());
+  const signup = report.stages[2];
+  assert.equal(signup.count, null, 'compteur « — »');
+  assert.equal(signup.availability.available, false);
+  assert.equal(signup.availability.reason, 'Les inscriptions attendent une mise à jour couvrant les formulaires de cette sélection.');
+  assert.match(signup.availability.reason ?? '', /inscriptions/); assert.match(signup.availability.reason ?? '', /mise à jour couvrant/);
+  assert.deepEqual(signup.fromPrevious, optionA(0, 2, at('10:00'), 1), 'le taux porte l’heure et la personne plus récente hors taux');
+  assert.deepEqual(report.form.rates.registeredFromStarted, optionA(0, 2, at('10:00'), 1));
+  const rates = [...report.stages.map(stage => stage.fromPrevious), report.form.rates.startedFromOpened, report.form.rates.registeredFromStarted, report.booking.rates.calendarFromClicked, report.booking.rates.bookedFromCalendar, ...report.video.thresholds.map(row => row.fromStarted)];
+  for (const rate of rates) if (rate?.rate === 0) assert.ok((rate.denominator ?? 0) > 0, 'aucun 0 % sur une population vide');
+  assert.equal(report.stages[3].fromPrevious?.rate, null, 'aucun inscrit : inscription → vidéo indisponible, pas 0 %');
+  const html = journeyHtml(zeroSignup());
+  assert.match(html, /<strong title="Les inscriptions attendent une mise à jour couvrant les formulaires de cette sélection\.">—<\/strong>/, 'le motif du compteur est porté en info-bulle');
+  assert.match(html, /0 sur 2 : 0 % · activités jusqu’au 18 sept\. 2026, 12:00 ; 1 personne plus récente hors taux/);
 });
