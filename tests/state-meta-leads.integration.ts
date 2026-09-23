@@ -151,7 +151,8 @@ test('synchronizeMetaAds de bout en bout (double de l’API Meta) : deux passage
   assert.equal(first.status, 'complete');const rows = await n('ad_daily', inNs('333'));assert.equal(rows, 4);
   const second = await synchronizeMetaAds('2026-09-10', '2026-09-12', { db, env, fetcher });
   assert.equal(second.status, 'complete');assert.equal(await n('ad_daily', inNs('333')), 4, 'aucune ligne de plus');
-  assert.equal((await view('333')).every(row => row.sync_run_id === second.runId), true);
+  const read = await view('333');assert.equal(read.length, 4, 'v_ad_daily lit les quatre lignes confirmées');
+  assert.equal(read.every(row => row.sync_run_id === second.runId), true);
   assert.equal((await one('SELECT checkpoint->\'state\'->>\'confirmed\' AS c FROM sync_runs WHERE id=$1', [second.runId])).c, '4');
 });
 
