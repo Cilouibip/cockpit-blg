@@ -60,18 +60,19 @@ const block = (snapshot: KpiFunnelSnapshot, group: string) => snapshot.coverage.
 
 test('U8 fraîcheur : l’état « ancien » suit la cadence réelle de chaque flux, pas un seuil fixe d’une heure', async () => {
   assert.equal(refreshCadences(withCadence('30')).kpi_meta, 30 * 60_000, 'précondition : flux pilotes à 30 minutes après bascule');
-  assert.equal(refreshCadences(withCadence('30')).notion, 60 * 60_000, 'précondition : Notion reste à une heure');
+  assert.equal(refreshCadences(withCadence('30')).notion, 30 * 60_000, 'précondition : rendez-vous Notion à 30 minutes après bascule (U9, inventaire tournant)');
   const pilot30 = await snapshotFor(withCadence('30'));
   // Meta et email lus il y a 45 min : anciens à 30 min, à jour à 60 min.
   assert.equal(block(pilot30, 'Diffusion Meta').stale, true);
   assert.equal(block(pilot30, 'Activité email').stale, true);
   assert.equal(block(pilot30, 'Clics bilan et confirmations navigateur').stale, false, 'lu il y a 15 min');
   assert.equal(block(pilot30, 'Occurrences du formulaire Wix').stale, false, 'lu il y a 20 min');
-  // Notion lu il y a 45 min reste à jour (cadence d'une heure) même quand les flux pilotes passent à 30 min.
-  assert.equal(block(pilot30, 'Rendez-vous et présence').stale, false);
+  // Notion lu il y a 45 min : ancien à 30 min (flux pilote depuis U9), à jour à 60 min.
+  assert.equal(block(pilot30, 'Rendez-vous et présence').stale, true);
   const hourly = await snapshotFor(withCadence('60'));
   assert.equal(block(hourly, 'Diffusion Meta').stale, false);
   assert.equal(block(hourly, 'Activité email').stale, false);
+  assert.equal(block(hourly, 'Rendez-vous et présence').stale, false);
   const lateNotion = await snapshotFor(withCadence('30'), { notion: 75 });
   assert.equal(block(lateNotion, 'Rendez-vous et présence').stale, true, 'Notion au-delà d’une heure');
   const lateForms = await snapshotFor(withCadence('30'), { forms: 35, notion: 10 });

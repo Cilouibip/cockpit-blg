@@ -68,7 +68,7 @@ test('route du tick (base par défaut) : base injoignable pendant la réclamatio
 });
 
 // Garde de la demi-heure sur le chemin réel de la route (réserve Codex 3) : réglage 30, publicités par jour (flux Masterclass)
-// et deux flux horaires publiés à 10:00:05 ; passage à 10:40. À 30, seul ad_daily est dû ; à 60, rien.
+// et deux flux publiés à 10:00:05 ; passage à 10:40. À 30, ad_daily et les rendez-vous Notion (flux pilote depuis U9) sont dus ; à 60, rien.
 const STREAMS: Partial<Record<SyncJob, string>> = { notion: 'prospects_business', meta: 'meta_account_daily', meta_ads: 'ad_daily' };
 const at40 = (executed: string[]) => ({ ...options(executed), now: () => Date.parse('2026-09-23T10:40:00Z') });
 function journal(settings: NodeJS.ProcessEnv, query: URLSearchParams) {
@@ -84,7 +84,7 @@ test('route du tick (base par défaut) : réglage 30 et bail pris, la demi-heure
   const summary = await tickSyncJobs(undefined, settings, at40(executed));
   assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: 90 });
   assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
-  assert.deepEqual(executed, ['meta_ads'], 'seul le flux Masterclass publié il y a 40 minutes est relu');
+  assert.deepEqual([...new Set(executed)].sort(), ['meta_ads', 'notion'], 'seuls les flux Masterclass publiés il y a 40 minutes sont relus (publicités par jour, rendez-vous Notion depuis U9)');
 });
 test('route du tick (base par défaut) : réglage 30 et fonction du bail inconnue (PGRST202), cadence 60 appliquée et signalée', async () => {
   requests.length = 0;const executed: string[] = [], settings = { ...process.env, BLG_REFRESH_CADENCE_MINUTES: '30', META_AD_ACCOUNT_ID: 'synthetic-meta' } as NodeJS.ProcessEnv;

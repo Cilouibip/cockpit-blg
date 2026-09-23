@@ -150,7 +150,7 @@ Modèle « préparation puis publication atomique » :
 
 ### 5.1 Prérequis
 
-1. Migrations 017, 018, 019 et 020 appliquées AVANT le déploiement du code de ce lot (le code appelle `cockpit_publish_aggregate_state`, `cockpit_publish_meta_daily`, `cockpit_cleanup_staged` et lit `is_current` ; sans 019, le tick signale seulement `cleanup.error` = `schema_missing`). Contrôle : `SELECT version, applied_at FROM cockpit_migrations WHERE version IN (17, 18, 19);` renvoie trois lignes. Relevé 6.6 enregistré juste avant et juste après la migration 018 (la reprise ne supprime rien).
+1. Migrations 017, 018, 019, 020 et 021 appliquées AVANT le déploiement du code de ce lot (le code appelle `cockpit_publish_aggregate_state`, `cockpit_publish_meta_daily`, `cockpit_cleanup_staged` et lit `is_current` ; sans 019, le tick signale seulement `cleanup.error` = `schema_missing`). Contrôle : `SELECT version, applied_at FROM cockpit_migrations WHERE version IN (17, 18, 19);` renvoie trois lignes. Relevé 6.6 enregistré juste avant et juste après la migration 018 (la reprise ne supprime rien).
 2. Ce lot relu, fusionné et déployé en production sans `BLG_REFRESH_CADENCE_MINUTES` (ou avec `60`) : cadence horaire, mêmes flux. Contrôle : `cadence.pilotMinutes` = 60, `lock.kind` = `shared` et `cleanup.deleted` présent dans la réponse d'un passage.
 3. Valeur de `CRON_SECRET` : celle de Vercel Production, au moins 32 caractères. Si elle n'est pas relisible, en créer une nouvelle et la poser au même moment dans Vercel (puis redéployer), dans le secret GitHub `CRON_SECRET` (recours manuel) et dans Vault (étape 5.2.2).
 4. Quotas du plan Vercel relevés (page Usage) : estimation 720 appels par jour, environ 5 à 10 minutes de fonction active par heure. Repère Hobby : 1 000 000 d'appels, 4 h de CPU actif et 360 Go-heures de mémoire par mois. Aucune dépense nouvelle attendue sur Supabase (extensions incluses).
@@ -165,7 +165,7 @@ Modèle « préparation puis publication atomique » :
 5. Dans les minutes qui suivent : section E, `cron.schedule('cockpit-refresh-tick', '*/2 * * * *', ...)`. Facultatif : la tâche de purge de l'historique pg_cron à 7 jours.
 6. Contrôle des trois premières exécutions : section F (`cron.job_run_details`, `net._http_response`).
 7. Observation à cadence horaire (au moins 24 heures) : chaque flux publié dans l'heure (6.1, 6.2), `lock.kind` = `shared` sur toutes les réponses, 6.6 sans croissance des tables métier pour une source inchangée.
-8. Activation de 30 minutes, seulement si les trois conditions de la section 2 sont constatées : `BLG_REFRESH_CADENCE_MINUTES=30` en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 et aucun `cadence.requestedMinutes` dans `net._http_response` (sinon la demi-heure n'est pas appliquée : bail partagé indisponible).
+8. Activation de 30 minutes, seulement si les quatre conditions de la section 2 (dont la migration 021, inventaire Notion tournant) sont constatées : `BLG_REFRESH_CADENCE_MINUTES=30` en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 et aucun `cadence.requestedMinutes` dans `net._http_response` (sinon la demi-heure n'est pas appliquée : bail partagé indisponible).
 9. Observation 24 à 48 heures (section 6), puis décision.
 
 ### 5.3 Modification exacte de `.github/workflows/hourly-sync.yml` (au moment de l'étape 5.2.4)
