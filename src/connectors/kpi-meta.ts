@@ -72,7 +72,8 @@ export async function readKpiMeta(from: string, to: string, env: NodeJS.ProcessE
   const paging = payload.paging ? object(payload.paging) : {};
   if (!paging.next) {
    const campaigns = [...kpiMasterclassCampaigns(env)].sort();
-   if (!campaigns.length) return { from, to, observedAt, rows };
+   // Interrupteur serveur : BLG_KPI_META_UNIQUE_READS=off supprime les 7 lectures de plus (CTRU non mesuré, dépense inchangée).
+   if (!campaigns.length || env.BLG_KPI_META_UNIQUE_READS === 'off') return { from, to, observedAt, rows };
    // Niveau compte, filtré sur les campagnes Masterclass : un compte touché par deux campagnes compte une fois.
    const unique = async (range: { since: string; until: string }, daily: boolean) => {
     const url = new URL(`https://graph.facebook.com/${version}/act_${accountId}/insights`);

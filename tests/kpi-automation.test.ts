@@ -99,4 +99,6 @@ test('U8b budget Meta : un passage KPI fait 9 lectures au lieu de 2 (7 de plus),
  assert.equal(batch.windows?.length,6);
  const none=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic',BLG_KPI_MASTERCLASS_CAMPAIGN_IDS:'pas-un-id'},fetcher);
  assert.equal(none.windows,undefined,'aucune campagne Masterclass : aucune lecture de plus');
+ calls=0;const off=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic',BLG_KPI_META_UNIQUE_READS:'off'},fetcher);
+ assert.equal(calls,2,'interrupteur serveur : retour aux deux lectures d’avant U8b');assert.equal(off.windows,undefined);
 });
