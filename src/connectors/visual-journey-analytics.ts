@@ -2,7 +2,7 @@ import { Temporal } from '@js-temporal/polyfill';
 import type { Database, Row, TableName } from '../lib/db';
 import type { SourceFilter } from '../lib/ui-contract';
 import { isExcludedTestTraffic } from '../lib/traffic-scope';
-import type { VisualJourneyReport } from '../lib/visual-journey-contract';
+import type { VisualJourneyPostHogTiming, VisualJourneyQueryOutcome, VisualJourneyReport } from '../lib/visual-journey-contract';
 import {
   buildVisualJourneyReport,
   VISUAL_JOURNEY_FORM_ID,
@@ -41,7 +41,12 @@ export interface VisualJourneyAnalyticsConfig extends PostHogConfig {
   now?: () => string;
   resumeBrowser?: VisualJourneyContinuation;
   onBrowserContinuation?: (state: VisualJourneyContinuation) => void;
+  /** Receives one line of durations and statuses per read. Defaults to console.info. */
+  log?: (line: string) => void;
 }
+
+const QUERY_KINDS = ['identity', 'overview'] as const;
+type QueryKind = typeof QUERY_KINDS[number];
 
 const literal = (value: string) => `'${value.replaceAll('\\', '\\\\').replaceAll("'", "''")}'`;
 const property = (key: string) => `coalesce(toString(properties.${key}), '')`;
@@ -125,22 +130,63 @@ function postHogInstant(value: unknown, required: boolean) {
   try { return Temporal.Instant.from(value).toString(); } catch { throw new ConnectorError('INVALID_POSTHOG_ROW'); }
 }
 
-async function readBrowser(config: VisualJourneyAnalyticsConfig, generatedAt: string) {
-  if (!config.host || !config.projectId || !config.personalApiKey) return { rows: null, error: 'Connexion PostHog non configurée.', firstObservedAt: null, lastObservedAt: null } as const;
+/** PostHog `is_cached` / `last_refresh` (https://posthog.com/docs/api/queries). A cached
+ * result was computed at `last_refresh`, not at this read. */
+function cacheState(payload: unknown, at: number, generatedAt: string) {
+  const body = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+  const cached = typeof body.is_cached === 'boolean' ? body.is_cached : null;
+  let computedAt: string | null = generatedAt;
+  if (cached) {
+    try { computedAt = typeof body.last_refresh === 'string' ? Temporal.Instant.from(body.last_refresh).toString() : null; } catch { computedAt = null; }
+  }
+  return { cached, cacheAgeMs: cached && computedAt ? Math.max(0, at - Date.parse(computedAt)) : null, computedAt };
+}
+
+async function readBrowser(config: VisualJourneyAnalyticsConfig, generatedAt: string, timing: VisualJourneyPostHogTiming) {
+  if (!config.host || !config.projectId || !config.personalApiKey) {
+    timing.outcome = 'not_configured';
+    return { rows: null, error: 'Connexion PostHog non configurée.', firstObservedAt: null, lastObservedAt: null } as const;
+  }
   const endpoint = new URL(config.host);
   if (!['https://eu.posthog.com', 'https://us.posthog.com', 'https://app.posthog.com'].includes(endpoint.origin) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !['', '/'].includes(endpoint.pathname) || !/^\d+$/.test(config.projectId)) throw new ConnectorError('INVALID_CONFIGURATION');
   const headers = { Authorization: `Bearer ${config.personalApiKey}`, 'Content-Type': 'application/json' };
   const queries = visualJourneyQueries(config), controller = new AbortController(), deadline = Date.now() + (config.onBrowserContinuation ? 20_000 : 55_000);
   const continuations: VisualJourneyContinuation = { ...config.resumeBrowser };
+  // Elapsed time counts from the initial submission carried by the continuation,
+  // so a resumed read reports the full wait, not only this HTTP call.
+  const callStartedAt = Date.now();
+  const submittedAt = (kind: QueryKind) => {
+    const value = config.resumeBrowser?.[kind]?.startedAt;
+    return typeof value === 'number' && Number.isSafeInteger(value) && value <= callStartedAt ? value : callStartedAt;
+  };
+  const measured = {} as NonNullable<VisualJourneyPostHogTiming['queries']>;
+  const computedAt: (string | null)[] = [];
+  const settle = (kind: QueryKind, outcome: VisualJourneyQueryOutcome, payload?: unknown) => {
+    const at = Date.now(), cache = outcome === 'complete' ? cacheState(payload, at, generatedAt) : { cached: null, cacheAgeMs: null, computedAt: null };
+    if (outcome === 'complete') computedAt.push(cache.computedAt);
+    measured[kind] = { outcome, elapsedMs: Math.max(0, at - submittedAt(kind)), cached: cache.cached, cacheAgeMs: cache.cacheAgeMs };
+  };
   try {
-    const results = await Promise.allSettled((['identity','overview'] as const).map(kind => readPostHogQuery({
+    const results = await Promise.allSettled(QUERY_KINDS.map(kind => readPostHogQuery({
       endpoint, projectId: config.projectId!, headers, query: queries[kind], name: kind === 'identity' ? 'BLG visual journey identities' : 'BLG visual journey coverage', deadline, signal: controller.signal, fetcher: config.fetcher, sleep: config.sleep,
+      // Same text for the same period: a reopening or a retry is served from PostHog's recent cache.
+      refresh: 'async',
       ...(config.onBrowserContinuation ? {resumable:true,resume:config.resumeBrowser?.[kind],onContinuation:(value:NonNullable<VisualJourneyContinuation[typeof kind]>)=>{continuations[kind]=value;}} : {}),
-    })));
+    }).then(payload => { settle(kind, 'complete', payload); return payload; }, error => { settle(kind, error instanceof PostHogQueryPending ? 'pending' : 'failed'); throw error; })));
+    const outcomes = QUERY_KINDS.map(kind => measured[kind].outcome);
+    Object.assign(timing, {
+      outcome: outcomes.includes('failed') ? 'failed' : outcomes.includes('pending') ? 'pending' : 'complete',
+      elapsedMs: Math.max(0, Date.now() - Math.min(...QUERY_KINDS.map(submittedAt))), queries: measured,
+    } satisfies Partial<VisualJourneyPostHogTiming>);
     const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
     const hardFailure=failures.find(result=>!(result.reason instanceof PostHogQueryPending));
     if(hardFailure)throw hardFailure.reason;
-    if(failures.length){config.onBrowserContinuation?.(continuations);return {rows:null,error:'La lecture des visites et de la vidéo est en cours.',pending:true,firstObservedAt:null,lastObservedAt:null};}
+    if(failures.length){
+      // A result served from PostHog's cache has no background job to poll by ID:
+      // the next call submits it again with `async` and is served from the cache again.
+      for(const kind of QUERY_KINDS)if(measured[kind].cached===true)delete continuations[kind];
+      config.onBrowserContinuation?.(continuations);return {rows:null,error:'La lecture des visites et de la vidéo est en cours.',pending:true,firstObservedAt:null,lastObservedAt:null};
+    }
     const [identityPayload,overviewPayload]=results.map(result=>(result as PromiseFulfilledResult<unknown>).value);
     const identityColumns = ['browser_id','visitor_id','sid','first_seen_at','last_seen_at','first_source','first_medium','first_campaign','first_ad','first_link','is_test','page_at','cta_at','form_open_at','form_start_at','video_start_at','booking_click_at','booking_open_at','unique_seconds','unique_observations','duration_seconds','duration_observations','finished_at','sections','cta_placements'];
     const rows: VisualJourneyBrowserRow[] = resultRows(identityPayload, identityColumns, 20001).map(row => {
@@ -164,7 +210,9 @@ async function readBrowser(config: VisualJourneyAnalyticsConfig, generatedAt: st
     if (overview.length !== 1) throw new ConnectorError('INVALID_POSTHOG_RESPONSE');
     const queried = integer(overview[0][0]), missing = integer(overview[0][1]);
     if (missing > queried) throw new ConnectorError('INVALID_POSTHOG_COUNT');
-    return { rows, error: missing ? `${missing} événement${missing > 1 ? 's' : ''} sans visiteur ni session ${missing > 1 ? 'sont exclus' : 'est exclu'} des cohortes.` : null, firstObservedAt: queried ? postHogInstant(overview[0][2], true) : null, lastObservedAt: queried ? postHogInstant(overview[0][3], true) : null };
+    // A cached result is as old as its oldest computation; unknown stays unknown.
+    const observedAt = computedAt.includes(null) ? null : (computedAt as string[]).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? generatedAt;
+    return { rows, error: missing ? `${missing} événement${missing > 1 ? 's' : ''} sans visiteur ni session ${missing > 1 ? 'sont exclus' : 'est exclu'} des cohortes.` : null, observedAt, firstObservedAt: queried ? postHogInstant(overview[0][2], true) : null, lastObservedAt: queried ? postHogInstant(overview[0][3], true) : null };
   } finally { controller.abort(); }
 }
 
@@ -272,7 +320,8 @@ export async function readVisualJourneyReport(db: Database, config: VisualJourne
   const generatedAt = Temporal.Instant.from(config.now?.() ?? new Date().toISOString()).toString();
   const syncEnv = config.syncEnv ?? process.env;
   const prospects = pages(db, 'prospects', { columns: ['id','external_id','source','source_namespace','person_id','business','archived','display_name'], order: 'id' }, 50_000);
-  const browserPromise = readBrowser(config, generatedAt).catch(error => ({ rows: null, error: safeConnectorError(error), firstObservedAt: null, lastObservedAt: null }));
+  const timing: VisualJourneyPostHogTiming = { outcome: 'failed', elapsedMs: null, resumed: !!config.resumeBrowser && Object.keys(config.resumeBrowser).length > 0, periodDays: Temporal.PlainDate.from(config.from).until(Temporal.PlainDate.from(config.to)).total('days') + 1, queries: null };
+  const browserPromise = readBrowser(config, generatedAt, timing).catch(error => { timing.outcome = 'failed'; return { rows: null, error: safeConnectorError(error), firstObservedAt: null, lastObservedAt: null }; });
   const [browserRead, registrationRead, appointmentRead, wixRun, appointmentRun] = await Promise.all([
     browserPromise,
     readRegistrations(db, config.from, config.to, wixSiteId, syncEnv, prospects, config.includeTests).then(rows => ({ rows, error: null as string | null })).catch(error => ({ rows: null, error: safeConnectorError(error) })),
@@ -288,7 +337,7 @@ export async function readVisualJourneyReport(db: Database, config: VisualJourne
   });
   const posthogFreshness: VisualJourneyReport['freshness']['posthog'] = browserRead.rows === null
     ? { observedAt: null, coveredThrough: null, status: 'pending' in browserRead && browserRead.pending ? 'running' : config.host ? 'failed' : 'missing', reason: browserRead.error }
-    : { observedAt: generatedAt, coveredThrough: browserRead.lastObservedAt, status: 'available', reason: browserRead.error };
+    : { observedAt: 'observedAt' in browserRead ? browserRead.observedAt : generatedAt, coveredThrough: browserRead.lastObservedAt, status: 'available', reason: browserRead.error };
   const wixFreshness: VisualJourneyReport['freshness']['wix'] = registrationRead.rows === null
     ? { observedAt: null, coveredThrough: null, status: 'failed', reason: registrationRead.error }
     : sourceFreshness(wixRun, 'wix', 'lead_entries_forms', generatedAt, 'les inscriptions');
@@ -303,5 +352,8 @@ export async function readVisualJourneyReport(db: Database, config: VisualJourne
     freshness: { posthog: posthogFreshness, wix: wixFreshness, appointments: appointmentFreshness },
   });
   if (browserRead.error && browserRead.rows) report.limits.push(browserRead.error);
+  report.timing = { posthog: timing };
+  // Durations and statuses only: no visitor, query identifier, period date or credential.
+  (config.log ?? console.info)(`[parcours] lecture PostHog ${JSON.stringify(timing)}`);
   return report;
 }

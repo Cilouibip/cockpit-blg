@@ -38,6 +38,11 @@ interface QueryOptions {
   resumable?: boolean;
   resume?: PostHogQueryContinuation;
   onContinuation?: (continuation: PostHogQueryContinuation) => void | Promise<void>;
+  /** PostHog execution mode. `force_async` (default) always starts a new
+   * background calculation. `async` returns fresh cached results for the same
+   * query when PostHog has them, otherwise starts the same background
+   * calculation (https://posthog.com/docs/api/queries). */
+  refresh?: 'force_async' | 'async';
 }
 
 /** Run a read-only query in PostHog's background worker, then retrieve its complete result.
@@ -136,7 +141,7 @@ export async function readPostHogQuery(options: QueryOptions): Promise<unknown> 
     continuation = { version: 1, id: clientQueryId, origin: options.endpoint.origin, projectId: options.projectId, queryHash, startedAt, lookupAttempts:0, registered:false };
     await options.onContinuation?.({ ...continuation });
     payload = await request(path, { method: 'POST', body: JSON.stringify({
-      query: { kind: 'HogQLQuery', query: options.query }, refresh: 'force_async', name: options.name,
+      query: { kind: 'HogQLQuery', query: options.query }, refresh: options.refresh ?? 'force_async', name: options.name,
       client_query_id: clientQueryId,
     }) });
   } catch (error) {

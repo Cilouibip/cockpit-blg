@@ -250,3 +250,30 @@ test('an error after POST headers cannot resubmit even if its body carries DNS m
  }});
  assert.deepEqual(result,{results:[[1]]});assert.equal(posts,1);assert.equal(gets,1);
 });
+
+test('refresh reste force_async par défaut et passe à async seulement sur demande', async () => {
+  for (const [refresh, expected] of [[undefined, 'force_async'], ['force_async', 'force_async'], ['async', 'async']] as const) {
+    let sent: unknown;
+    await readPostHogQuery({ ...config(), ...(refresh ? { refresh } : {}), fetcher: async (_url, init) => {
+      sent = JSON.parse(String(init?.body)).refresh;
+      return Response.json({ query_status: { id: 'query-1', team_id: 123, complete: true, results: { columns: ['alive'], results: [[1]] } } });
+    } });
+    assert.equal(sent, expected);
+  }
+});
+
+test('avec async, un résultat récent servi par le cache revient dès la soumission, sans sondage', async () => {
+  const cached = { columns: ['alive'], results: [[1]], hasMore: false, is_cached: true, last_refresh: '2026-09-23T11:40:00Z' };
+  let calls = 0;
+  const output = await readPostHogQuery({ ...config(), refresh: 'async', fetcher: async () => { calls++; return Response.json(cached); } });
+  assert.deepEqual(output, cached);
+  assert.equal(calls, 1);
+  // Un cache périmé accompagné d'un nouveau calcul n'est jamais publié : on attend le calcul.
+  let polls = 0;
+  const fresh = { columns: ['alive'], results: [[2]] };
+  assert.deepEqual(await readPostHogQuery({ ...config(), refresh: 'async', fetcher: async (_url, init) => {
+    if (init?.method === 'POST') return Response.json({ ...cached, query_status: { id: 'refresh-1', team_id: 123, complete: false } });
+    polls++; return Response.json({ query_status: { id: 'refresh-1', team_id: 123, complete: true, results: fresh } });
+  } }), fresh);
+  assert.equal(polls, 1);
+});

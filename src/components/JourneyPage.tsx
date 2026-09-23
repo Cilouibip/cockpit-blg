@@ -5,7 +5,7 @@ import type { DashboardFilters, DataMode } from '../lib/ui-contract';
 import type { JourneyMetric, JourneyReport, JourneyTunnel, JourneyVideoReport } from '../lib/journey-contract';
 import type { VisualJourneyReport } from '../lib/visual-journey-contract';
 import { request } from '../lib/cockpit-request';
-import {loadVisualJourney} from '../lib/visual-journey-client';
+import {loadVisualJourney,unfinishedVisualJourney,VISUAL_JOURNEY_UNFINISHED,VisualJourneyUnfinished} from '../lib/visual-journey-client';
 import { formatDate, formatNumber } from './ui-format';
 import { VisualJourneyView } from './VisualJourneyView';
 
@@ -20,6 +20,10 @@ function versionLabel(version: string): string {
   if (version === 'unversioned') return 'Version non renseignée';
   const match = version.match(/(\d{4}-\d{2}-\d{2})(?:\.(\d+))?$/);
   return match ? `${formatDate(match[1])}${match[2] ? ` · révision ${match[2]}` : ''}` : version;
+}
+/** Shown once the browser stops waiting for the visits; never presented as a result. */
+export function unfinishedVisitsText(attemptedAt: number): string {
+  return `${VISUAL_JOURNEY_UNFINISHED} (tentative du ${formatDate(new Date(attemptedAt).toISOString(), true)}).`;
 }
 function Missing({ reason }: { reason?: string | null }) {
   return <div className="journey-empty"><strong>Mesure non disponible</strong><p>{reason || 'Les mesures nécessaires à ce détail ne sont pas encore disponibles.'}</p></div>;
@@ -113,7 +117,7 @@ export default function JourneyPage({ filters, revision, mode, onOptionsChange, 
   useEffect(() => { onTunnelChange?.(tunnel); }, [onTunnelChange, tunnel]);
   useEffect(() => {
     if (mode === 'demo') return;
-    const controller = new AbortController(); setPending(query); setFailure(null);
+    const controller = new AbortController(), attemptedAt = Date.now(); setPending(query); setFailure(null);
     const endpoint = tunnel === 'masterclass' ? '/api/journey-visual' : '/api/journey';
     const operation=tunnel==='masterclass'
       ? loadVisualJourney({url:`${endpoint}?${query}`,signal:controller.signal,transport:(url,signal)=>request<VisualJourneyReport>(url,{signal,timeoutMs:65_000}),onReport:result=>{
@@ -126,7 +130,13 @@ export default function JourneyPage({ filters, revision, mode, onOptionsChange, 
           if(result.status==='complete'||result.status==='empty')setLoaded({key:query,report:result});
           else throw new Error('Les données du quiz n’ont pas pu être chargées.');
         });
-    operation.catch(reason=>{if(!controller.signal.aborted)setFailure({key:query,message:reason instanceof Error?reason.message:'Les mesures n’ont pas pu être lues.'});})
+    operation.catch(reason=>{
+      if(controller.signal.aborted)return;
+      const unfinished=unfinishedVisitsText(attemptedAt);
+      // The loop has stopped: a PostHog read still marked running becomes "non terminée".
+      if(tunnel==='masterclass')setVisualLoaded(current=>current?.key===query?{key:query,report:unfinishedVisualJourney(current.report,unfinished)}:current);
+      setFailure({key:query,message:reason instanceof VisualJourneyUnfinished?`${unfinished} Les inscriptions et les rendez-vous restent affichés.`:reason instanceof Error?reason.message:'Les mesures n’ont pas pu être lues.'});
+    })
       .finally(()=>{if(!controller.signal.aborted)setPending(null);});
     return () => controller.abort();
   }, [query, revision, attempt, mode, tunnel]);
