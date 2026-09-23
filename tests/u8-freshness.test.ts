@@ -94,6 +94,8 @@ test('U8 D3 : un jour passé lu en cours de journée n’est pas présenté comm
   // Dernière publication Meta le 21/09 à 17:00 (Paris) : le 20/09 est complet, le 21/09 partiel, le 22/09 absent.
   const snapshot = await snapshotFor(withCadence('30'), {}, { metaObservedAt: '2026-09-21T15:00:00Z' });
   assert.deepEqual(snapshot.daily.map(d => d.spend_eur), [20, null, null]);
+  const instant = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
+  assert.ok(renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot })).includes(`Lecture la plus ancienne des blocs disponibles (couverture commune) : ${instant.format(new Date(minutesBefore(NOW, 45)))}`), 'le bloc Meta incomplet ne fixe pas la couverture commune');
   assert.equal(snapshot.totals.spend_eur, null);
   assert.equal(block(snapshot, 'Diffusion Meta').status, 'missing');
   for (const day of snapshot.daily) {
@@ -117,7 +119,7 @@ test('U8 affichage : heure de couverture de chaque bloc, état « ancien », cou
   const html = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot }));
   const instant = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
   const common = kpiCommonCoverage(snapshot).through!;
-  assert.ok(html.includes(`Couverture commune : ${instant.format(new Date(common))}, heure de Paris`), 'couverture commune visible en tête');
+  assert.ok(html.includes(`Lecture la plus ancienne des blocs disponibles (couverture commune) : ${instant.format(new Date(common))}, heure de Paris.`), 'couverture commune visible en tête');
   assert.ok(html.includes('Certaines sources attendent une mise à jour.'));
   const strip = html.slice(html.indexOf('kpi-funnel-coverage'), html.indexOf('kpi-funnel-scroll'));
   assert.ok(strip.includes(`<strong>Diffusion Meta</strong><span>Disponible · ancien · jusqu’au ${instant.format(new Date(block(snapshot, 'Diffusion Meta').through!))}</span>`));
@@ -154,6 +156,7 @@ test('U8 détail par annonce : sans lecture complète des clics bilan, aucune da
   assert.equal(response.status, 'ready'); if (response.status !== 'ready') return;
   const html = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot: response.snapshot }));
   assert.ok(html.includes('aucune lecture complète des clics bilan sur la période'));
+  assert.ok(html.includes('Aucune lecture complète sur la période.'), 'aucune heure de couverture inventée en tête');
   assert.ok(!html.includes('Sessions de clic bilan ; lecture automatique. · lu'), 'l’heure de la requête n’est pas présentée comme une lecture');
   const read = await snapshotFor(withCadence('30'));
   const withData = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot: read }));
