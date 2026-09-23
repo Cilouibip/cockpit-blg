@@ -17,6 +17,13 @@ export interface VisualJourneyRate extends VisualJourneyAvailability {
   numerator: number | null;
   denominator: number | null;
   rate: number | null;
+  /** Heure de couverture commune du taux (D3 option A) : la plus ancienne couverture des
+   * sources Wix et Notion qu'il fait intervenir ; couverture PostHog pour un taux purement
+   * navigateur ; null si inconnue. */
+  coveredThrough?: string | null;
+  /** Personnes de la sélection sorties du numérateur ET du dénominateur parce que leur
+   * événement d'entrée est postérieur à `coveredThrough` ; 0 pour un taux purement navigateur. */
+  excludedAfterCoverage?: number;
 }
 
 export interface VisualJourneyStage {

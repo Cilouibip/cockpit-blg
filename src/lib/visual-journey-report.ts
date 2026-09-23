@@ -97,7 +97,35 @@ const rate = (numerator: number | null, denominator: number | null, reason: stri
   if (denominator === 0) return { numerator, denominator, rate: null, ...unavailable(reason) };
   return { numerator, denominator, rate: numerator / denominator, ...available() };
 };
-const text = (value: unknown, max = 200) => typeof value === 'string' && value.length <= max ? value.trim() || null : null;
+
+// D3 option A (décision Mehdi du 23/09) : un taux qui fait intervenir Wix ou Notion est calculé
+// sur les seules personnes dont l'événement d'entrée au dénominateur est antérieur ou égal à la
+// couverture commune de ces sources. Une personne plus récente sort du numérateur ET du
+// dénominateur ; elle n'est jamais comptée comme « n'a pas fait ». Les compteurs d'étape restent
+// calculés sur toute la sélection. Une tentative de mise à jour ne prouve ni n'invalide la couverture
+// (arbitrage Fable du 23/09) : une source dont la dernière couverture publiée est connue reste
+// utilisable jusqu'à cette heure si elle est à jour, à actualiser (`stale`), en cours de lecture ou
+// partielle (`running`) ou si sa dernière tentative a échoué (`failed`) ; la bande de fraîcheur le
+// signale. Une source sans lignes, `missing`, `unfinished` ou sans couverture connue rend le taux
+// indisponible.
+type FreshnessStatus = VisualJourneyReport['freshness']['wix']['status'];
+const usableFreshness = new Set<FreshnessStatus>(['available', 'stale', 'running', 'failed']);
+const parisTime = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
+type RateCoverage = { at: Temporal.Instant | null; blocked: string | null; label: string };
+function coveredRate<T>(
+  coverage: RateCoverage, blockedDenominator: number | null, population: T[],
+  entry: (member: T) => string | null, converted: (member: T) => boolean, emptyReason: string,
+): VisualJourneyRate {
+  const coveredThrough = coverage.at?.toString() ?? null;
+  if (coverage.blocked || !coverage.at) return { numerator: null, denominator: blockedDenominator, rate: null, ...unavailable(coverage.blocked ?? emptyReason), coveredThrough, excludedAfterCoverage: 0 };
+  const bound = coverage.at;
+  const kept = population.filter(member => { const at = entry(member); return !!at && Temporal.Instant.compare(at, bound) <= 0; });
+  const excludedAfterCoverage = population.length - kept.length;
+  const numerator = kept.filter(converted).length, denominator = kept.length;
+  if (denominator === 0) return { numerator, denominator, rate: null, ...unavailable(excludedAfterCoverage ? `Aucune activité antérieure à la couverture ${coverage.label} du ${parisTime.format(new Date(bound.epochMilliseconds))}.` : emptyReason), coveredThrough, excludedAfterCoverage };
+  return { numerator, denominator, rate: numerator / denominator, ...available(), coveredThrough, excludedAfterCoverage };
+}
+const text =(value: unknown, max = 200) => typeof value === 'string' && value.length <= max ? value.trim() || null : null;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const instant = (value: unknown, fallback: string) => {
   if (typeof value !== 'string') return fallback;
@@ -282,20 +310,14 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const pageToForm = browserScoped.filter(row => after(row.formOpenAt, row.pageAt)).length;
   const openToStarted = browserScoped.filter(row => after(row.formStartAt, row.formOpenAt)).length;
 
-  const registrationsFromOpened = registrationsScoped.filter(registration => {
-    const browser = browserForRegistration.get(registration.key); return browser && after(registration.occurredAt, browser.formOpenAt);
-  }).length;
-  const registrationsFromStarted = registrationsScoped.filter(registration => {
-    const browser = browserForRegistration.get(registration.key); return browser && after(registration.occurredAt, browser.formStartAt);
-  }).length;
   const registrationsWithVideoAfterSignup = registrationsScoped.filter(registration => {
     const browser = browserForRegistration.get(registration.key); return browser && after(browser.videoStartAt, registration.occurredAt);
   });
   const registrationsToVideo = registrationsWithVideoAfterSignup.length;
   const registrationsWithoutNavigation = registrationsScoped.filter(registration => !browserForRegistration.has(registration.key)).length;
+  // Compteur « S'inscrivent » seulement (inchangé) : un zéro exige une lecture couvrant les formulaires.
   const latestRegistrationPrerequisite = times(browserScoped.flatMap(row => [row.formOpenAt,row.formStartAt]).filter((value): value is string => !!value)).at(-1) ?? null;
   const registrationCoverageComplete = input.freshness.wix.status === 'available' && (!latestRegistrationPrerequisite || after(input.freshness.wix.coveredThrough, latestRegistrationPrerequisite));
-  const registrationRatesAvailable = registrationsAvailable && registrationCoverageComplete;
   const registrationRateReason = 'Les inscriptions attendent une mise à jour couvrant les formulaires de cette sélection.';
   if (registrationsWithoutNavigation) limits.push(`Le parcours de ${registrationsWithoutNavigation} inscrit${registrationsWithoutNavigation > 1 ? 's' : ''} n’a pas pu être relié. ${registrationsWithoutNavigation > 1 ? 'Ils restent comptés' : 'Il reste compté'} parmi les inscriptions. ${registrationsWithoutNavigation > 1 ? 'Leur absence du passage confirmé vers la vidéo ne prouve pas qu’ils ne l’ont pas démarrée.' : 'Son absence du passage confirmé vers la vidéo ne prouve pas qu’il ne l’a pas démarrée.'}`);
 
@@ -306,6 +328,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const activeAppointment = (row: VisualJourneyAppointmentRow) => !['cancelled', 'canceled', 'rescheduled'].includes(row.status.toLowerCase());
   const bookedRegistrations = registrationsScoped.filter(registration => registration.personId && (appointmentsByPerson.get(registration.personId) ?? []).some(activeAppointment));
   const linkedAppointmentCount = appointmentRows.filter(row => row.personId).length;
+  // Compteur « Réservent un rendez-vous » seulement (inchangé) : un zéro exige une lecture couvrant la sélection.
   const latestBookingPrerequisite = times([...browserScoped.map(row => row.bookingOpenAt ?? row.videoStartAt),...registrationsScoped.map(row => row.occurredAt)].filter((value): value is string => !!value)).at(-1) ?? null;
   const appointmentCoverage = input.freshness.appointments.coveredThrough;
   const temporalCoverageComplete = input.freshness.appointments.status === 'available' && (!latestBookingPrerequisite || after(appointmentCoverage, latestBookingPrerequisite));
@@ -319,27 +342,48 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const bookedCount = bookingCountState.available ? bookedRegistrations.length : null;
   if (input.freshness.appointments.status !== 'available' && input.freshness.appointments.reason) limits.push(input.freshness.appointments.reason);
 
-  // A numerator member must belong to the unchanged signup→video denominator.
-  const temporalBookings = registrationsWithVideoAfterSignup.filter(registration => {
-    const browser = browserForRegistration.get(registration.key);
-    if (!browser?.videoStartAt || !registration.personId) return false;
-    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, browser.videoStartAt));
-  }).length;
-  const bookingRateAvailable = bookingCountState.available && registrationRatesAvailable && temporalCoverageComplete && bookedRegistrations.every(registration =>
-    !registration.personId || (appointmentsByPerson.get(registration.personId) ?? []).filter(activeAppointment).some(appointment => appointment.bookedAt));
-  const bookingRateReason = !bookingCountState.available ? bookingCountState.reason!
-    : !registrationRatesAvailable ? registrationRateReason
-    : !temporalCoverageComplete ? "Le miroir des rendez-vous ne couvre pas encore les activités vidéo et calendrier de cette sélection."
-    : "La date prévue du rendez-vous ne prouve pas quand il a été réservé.";
-  const bookingsAfterCalendar = bookedRegistrations.filter(registration => {
-    const browser = browserForRegistration.get(registration.key);
-    if (!browser?.bookingOpenAt || !registration.personId) return false;
-    return (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, browser.bookingOpenAt));
-  }).length;
-  if (!bookingRateAvailable) limits.push(`${bookingRateReason} Les taux vers le rendez-vous restent indisponibles.`);
-
   const browserReason = input.browserError ?? "Les observations navigateur ne sont pas disponibles ; aucun zéro n'est fabriqué.";
   const browserState = browserAvailable ? available() : unavailable(browserReason);
+
+  // Taux D3 option A : couverture commune par taux, population restreinte aux personnes entrées
+  // au dénominateur au plus tard à cette heure ; numérateur pris dans la même population.
+  const sourceCoverage = (source: 'wix' | 'appointments', rowsAvailable: boolean, missingRows: string, unknown: string) => {
+    const freshness = input.freshness[source];
+    if (!rowsAvailable) return { at: null, blocked: missingRows };
+    if (!usableFreshness.has(freshness.status) || !freshness.coveredThrough) return { at: null, blocked: freshness.reason ?? unknown };
+    return { at: Temporal.Instant.from(freshness.coveredThrough), blocked: null };
+  };
+  const wixCoverage = sourceCoverage('wix', registrationsAvailable, registrationState.reason ?? registrationRateReason, registrationRateReason);
+  const notionCoverage = sourceCoverage('appointments', appointmentsAvailable, input.appointmentError ?? "Le miroir des rendez-vous n'est pas disponible.", 'La couverture du miroir des rendez-vous est inconnue.');
+  const registrationCoverage: RateCoverage = { at: wixCoverage.at, blocked: browserAvailable ? wixCoverage.blocked : browserReason, label: 'des inscriptions' };
+  const bookingBlocked = registrationCoverage.blocked ?? notionCoverage.blocked
+    ?? (appointmentRows.length > 0 && linkedAppointmentCount === 0 ? "Les rendez-vous enregistrés ne sont pas encore reliés aux inscrits." : null)
+    // Règle conservée : la date prévue d'un réservant de la sélection ne prouve pas quand il a réservé.
+    ?? (bookedRegistrations.every(registration => !registration.personId || (appointmentsByPerson.get(registration.personId) ?? []).filter(activeAppointment).some(appointment => appointment.bookedAt))
+      ? null : "La date prévue du rendez-vous ne prouve pas quand il a été réservé.");
+  const bookingCoverage: RateCoverage = {
+    at: wixCoverage.at && notionCoverage.at ? (Temporal.Instant.compare(wixCoverage.at, notionCoverage.at) <= 0 ? wixCoverage.at : notionCoverage.at) : null,
+    blocked: bookingBlocked, label: 'des inscriptions et des rendez-vous',
+  };
+  if (bookingBlocked && browserAvailable) limits.push(`${bookingBlocked} Les taux vers le rendez-vous restent indisponibles.`);
+  const scopedRegistrationByBrowser = new Map<string, RegistrationPerson>();
+  for (const registration of registrationsScoped) { const browser = browserForRegistration.get(registration.key); if (browser) scopedRegistrationByBrowser.set(browser.key, registration); }
+  const bookedAfter = (registration: RegistrationPerson | undefined, at: string | null) => !!registration?.personId && !!at
+    && (appointmentsByPerson.get(registration.personId) ?? []).some(appointment => activeAppointment(appointment) && after(appointment.bookedAt, at));
+  const signupFromOpened = coveredRate(registrationCoverage, browserAvailable ? formOpened.size : null, browserScoped.filter(row => row.formOpenAt), row => row.formOpenAt,
+    row => { const registration = scopedRegistrationByBrowser.get(row.key); return !!registration && after(registration.occurredAt, row.formOpenAt); }, 'Aucune ouverture de formulaire mesurée.');
+  const signupFromStarted = coveredRate(registrationCoverage, browserAvailable ? formStarted.size : null, browserScoped.filter(row => row.formStartAt), row => row.formStartAt,
+    row => { const registration = scopedRegistrationByBrowser.get(row.key); return !!registration && after(registration.occurredAt, row.formStartAt); }, 'Aucun démarrage de formulaire mesuré.');
+  const videoFromSignup = coveredRate(registrationCoverage, registrationState.available ? registrationsScoped.length : null, registrationsScoped, registration => registration.occurredAt,
+    registration => { const browser = browserForRegistration.get(registration.key); return !!browser && after(browser.videoStartAt, registration.occurredAt); }, 'Aucune inscription confirmée dans cette sélection.');
+  // Le dénominateur vidéo → rendez-vous est le numérateur inscription → vidéo, entré à son démarrage vidéo.
+  const bookingFromVideo = coveredRate(bookingCoverage, registrationsToVideo || null, registrationsWithVideoAfterSignup, registration => browserForRegistration.get(registration.key)?.videoStartAt ?? null,
+    registration => bookedAfter(registration, browserForRegistration.get(registration.key)?.videoStartAt ?? null), 'Aucun inscrit relié à un démarrage vidéo.');
+  const bookingFromCalendar = coveredRate(bookingCoverage, browserAvailable ? calendarOpened.size : null, browserScoped.filter(row => row.bookingOpenAt), row => row.bookingOpenAt,
+    row => bookedAfter(scopedRegistrationByBrowser.get(row.key), row.bookingOpenAt), 'Aucune ouverture du calendrier mesurée.');
+  // Taux purement navigateur : calcul inchangé, couverture PostHog, personne écartée.
+  const browserRate = (value: VisualJourneyRate): VisualJourneyRate => ({ ...value, coveredThrough: input.freshness.posthog.coveredThrough, excludedAfterCoverage: 0 });
+
   if (!browserAvailable) limits.push(browserReason);
   const registrationsWithVisitor = registrationsAvailable ? registrationSourceRowsScoped.filter(row => !!text(row.origin.visitor, 80)).length : null;
   const registrationsWithSession = registrationsAvailable ? registrationSourceRowsScoped.filter(row => !!text(row.origin.session, 200)).length : null;
@@ -354,7 +398,7 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
   const thresholdRows = VISUAL_JOURNEY_THRESHOLDS.map(seconds => {
     const thresholdState = watchMeasured ? available() : unavailable("La durée de contenu regardée n'est pas mesurée dans cette sélection.");
     const viewers = thresholdState.available ? browserScoped.filter(row => row.videoStartAt && (row.uniqueWatchedSeconds ?? -1) >= seconds).length : null;
-    return { seconds, visitors: viewers, fromStarted: thresholdState.available ? rate(viewers, videoStarted.size, 'Aucun démarrage vidéo mesuré.') : { numerator: null, denominator: videoStarted.size || null, rate: null, ...thresholdState } };
+    return { seconds, visitors: viewers, fromStarted: browserRate(thresholdState.available ? rate(viewers, videoStarted.size, 'Aucun démarrage vidéo mesuré.') : { numerator: null, denominator: videoStarted.size || null, rate: null, ...thresholdState }) };
   });
   const finishMeasured = browserAvailable && browserScoped.some(row => row.uniqueWatchedSeconds !== null && row.durationSeconds !== null);
   const finishedState = finishMeasured ? available() : unavailable("La durée de contenu regardée jusqu'à la fin n'est pas mesurée dans cette sélection.");
@@ -370,10 +414,10 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
 
   const stages: VisualJourneyStage[] = [
     { id: 'page', label: 'Visitent la page', count: browserAvailable ? pagePeople.size : null, availability: browserState, fromPrevious: null },
-    { id: 'form', label: 'Ouvrent le formulaire', count: browserAvailable ? formOpened.size : null, availability: browserState, fromPrevious: browserAvailable ? rate(pageToForm, pagePeople.size, 'Aucun visiteur de page mesuré.') : { numerator: null, denominator: null, rate: null, ...browserState } },
-    { id: 'signup', label: "S'inscrivent", count: registrationState.available ? registrationsScoped.length : null, availability: registrationState, fromPrevious: browserAvailable && registrationRatesAvailable ? rate(registrationsFromOpened, formOpened.size, 'Aucune ouverture de formulaire mesurée.') : { numerator: null, denominator: browserAvailable ? formOpened.size : null, rate: null, ...(!browserAvailable ? browserState : unavailable(registrationState.reason ?? registrationRateReason)) } },
-    { id: 'watch', label: 'Démarrent la vidéo', count: browserAvailable ? videoStarted.size : null, availability: browserState, fromPrevious: browserAvailable && registrationRatesAvailable ? rate(registrationsToVideo, registrationsScoped.length, 'Aucune inscription confirmée dans cette sélection.') : { numerator: null, denominator: registrationState.available ? registrationsScoped.length : null, rate: null, ...(!browserAvailable ? browserState : unavailable(registrationState.reason ?? registrationRateReason)) } },
-    { id: 'call', label: 'Réservent un rendez-vous', count: bookedCount, availability: bookingCountState, fromPrevious: bookingRateAvailable ? rate(temporalBookings, registrationsToVideo, 'Aucun inscrit relié à un démarrage vidéo.') : { numerator: null, denominator: registrationsToVideo || null, rate: null, ...unavailable(bookingRateReason) } },
+    { id: 'form', label: 'Ouvrent le formulaire', count: browserAvailable ? formOpened.size : null, availability: browserState, fromPrevious: browserRate(browserAvailable ? rate(pageToForm, pagePeople.size, 'Aucun visiteur de page mesuré.') : { numerator: null, denominator: null, rate: null, ...browserState }) },
+    { id: 'signup', label: "S'inscrivent", count: registrationState.available ? registrationsScoped.length : null, availability: registrationState, fromPrevious: signupFromOpened },
+    { id: 'watch', label: 'Démarrent la vidéo', count: browserAvailable ? videoStarted.size : null, availability: browserState, fromPrevious: videoFromSignup },
+    { id: 'call', label: 'Réservent un rendez-vous', count: bookedCount, availability: bookingCountState, fromPrevious: bookingFromVideo },
   ];
 
   const anyUnavailable = stages.some(stage => !stage.availability.available || (stage.fromPrevious && !stage.fromPrevious.available));
@@ -388,8 +432,8 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
     form: {
       opened: metric(browserAvailable ? formOpened.size : null, browserState), started: metric(browserAvailable ? formStarted.size : null, browserState), registered: metric(registrationsAvailable ? registrationsScoped.length : null, registrationState),
       rates: {
-        startedFromOpened: browserAvailable ? rate(openToStarted, formOpened.size, 'Aucune ouverture de formulaire mesurée.') : { numerator: null, denominator: null, rate: null, ...browserState },
-        registeredFromStarted: browserAvailable && registrationRatesAvailable ? rate(registrationsFromStarted, formStarted.size, 'Aucun démarrage de formulaire mesuré.') : { numerator: null, denominator: browserAvailable ? formStarted.size : null, rate: null, ...(!browserAvailable ? browserState : unavailable(registrationState.reason ?? registrationRateReason)) },
+        startedFromOpened: browserRate(browserAvailable ? rate(openToStarted, formOpened.size, 'Aucune ouverture de formulaire mesurée.') : { numerator: null, denominator: null, rate: null, ...browserState }),
+        registeredFromStarted: signupFromStarted,
       },
     },
     video: {
@@ -410,8 +454,8 @@ export function buildVisualJourneyReport(input: VisualJourneyProjectionInput): V
         };
       }) : [],
       rates: {
-        calendarFromClicked: browserAvailable ? rate(browserScoped.filter(row => after(row.bookingOpenAt, row.bookingClickAt)).length, bookingClicked.size, 'Aucun clic de réservation mesuré.') : { numerator: null, denominator: null, rate: null, ...browserState },
-        bookedFromCalendar: bookingRateAvailable ? rate(bookingsAfterCalendar, calendarOpened.size, 'Aucune ouverture du calendrier mesurée.') : { numerator: null, denominator: browserAvailable ? calendarOpened.size : null, rate: null, ...unavailable(bookingRateReason) },
+        calendarFromClicked: browserRate(browserAvailable ? rate(browserScoped.filter(row => after(row.bookingOpenAt, row.bookingClickAt)).length, bookingClicked.size, 'Aucun clic de réservation mesuré.') : { numerator: null, denominator: null, rate: null, ...browserState }),
+        bookedFromCalendar: bookingFromCalendar,
       },
     },
     freshness: input.freshness,

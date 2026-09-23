@@ -39,15 +39,27 @@ test('le parcours compte des personnes, conserve les retours et les confirmation
 });
 
 test('chaque taux garde sa cohorte et la date prévue du RDV ne devient pas une réservation', () => {
-  const report = buildVisualJourneyReport(visualJourneyFixture());
-  assert.deepEqual(report.stages[1].fromPrevious, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null });
-  assert.deepEqual(report.form.rates.registeredFromStarted, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
-  assert.deepEqual(report.stages[3].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
+  const input = visualJourneyFixture();
+  const report = buildVisualJourneyReport(input);
+  // Taux navigateur : couverture PostHog, personne écartée ; taux Wix : couverture des inscriptions.
+  assert.deepEqual(report.stages[1].fromPrevious, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null, coveredThrough: '2026-09-18T11:01:00Z', excludedAfterCoverage: 0 });
+  assert.deepEqual(report.form.rates.registeredFromStarted, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null, coveredThrough: '2026-09-18T10:31:00Z', excludedAfterCoverage: 0 });
+  assert.deepEqual(report.stages[3].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null, coveredThrough: '2026-09-18T10:31:00Z', excludedAfterCoverage: 0 });
   assert.equal(report.booking.booked.count, 1, 'le volume métier lié reste lisible même si le miroir est ancien');
   assert.equal(report.stages[4].fromPrevious?.available, false);
   assert.equal(report.booking.rates.bookedFromCalendar.available, false);
-  assert.match(report.limits.join(' '), /ne couvre pas encore les activités vidéo et calendrier/);
+  assert.match(report.stages[4].fromPrevious?.reason ?? '', /date prévue du rendez-vous ne prouve pas/);
+  assert.match(report.limits.join(' '), /date prévue du rendez-vous ne prouve pas quand il a été réservé\. Les taux vers le rendez-vous restent indisponibles/);
   assert.equal(report.status, 'partial');
+  // Une fois la réservation datée, le miroir « à actualiser » reste utilisable mais ne couvre aucune activité : taux indisponible, jamais 0 %.
+  input.appointments![0].bookedAt = '2026-09-18T08:21:00Z';
+  const dated = buildVisualJourneyReport(input);
+  assert.equal(dated.stages[4].fromPrevious?.rate, null);
+  assert.equal(dated.stages[4].fromPrevious?.excludedAfterCoverage, 1);
+  assert.equal(dated.stages[4].fromPrevious?.coveredThrough, '2026-09-17T23:35:39Z');
+  assert.match(dated.stages[4].fromPrevious?.reason ?? '', /^Aucune activité antérieure à la couverture des inscriptions et des rendez-vous du 18 sept\. 2026, 01:35\.$/);
+  assert.equal(dated.booking.rates.bookedFromCalendar.rate, null);
+  assert.equal(dated.booking.booked.count, 1);
 });
 
 test('la première origine A filtre toutes les étapes et ne bascule pas sur le retour B', () => {
@@ -120,6 +132,13 @@ test('une couverture RDV antérieure à la vidéo garde le volume mais interdit 
   assert.equal(report.booking.booked.count, 1);
   assert.equal(report.stages[4].fromPrevious?.rate, null);
   assert.equal(report.stages[4].fromPrevious?.available, false);
+  // Option A : la personne dont la vidéo (08:07) suit la couverture RDV (07:00) sort des deux termes.
+  assert.equal(report.stages[4].fromPrevious?.excludedAfterCoverage, 1);
+  assert.equal(report.stages[4].fromPrevious?.denominator, 0);
+  assert.equal(report.stages[4].fromPrevious?.coveredThrough, '2026-09-18T07:00:00Z');
+  assert.match(report.stages[4].fromPrevious?.reason ?? '', /Aucune activité antérieure à la couverture des inscriptions et des rendez-vous du 18 sept\. 2026, 09:00/);
+  assert.equal(report.booking.rates.bookedFromCalendar.rate, null);
+  assert.equal(report.booking.rates.bookedFromCalendar.excludedAfterCoverage, 1);
   assert.equal(report.status, 'partial');
 });
 
@@ -186,6 +205,12 @@ test('une lecture récente antérieure à une inscription ne prouve pas zéro re
  fixture.registrations=[{...fixture.registrations![0],occurredAt:'2026-09-18T11:50:00Z'}];
  fixture.freshness.appointments={observedAt:'2026-09-18T11:41:00Z',coveredThrough:'2026-09-18T11:40:00Z',status:'available',reason:null};
  const report=buildVisualJourneyReport(fixture);assert.equal(report.booking.booked.count,null);
+ // Option A : l'inscription de 11:50, postérieure à la couverture Wix (10:31), sort des deux termes du taux inscription → vidéo.
+ assert.equal(report.form.registered.count,1,'le compteur garde toute la sélection');
+ assert.equal(report.stages[3].fromPrevious?.rate,null);
+ assert.equal(report.stages[3].fromPrevious?.excludedAfterCoverage,1);
+ assert.match(report.stages[3].fromPrevious?.reason??'',/Aucune activité antérieure à la couverture des inscriptions du 18 sept\. 2026, 12:31/);
+ assert.equal(report.stages[4].fromPrevious?.rate,null,'sans inscrit relié à une vidéo postérieure, aucun taux RDV');
 });
 
 test('une origine navigateur vide ne remplace pas la première origine canonique prouvée',()=>{
@@ -205,6 +230,11 @@ test('Wix absent avec Notion frais ne fabrique aucun zéro ni taux de réservati
   assert.equal(report.booking.booked.count,null);
   assert.equal(report.booking.rates.bookedFromCalendar.rate,null);
   assert.equal(report.stages[4].fromPrevious?.rate,null);
+  // Option A : Wix absent bloque tous les taux qui en dépendent, avec motif, sans couverture ni exclusion inventées.
+  for (const value of [report.stages[2].fromPrevious!, report.stages[3].fromPrevious!, report.form.rates.registeredFromStarted, report.stages[4].fromPrevious!, report.booking.rates.bookedFromCalendar]) {
+    assert.equal(value.available,false);assert.equal(value.rate,null);assert.equal(value.reason,'Inscriptions en attente');
+    assert.equal(value.coveredThrough,null);assert.equal(value.excludedAfterCoverage,0);
+  }
 });
 
 function bookingIntersectionFixture() {
@@ -225,37 +255,47 @@ function bookingIntersectionFixture() {
   input.freshness.wix = input.freshness.appointments = { observedAt: input.generatedAt, coveredThrough: input.generatedAt, status: 'available', reason: null };
   return input;
 }
+// Toute l'activité de ces cas précède la couverture commune (midi) : personne n'est écarté.
+const coveredAtNoon = (numerator: number, denominator: number) => ({ numerator, denominator, rate: numerator / denominator, available: true, reason: null, coveredThrough: '2026-09-18T12:00:00Z', excludedAfterCoverage: 0 });
 
 test('vidéo avant inscription reste hors du numérateur vidéo→RDV : 1/1 et deux réservants au total', () => {
   const input = bookingIntersectionFixture(), report = buildVisualJourneyReport(input);
   assert.deepEqual(report.stages.map(stage => stage.count), [2, 2, 2, 2, 2]);
-  assert.deepEqual(report.stages[3].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
-  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 1, denominator: 1, rate: 1, available: true, reason: null });
+  assert.deepEqual(report.stages[3].fromPrevious, coveredAtNoon(1, 2));
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(1, 1));
   assert.equal(report.booking.booked.count, 2);
   assert.equal(report.booking.people!.length, 2);
-  assert.deepEqual(report.booking.rates.bookedFromCalendar, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null }, 'le taux calendrier→RDV garde sa propre base');
+  assert.deepEqual(report.booking.rates.bookedFromCalendar, coveredAtNoon(2, 2), 'le taux calendrier→RDV garde sa propre base');
 });
 
 test('le RDV de la seule personne hors dénominateur ne transforme pas 0/1 en 1/1', () => {
   const input = bookingIntersectionFixture();
   input.appointments = [input.appointments![1]];
   const report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 0, denominator: 1, rate: 0, available: true, reason: null });
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(0, 1));
   assert.equal(report.booking.booked.count, 1);
   assert.equal(report.booking.rates.bookedFromCalendar.numerator, 1);
+  // Option A : si la couverture Notion (08:50) précède la vidéo de A (09:00), A sort des deux termes :
+  // aucun 0/1 fabriqué, taux indisponible avec l'heure, volume de B conservé.
+  input.freshness.appointments = { ...input.freshness.appointments, coveredThrough: '2026-09-18T08:50:00Z' };
+  const early = buildVisualJourneyReport(input);
+  assert.deepEqual(early.stages[4].fromPrevious, { numerator: 0, denominator: 0, rate: null, available: false, reason: 'Aucune activité antérieure à la couverture des inscriptions et des rendez-vous du 18 sept. 2026, 10:50.', coveredThrough: '2026-09-18T08:50:00Z', excludedAfterCoverage: 1 });
+  assert.equal(early.booking.booked.count, 1);
+  assert.equal(early.booking.rates.bookedFromCalendar.rate, null, 'les deux ouvertures du calendrier (09:40) suivent aussi la couverture');
+  assert.equal(early.booking.rates.bookedFromCalendar.excludedAfterCoverage, 2);
 });
 
 test('égalité inscription→vidéo, sans RDV, annulation et absence de base conservent les règles du taux', () => {
   const input = bookingIntersectionFixture();
   input.browser![1].videoStartAt = '2026-09-18T11:00:00.000+02:00'; // Même instant que son inscription.
   let report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null });
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(2, 2));
   input.appointments![1].status = 'cancelled';
   report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null });
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(1, 2));
   input.appointments = [];
   report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.stages[4].fromPrevious, { numerator: 0, denominator: 2, rate: 0, available: true, reason: null });
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(0, 2));
   for (const browser of input.browser!) browser.videoStartAt = '2026-09-18T08:00:00Z';
   report = buildVisualJourneyReport(input);
   assert.equal(report.stages[4].fromPrevious?.numerator, 0);

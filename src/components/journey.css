@@ -78,6 +78,7 @@
 
 #atelier-a .journey-source-freshness { display:flex; flex-wrap:wrap; gap:6px 22px; margin-top:24px; padding-top:16px; border-top:1px solid var(--a-line); color:var(--a-muted); font-size:11px; line-height:1.6; }
 #atelier-a .journey-source-freshness strong { color:var(--a-ink); font-weight:500; }
+#atelier-a .journey-rate-coverage { margin-top:-14px; color:var(--a-muted); font-size:11px; line-height:1.6; }
 #atelier-a .journey-meta { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px 24px; color:var(--a-muted); font-size:11px; }
 #atelier-a .journey-meta details { margin-left:auto; max-width:620px; }
 #atelier-a .journey-meta summary { cursor:pointer; color:var(--a-ink); text-align:right; }
