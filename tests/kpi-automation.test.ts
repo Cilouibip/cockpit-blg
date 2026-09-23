@@ -100,5 +100,9 @@ test('U8b budget Meta : un passage KPI fait 9 lectures au lieu de 2 (7 de plus),
  const none=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic',BLG_KPI_MASTERCLASS_CAMPAIGN_IDS:'pas-un-id'},fetcher);
  assert.equal(none.windows,undefined,'aucune campagne Masterclass : aucune lecture de plus');
  calls=0;const off=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic',BLG_KPI_META_UNIQUE_READS:'off'},fetcher);
- assert.equal(calls,2,'interrupteur serveur : retour aux deux lectures d’avant U8b');assert.equal(off.windows,undefined);
+ assert.equal(calls,2,'interrupteur serveur : retour aux deux lectures d’avant U8b');assert.equal(off.windows,undefined);assert.equal(off.uniqueReads.status,'off');
+ // Lecture compte × jour refusée : 3 lectures (aucune fenêtre tentée), passage publiable.
+ calls=0;const refused:typeof fetch=async(input,init)=>new URL(String(input)).searchParams.get('level')==='account'?(calls++,new Response('{}',{status:400})):fetcher(input,init);
+ const failed=await readKpiMeta('2026-08-22','2026-09-27',{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic'},refused);
+ assert.equal(calls,3,'identité + campagne × jour + compte × jour refusée');assert.equal(failed.uniqueReads.status,'failed');assert.equal(failed.windows,undefined);
 });

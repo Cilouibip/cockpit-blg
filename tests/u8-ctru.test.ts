@@ -50,12 +50,12 @@ async function snapshot(memory: ReturnType<typeof memoryKpiDatabase>, f: Dashboa
   return response.snapshot;
 }
 
-test('U8b Meta : campagne × jour avec reach et clics sortants, lecture compte par jour filtrée sur les campagnes Masterclass, six fenêtres (7 lectures de plus)', async () => {
+test('U8b Meta : campagne × jour inchangée, lecture compte par jour filtrée sur les campagnes Masterclass, six fenêtres (7 lectures de plus)', async () => {
   const { urls, fetcher } = fakeMeta();
   const batch = await readKpiMeta(FROM, TO, env, fetcher);
   assert.equal(urls.length, 9, 'identité du compte + campagne × jour + compte × jour + six fenêtres (avant U8b : 2)');
   const campaign = urls.find(u => u.searchParams.get('level') === 'campaign')!;
-  assert.ok(['reach', 'outbound_clicks', 'unique_inline_link_clicks'].every(field => campaign.searchParams.get('fields')!.split(',').includes(field)));
+  assert.equal(campaign.searchParams.get('fields'), 'account_id,campaign_id,campaign_name,date_start,date_stop,spend,impressions,inline_link_clicks,unique_inline_link_clicks,actions', 'requête campagne × jour identique à celle d’avant U8b');
   const accountCalls = urls.filter(u => u.searchParams.get('level') === 'account');
   assert.equal(accountCalls.length, 7);
   for (const url of accountCalls) {
@@ -70,11 +70,14 @@ test('U8b Meta : campagne × jour avec reach et clics sortants, lecture compte p
   assert.deepEqual(kpiWindows(FROM, TO).map(w => `${w.since}→${w.until}`), ['2026-09-23→2026-09-25', '2026-09-19→2026-09-25', '2026-08-27→2026-09-25', '2026-09-24→2026-09-26', '2026-09-20→2026-09-26', '2026-08-28→2026-09-26'], '3, 7, 30 jours finissant hier puis aujourd’hui');
   const accountDay = batch.rows.find(r => r.day === '2026-09-22' && r.key === kpiAccountRowKey([A, B, C]))!;
   assert.deepEqual(accountDay.data, { level: 'account', campaignIds: [A, B, C], reach: 1200, impressions: 1500, link_clicks: 40, unique_link_clicks: 34, outbound_clicks: 29 });
-  assert.equal(batch.rows.find(r => r.day === '2026-09-22' && r.key === A)!.data.reach, 800);
+  assert.equal(batch.rows.find(r => r.day === '2026-09-22' && r.key === A)!.data.reach, undefined, 'aucun champ nouveau sur la lecture campagne × jour');
+  assert.deepEqual(batch.uniqueReads, { status: 'complete', failedWindows: [] });
   assert.equal(batch.windows?.length, 6);
   assert.deepEqual(batch.windows?.find(w => w.from === '2026-09-24')?.data?.reach, 2900);
-  // Une fenêtre renvoyée sur d'autres dates est refusée : la tentative échoue, la dernière publication reste.
-  await assert.rejects(readKpiMeta(FROM, TO, env, fakeMeta({ windowDateStop: '2026-09-22' }).fetcher), /KPI_META_WINDOW_SCOPE/);
+  // Une fenêtre renvoyée sur d'autres dates est refusée (domaine d'échec séparé) : aucune fenêtre écrite, le passage reste publiable.
+  const shifted = await readKpiMeta(FROM, TO, env, fakeMeta({ windowDateStop: '2026-09-22' }).fetcher);
+  assert.equal(shifted.windows, undefined);assert.equal(shifted.uniqueReads.status, 'partial');
+  assert.deepEqual(shifted.uniqueReads.failedWindows.map(w => w.error), Array(6).fill('KPI_META_WINDOW_SCOPE'));
 });
 
 test('U8b CTRU : par jour = comptes ayant cliqué / comptes touchés du niveau compte ; récapitulatif = lecture de la fenêtre, jamais une moyenne ni une somme', async () => {
@@ -112,16 +115,17 @@ test('U8b CTRU : fenêtre non lue, période sans fenêtre, campagne seule, lectu
   // Période du 21 au 26 : aucune fenêtre de six jours lue ; 3 et 7 derniers jours restent lus.
   const six = await snapshot(await published(batch), filters(days[1], days[6]));
   assert.equal(six.summaries[0].ratios.ctru, null);
-  assert.equal(six.summaries[0].reasons.ctru, 'CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours).');
+  assert.equal(six.summaries[0].reasons.ctru, 'CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours) ; dernière fenêtre Meta lue le 26/09/2026 17:00.');
   assert.equal(six.summaries[1].ratios.ctru, 90 / 2900);
   assert.equal(six.summaries[2].within_period, false);
   // Sans lectures de fenêtre (lecteur antérieur) : récapitulatifs non mesurés, jours mesurés.
   const withoutWindows = await snapshot(await published({ ...batch, windows: undefined }), filters(days[0], days[6]));
   assert.ok(withoutWindows.summaries.every(s => s.ratios.ctru === null && /fenêtre non lue/.test(s.reasons.ctru)));
   assert.ok(withoutWindows.daily.every(d => d.ratios.ctru !== null));
-  // Une seule campagne sélectionnée : CTRU du jour lu sur sa propre ligne (exact pour une campagne), fenêtres non lues pour elle.
+  // Une seule campagne sélectionnée : les uniques ne sont lus que pour l'ensemble Masterclass (la lecture campagne × jour reste inchangée).
   const single = await snapshot(await published(batch), filters(days[0], days[6], `meta:${A}`));
-  assert.deepEqual(single.daily.map(d => d.ratios.ctru), days.map(() => 25 / 800));
+  assert.ok(single.daily.every(d => d.ratios.ctru === null && d.reasons.ctru === 'CTR unique non mesuré : comptes touchés lus seulement pour l’ensemble des campagnes Masterclass.'));
+  assert.ok(single.daily.every(d => d.spend_eur === 30), 'dépense de la campagne seule');
   assert.ok(single.summaries.every(s => s.ratios.ctru === null));
   // Lecture incohérente (comptes uniques > clics lien du jour) : non mesuré, jamais publié.
   const broken = structuredClone(batch); const row = broken.rows.find(r => r.day === '2026-09-22' && r.key.startsWith('account:'))!; row.data.unique_link_clicks = 41;
@@ -163,3 +167,84 @@ test('U8b fenêtres : état courant par identifiant stable (double mémoire) ; c
 });
 
 const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+
+// Complément U8b : les lectures d'uniques (compte × jour, fenêtres) forment un domaine d'échec séparé de la lecture campagne × jour.
+function failing(options: { account?: number; window?: string; campaign?: number } = {}) {
+  const base = fakeMeta(), urls: URL[] = [];
+  const fetcher = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input)); urls.push(url);
+    const range = url.searchParams.get('time_range') ? JSON.parse(url.searchParams.get('time_range')!) as { since: string; until: string } : null;
+    if (options.campaign && url.searchParams.get('level') === 'campaign') return new Response('{"error":{"message":"refus synthétique"}}', { status: options.campaign });
+    if (options.account && url.searchParams.get('level') === 'account' && url.searchParams.get('time_increment') === '1') return new Response('{"error":{"message":"(#100) param refusé"}}', { status: options.account });
+    if (options.window && url.searchParams.get('level') === 'account' && !url.searchParams.get('time_increment') && `${range!.since}|${range!.until}` === options.window) throw new DOMException('délai dépassé', 'TimeoutError');
+    return base.fetcher(input, init);
+  }) as typeof fetch;
+  return { urls, fetcher };
+}
+const windowState = (memory: ReturnType<typeof memoryKpiDatabase>) => memory.get('source_aggregates').filter(r => String(r.metric_key).startsWith('kpi_window_')).map(r => ({ id: r.id, metric: r.metric_key, current: r.is_current, run: r.sync_run_id, dimensions: structuredClone(r.dimensions) }));
+
+test('U8b échec isolé (a) : lecture niveau compte en échec → passage publié, dépense et impressions présentes, CTRU du jour non mesuré avec le code, aucune fenêtre écrite, fenêtres précédentes intactes', async () => {
+  let at = '2026-09-26T14:30:00Z';
+  const memory = memoryKpiDatabase({}, () => at);
+  await syncKpiSource(memory.db, 'meta', '123', FROM, TO, async () => ({ ...(await readKpiMeta(FROM, TO, env, fakeMeta().fetcher)), observedAt: at }));
+  const before = windowState(memory);
+  assert.equal(before.filter(r => r.metric === 'kpi_window_row').length, 6);
+  at = OBSERVED;
+  const { urls, fetcher } = failing({ account: 400 });
+  const batch = await readKpiMeta(FROM, TO, env, fetcher);
+  assert.deepEqual(batch.uniqueReads, { status: 'failed', error: 'UPSTREAM_HTTP_ERROR (HTTP 400)', failedWindows: [] });
+  assert.equal(urls.length, 3, 'identité + campagne × jour + compte × jour refusée ; aucune lecture de fenêtre');
+  assert.equal(batch.windows, undefined);
+  const result = await syncKpiSource(memory.db, 'meta', '123', FROM, TO, async () => ({ ...batch, observedAt: at }));
+  assert.equal(result.status, 'complete', 'le passage est publié');
+  assert.deepEqual(windowState(memory), before, 'lignes de fenêtre précédentes intactes (mêmes lignes, mêmes valeurs, même datation)');
+  const data = await snapshot(memory, filters(days[0], days[6]));
+  assert.deepEqual(data.daily.map(d => d.spend_eur), days.map(() => 40));
+  assert.deepEqual(data.daily.map(d => d.impressions), days.map(() => 1500));
+  assert.equal(data.coverage.find(c => c.field_group === 'Diffusion Meta')?.through, OBSERVED, 'la dépense est datée du passage en cours');
+  for (const day of data.daily) {
+    assert.deepEqual([day.meta_reach, day.meta_unique_link_clicks, day.outbound_clicks, day.ratios.ctru], [null, null, null, null]);
+    assert.equal(day.reasons.ctru, 'Non mesuré : lecture des uniques Meta en échec (UPSTREAM_HTTP_ERROR (HTTP 400)).');
+  }
+  assert.ok(data.summaries.every(s => s.ratios.ctru === null && s.reasons.ctru === 'CTR unique non mesuré : fenêtre non lue à la source (lecture des uniques Meta en échec, UPSTREAM_HTTP_ERROR (HTTP 400)) ; dernière fenêtre Meta lue le 26/09/2026 16:30.'));
+  assert.match(data.coverage.find(c => c.field_group === 'Fenêtres Meta (CTR unique)')!.detail!, /^Dernière lecture des uniques Meta en échec \(UPSTREAM_HTTP_ERROR \(HTTP 400\)\)/);
+  const text = JSON.stringify(data);
+  assert.ok(!text.includes('graph.facebook') && !text.includes('synthetic-token') && !text.includes('param refusé'), 'ni URL, ni jeton, ni message de Meta');
+});
+
+test('U8b échec isolé (b) : une fenêtre sur six en échec → les cinq autres écrites et courantes, la sixième absente avec motif', async () => {
+  let at = '2026-09-26T14:30:00Z';
+  const memory = memoryKpiDatabase({}, () => at);
+  await syncKpiSource(memory.db, 'meta', '123', FROM, TO, async () => ({ ...(await readKpiMeta(FROM, TO, env, fakeMeta().fetcher)), observedAt: at }));
+  at = OBSERVED;
+  const batch = await readKpiMeta(FROM, TO, env, failing({ window: '2026-09-24|2026-09-26' }).fetcher);
+  assert.equal(batch.uniqueReads.status, 'partial');
+  assert.deepEqual(batch.uniqueReads.failedWindows, [{ from: '2026-09-24', to: '2026-09-27', error: 'NETWORK_ERROR' }], 'délai dépassé : code sûr');
+  assert.equal(batch.windows?.length, 5);
+  await syncKpiSource(memory.db, 'meta', '123', FROM, TO, async () => ({ ...batch, observedAt: at }));
+  const current = await readKpiWindows(memory.db, 'meta', '123');
+  assert.equal(current.size, 5, 'cinq fenêtres courantes');
+  assert.ok([...current.values()].every(w => w.observedAt === OBSERVED), 'écrites par ce passage');
+  assert.equal([...current.keys()].some(id => id.startsWith('2026-09-24|2026-09-27|')), false, 'la sixième est absente de l’état courant (retirée, conservée)');
+  assert.equal(memory.get('source_aggregates').filter(r => r.metric_key === 'kpi_window_row' && !r.is_current && (r.dimensions as Row).from === '2026-09-24').length, 1);
+  const data = await snapshot(memory, filters(days[0], days[6]));
+  assert.equal(data.summaries[1].ratios.ctru, null);
+  assert.equal(data.summaries[1].reasons.ctru, 'CTR unique non mesuré : fenêtre non lue à la source (jamais une moyenne ni une somme de jours) ; dernière fenêtre Meta lue le 26/09/2026 17:00.');
+  assert.equal(data.summaries[2].ratios.ctru, 190 / 5200, 'les autres fenêtres restent lues');
+  assert.ok(data.daily.every(d => d.ratios.ctru !== null), 'la lecture compte × jour a réussi');
+});
+
+test('U8b échec isolé (c) : lecture campagne × jour en échec → passage en échec, rien de publié (règle existante)', async () => {
+  let at = '2026-09-26T14:30:00Z';
+  const memory = memoryKpiDatabase({}, () => at);
+  await syncKpiSource(memory.db, 'meta', '123', FROM, TO, async () => ({ ...(await readKpiMeta(FROM, TO, env, fakeMeta().fetcher)), observedAt: at }));
+  const rowsBefore = structuredClone(memory.get('source_aggregates'));
+  at = OBSERVED;
+  const { urls, fetcher } = failing({ campaign: 500 });
+  await assert.rejects(syncKpiSource(memory.db, 'meta', '123', FROM, TO, () => readKpiMeta(FROM, TO, env, fetcher)), /UPSTREAM_HTTP_ERROR/);
+  assert.equal(urls.length, 2, 'aucune lecture d’uniques après l’échec de la lecture campagne × jour');
+  assert.deepEqual(memory.get('source_aggregates'), rowsBefore, 'rien de publié ni de modifié');
+  assert.equal(memory.get('sync_runs').at(-1)?.status, 'failed');
+  const data = await snapshot(memory, filters(days[0], days[6]));
+  assert.equal(data.coverage.find(c => c.field_group === 'Diffusion Meta')?.through, '2026-09-26T14:30:00Z', 'dernière publication conservée');
+});

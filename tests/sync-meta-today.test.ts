@@ -54,3 +54,22 @@ test('U8b KPI Meta : le passage automatique lit aussi le jour en cours au niveau
  const stored=await readKpiWindows(memory.db,'meta','123');
  assert.equal(stored.size,6);assert.ok([...stored.values()].every(w=>w.data===null),'fenêtre sans diffusion : lue vide, jamais une somme de jours');
 });
+
+test('U8b KPI Meta : lecture des uniques refusée par Meta → le passage automatique publie quand même la dépense du jour', async () => {
+ const {synchronizeKpi}=await import('../src/lib/sync-kpi');
+ const {memoryKpiDatabase}=await import('./helpers/kpi-memory');
+ const {readKpiSource,readKpiWindows}=await import('../src/lib/kpi-source-store');
+ const today=Temporal.Now.plainDateISO('Europe/Paris'),yesterday=today.subtract({days:1}).toString(),memory=memoryKpiDatabase();
+ const fetcher:typeof fetch=async input=>{
+  const url=new URL(String(input));
+  if(url.pathname.endsWith('/insights')&&url.searchParams.get('level')==='account')return new Response('{"error":{"message":"refus synthétique"}}',{status:400});
+  if(url.pathname.endsWith('/insights'))return new Response(JSON.stringify({data:[{account_id:'123',campaign_id:'120248808857790714',date_start:yesterday,date_stop:yesterday,spend:'12.00',impressions:'900',inline_link_clicks:'30',unique_inline_link_clicks:'25',actions:[]}]}));
+  return new Response(JSON.stringify({account_id:'123',currency:'EUR',timezone_name:'Europe/Paris'}));
+ };
+ const result=await synchronizeKpi('meta',{db:memory.db,fetcher,env:{NODE_ENV:'test',META_AD_ACCOUNT_ID:'123',META_ACCESS_TOKEN:'synthetic'}});
+ assert.equal(result.status,'complete');
+ const day=(await readKpiSource(memory.db,'meta','123',yesterday,today.toString())).days.get(yesterday)!;
+ assert.equal(day.rows.find(r=>r.key==='120248808857790714')?.data.spend_eur,12,'dépense publiée');
+ assert.equal(day.rows.find(r=>r.key.startsWith('account:'))?.data.error,'UPSTREAM_HTTP_ERROR (HTTP 400)','ligne compte marquée du code sûr, sans valeur');
+ assert.equal((await readKpiWindows(memory.db,'meta','123')).size,0,'aucune fenêtre écrite');
+});
