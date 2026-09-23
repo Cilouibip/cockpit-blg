@@ -102,11 +102,14 @@ const rate = (numerator: number | null, denominator: number | null, reason: stri
 // sur les seules personnes dont l'événement d'entrée au dénominateur est antérieur ou égal à la
 // couverture commune de ces sources. Une personne plus récente sort du numérateur ET du
 // dénominateur ; elle n'est jamais comptée comme « n'a pas fait ». Les compteurs d'étape restent
-// calculés sur toute la sélection. Une source à actualiser (`stale`) reste utilisable : son heure
-// de couverture dit jusqu'où ; une source absente, en échec, en cours ou sans couverture connue
-// rend le taux indisponible.
+// calculés sur toute la sélection. Une tentative de mise à jour ne prouve ni n'invalide la couverture
+// (arbitrage Fable du 23/09) : une source dont la dernière couverture publiée est connue reste
+// utilisable jusqu'à cette heure si elle est à jour, à actualiser (`stale`), en cours de lecture ou
+// partielle (`running`) ou si sa dernière tentative a échoué (`failed`) ; la bande de fraîcheur le
+// signale. Une source sans lignes, `missing`, `unfinished` ou sans couverture connue rend le taux
+// indisponible.
 type FreshnessStatus = VisualJourneyReport['freshness']['wix']['status'];
-const usableFreshness = new Set<FreshnessStatus>(['available', 'stale']);
+const usableFreshness = new Set<FreshnessStatus>(['available', 'stale', 'running', 'failed']);
 const parisTime = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
 type RateCoverage = { at: Temporal.Instant | null; blocked: string | null; label: string };
 function coveredRate<T>(

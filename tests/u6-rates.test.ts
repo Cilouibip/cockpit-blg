@@ -90,17 +90,26 @@ test('U6 (c) la couverture d’un taux est la plus ancienne des sources qu’il 
   assert.equal(report.stages[1].fromPrevious?.coveredThrough, at('11:30'), 'taux navigateur : couverture PostHog');
 });
 
-test('U6 (d) une source à actualiser reste utilisable ; absente, en échec, en cours ou sans couverture ne l’est pas', () => {
-  const input = threePeople();
-  input.freshness.wix = covered(at('10:00'), 'stale', 'les inscriptions : les données attendent leur mise à jour horaire.');
-  input.freshness.appointments = covered(at('10:00'), 'stale', 'les rendez-vous : les données attendent leur mise à jour horaire.');
-  let report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.stages[2].fromPrevious, optionA(1, 2, at('10:00'), 1));
-  assert.deepEqual(report.stages[4].fromPrevious, optionA(1, 1, at('10:00'), 1));
-  for (const status of ['missing', 'failed', 'running'] as const) {
+test('U6 (d) à actualiser, en cours ou en échec avec couverture publiée : utilisable jusqu’à cette heure ; sans lignes, missing, unfinished ou sans couverture : indisponible', () => {
+  // Arbitrage Fable du 23/09 : une tentative de mise à jour ne prouve ni n'invalide la dernière couverture publiée.
+  for (const status of ['stale', 'running', 'failed'] as const) {
+    const input = threePeople();
+    input.freshness.wix = covered(at('09:30'), status, `Inscriptions : ${status}.`);
+    input.freshness.appointments = covered(at('09:45'), status, `Rendez-vous : ${status}.`);
+    const report = buildVisualJourneyReport(input);
+    assert.deepEqual(report.stages[2].fromPrevious, optionA(1, 2, at('09:30'), 1), status);
+    assert.deepEqual(report.form.rates.registeredFromStarted, optionA(1, 2, at('09:30'), 1), status);
+    assert.deepEqual(report.stages[3].fromPrevious, optionA(1, 1, at('09:30'), 1), status);
+    assert.deepEqual(report.stages[4].fromPrevious, optionA(1, 1, at('09:30'), 1), `${status} : heure publiée la plus ancienne`);
+    assert.deepEqual(report.booking.rates.bookedFromCalendar, optionA(1, 1, at('09:30'), 1), status);
+    const notionOnly = threePeople();
+    notionOnly.freshness.appointments = covered(at('09:45'), status, `Rendez-vous : ${status}.`);
+    for (const rate of bookingRates(buildVisualJourneyReport(notionOnly))) assert.equal(rate.coveredThrough, at('09:45'), `${status} : couverture Notion publiée`);
+  }
+  for (const status of ['missing', 'unfinished'] as const) {
     const blocked = threePeople(), reason = `Inscriptions : ${status}.`;
     blocked.freshness.wix = covered(at('10:00'), status, reason);
-    report = buildVisualJourneyReport(blocked);
+    let report = buildVisualJourneyReport(blocked);
     for (const rate of [...wixRates(report), ...bookingRates(report)]) {
       assert.equal(rate.available, false, status); assert.equal(rate.rate, null, status); assert.equal(rate.reason, reason, status);
       assert.equal(rate.coveredThrough, null, status); assert.equal(rate.excludedAfterCoverage, 0, status);
@@ -111,10 +120,16 @@ test('U6 (d) une source à actualiser reste utilisable ; absente, en échec, en 
     for (const rate of bookingRates(report)) assert.equal(rate.reason, notionReason, status);
     assert.equal(report.stages[2].fromPrevious?.available, true, 'Notion ne bloque pas les taux d’inscription');
   }
-  const unknown = threePeople(); unknown.freshness.wix = covered(null);
-  assert.equal(buildVisualJourneyReport(unknown).stages[2].fromPrevious?.available, false, 'couverture inconnue');
+  for (const status of ['available', 'stale', 'running', 'failed'] as const) {
+    const unknown = threePeople(); unknown.freshness.wix = covered(null, status, 'Couverture des inscriptions inconnue.');
+    const report = buildVisualJourneyReport(unknown);
+    for (const rate of [...wixRates(report), ...bookingRates(report)]) { assert.equal(rate.available, false, `${status} sans couverture`); assert.equal(rate.rate, null, status); }
+    const unknownNotion = threePeople(); unknownNotion.freshness.appointments = covered(null, status, 'Couverture des rendez-vous inconnue.');
+    for (const rate of bookingRates(buildVisualJourneyReport(unknownNotion))) assert.equal(rate.reason, 'Couverture des rendez-vous inconnue.', status);
+  }
   const absent = threePeople(); absent.registrations = null; absent.registrationError = 'Inscriptions illisibles.';
-  for (const rate of [...wixRates(buildVisualJourneyReport(absent)), ...bookingRates(buildVisualJourneyReport(absent))]) assert.equal(rate.reason, 'Inscriptions illisibles.');
+  absent.freshness.wix = covered(at('10:00'), 'failed', 'Dernière lecture en échec.');
+  for (const rate of [...wixRates(buildVisualJourneyReport(absent)), ...bookingRates(buildVisualJourneyReport(absent))]) assert.equal(rate.reason, 'Inscriptions illisibles.', 'sans lignes : toujours indisponible');
   const noMirror = threePeople(); noMirror.appointments = null; noMirror.appointmentError = 'Miroir illisible.';
   for (const rate of bookingRates(buildVisualJourneyReport(noMirror))) assert.equal(rate.reason, 'Miroir illisible.');
 });
