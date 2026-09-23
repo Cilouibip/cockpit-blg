@@ -29,8 +29,9 @@ export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'
  * `cadence` : cadence de base (une heure). `pilot` : flux qui conditionne le pilotage Masterclass et dont chaque passage reste borné
  * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (60 minutes par défaut, 30 sur activation explicite). */
 const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean;pilot?:true}[]=[
- // Chaque nouveau passage Notion relit l'inventaire complet de la base (et tout le miroir une fois par 24 h) : il reste à une heure.
- {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
+ // Rendez-vous Notion : modifications à chaque passage + une tranche bornée de l'inventaire (migration 021, couverture complète
+ // en 6 h), miroir complet une fois par 24 h. Flux pilote : 60 min par défaut, 30 sur activation, comme les autres.
+ {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true,pilot:true},
  {id:'meta',source:'meta',stream:'meta_account_daily',cadence:3600000},
  {id:'wix',source:'wix',stream:'payments_analytics',cadence:3600000},
  {id:'receipts',source:'wix',stream:'receipt_observations',cadence:3600000},
