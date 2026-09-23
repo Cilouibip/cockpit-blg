@@ -1,3 +1,9 @@
+## 23 septembre 2026 : Parcours, lecture des visites via le cache PostHog (local, revue requise)
+
+Le Parcours Masterclass demande désormais à PostHog son cache récent pour les deux lectures des visites : une réouverture ou un « Réessayer » de la même période est servi immédiatement une fois le calcul précédent terminé. Le navigateur attend jusqu'à 4 minutes (14 appels au plus) au lieu de 2. S'il s'arrête sans résultat, l'écran l'écrit clairement : « Lecture des visites non terminée », avec l'heure de la tentative et le bouton Réessayer ; les inscriptions et rendez-vous restent affichés, aucun zéro n'est ajouté. Un résultat servi par le cache est daté de son calcul.
+
+Chaque lecture journalise sa durée et son issue, sans donnée de visiteur. Aucune table, aucun stockage, aucun changement de filtre, de définition, de taux ou d'exclusion d'essais. 527 tests, typage et compilation réussis en local ; simulation hors ligne : une lecture PostHog de 140 s ou 230 s aboutit désormais, une de 260 s affiche « non terminée ». La cause de la lenteur en production reste à mesurer sur données réelles.
+
 ## 23 septembre 2026 : actualisation 30 minutes préparée (local, non activée)
 
 GitHub ne lance que 2 à 7 passages par jour au lieu de 72. Ce lot prépare un déclencheur principal en base (pg_cron + pg_net, toutes les 2 minutes) et rend la cadence des flux Masterclass réglable. Rien n'est activé : aucune extension, aucun secret, aucune tâche planifiée, workflow GitHub inchangé.
