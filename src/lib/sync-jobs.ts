@@ -58,10 +58,19 @@ export const PILOT_REFRESH_JOBS:readonly SyncJob[]=definitions.filter(d=>d.pilot
  * explicite, à poser seulement après les conditions de docs/ACTUALISATION.md §2. Aucune valeur ne descend sous 30 minutes. */
 export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='30'?30:60;}
 export type RefreshCadences=Record<SyncJob,number>;
-/** Cadence en millisecondes de chaque flux, d'après le seul réglage serveur. */
-export function refreshCadences(env:Record<string,string|undefined>=process.env):RefreshCadences {
- const pilot=refreshCadenceMinutes(env)*60_000;
- return Object.fromEntries(definitions.map(d=>[d.id,d.pilot?pilot:d.cadence])) as RefreshCadences;
+const cadencesFor=(pilotMinutes:30|60):RefreshCadences=>Object.fromEntries(definitions.map(d=>[d.id,d.pilot?pilotMinutes*60_000:d.cadence])) as RefreshCadences;
+/** Cadence en millisecondes de chaque flux, d'après le seul réglage serveur (cadence demandée, lue par le tableau). */
+export function refreshCadences(env:Record<string,string|undefined>=process.env):RefreshCadences {return cadencesFor(refreshCadenceMinutes(env));}
+/** Motif affiché quand 30 est demandé sans bail partagé détenu. */
+export const CADENCE_DEGRADED_REASON='Bail partagé indisponible : cadence de transition 60 min appliquée.';
+/** Cadence réellement appliquée à un passage. La demi-heure n'est effective que sous bail partagé détenu (`lock.kind` = `shared`) :
+ * sans lui (fonction absente, base injectée sans bail), deux instances pourraient relire les flux à 30 minutes sans coordination ;
+ * le passage tourne alors à 60 et la réponse porte la cadence demandée et le motif. Le tableau garde la cadence demandée
+ * (`refreshCadences`) : des données qui n'arrivent pas à 30 y restent « anciennes », le retard n'est pas masqué. */
+function passCadence(env:Record<string,string|undefined>,sharedLeaseHeld:boolean):{cadences:RefreshCadences;cadence:NonNullable<TickSummary['cadence']>}{
+ const requested=refreshCadenceMinutes(env),pilotJobs=[...PILOT_REFRESH_JOBS];
+ if(requested===30&&!sharedLeaseHeld)return {cadences:cadencesFor(60),cadence:{pilotMinutes:60,requestedMinutes:30,degradedReason:CADENCE_DEGRADED_REASON,pilotJobs,otherMinutes:60}};
+ return {cadences:cadencesFor(requested),cadence:{pilotMinutes:requested,pilotJobs,otherMinutes:60}};
 }
 export type StreamState={job:SyncJob;state:'due'|'waiting'|'failed'|'complete';retryAt?:string;errorCode?:string;lastSuccessAt:string|null;dataAsOf:string|null;stale:boolean};
 const touchedAt=(r:Row)=>Date.parse(String(r.lease_until??r.finished_at??r.started_at))||0;
@@ -104,7 +113,7 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:R
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
-export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
+export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60;requestedMinutes?:30|60;degradedReason?:string};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
 /** Verrou d'un passage. Le verrou par défaut vit dans la mémoire du processus : il empêche deux passages simultanés
  * sur la même instance, pas entre deux instances. Entre instances, le bail partagé en base (migration 017) s'ajoute
  * aux verrous par flux (begin_sync_stream, cockpit_claim_*), qui restent inchangés. */
@@ -223,22 +232,25 @@ export async function commerceControlPass(db:Database=database(),env:NodeJS.Proc
  * une base injectée (tests, scripts) le reçoit explicitement par `sharedLease`, sinon la réponse l'indique (`process-only`). */
 export async function tickSyncJobs(db?:Database,env:NodeJS.ProcessEnv=process.env,options:TickOptions={}):Promise<TickSummary>{
  if(env.COCKPIT_MODE==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
- const cadences=refreshCadences(env),cadence={pilotMinutes:refreshCadenceMinutes(env),pilotJobs:[...PILOT_REFRESH_JOBS],otherMinutes:60 as const};
+ // Cadence demandée : réponses sans passage (waiting) et chemin « aucune source configurée », inchangés.
+ const requested=passCadence(env,true),degraded=passCadence(env,false);
  const release=(options.lock??processTickLock).acquire();
  // Aucun budget créé, aucune lecture : le passage déjà en cours sur cette instance garde la main.
- if(!release)return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence,reason:'Un autre passage est déjà en cours sur cette instance ; aucune unité lancée.'};
+ if(!release)return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence:requested.cadence,reason:'Un autre passage est déjà en cours sur cette instance ; aucune unité lancée.'};
  try{
   const store=db??database();
   // Aucune source configurée : rien à lire ni à protéger, aucun appel en base (réponse « failed » inchangée).
-  if(!definitions.some(d=>jobScope(d.id,env)))return await tickWithLock(store,env,options,cadences,cadence);
+  if(!definitions.some(d=>jobScope(d.id,env)))return await tickWithLock(store,env,options,requested.cadences,requested.cadence);
   const lease=options.sharedLease!==undefined?options.sharedLease:db===undefined?databaseTickLease(store):null;
-  if(!lease)return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'process-only',reason:'Aucun bail partagé fourni à ce passage (base injectée) : seul le verrou de cette instance s’applique.'}};
+  // Sans bail partagé détenu, la demi-heure n'est jamais appliquée : cadences de 60, cadence demandée et motif dans la réponse.
+  if(!lease)return {...await tickWithLock(store,env,options,degraded.cadences,degraded.cadence),lock:{kind:'process-only',reason:'Aucun bail partagé fourni à ce passage (base injectée) : seul le verrou de cette instance s’applique.'}};
   const claim=await lease.claim();
   // Bail détenu par un autre passage (autre instance) : ni lecture du journal, ni source, ni écriture.
-  if(claim.state==='refused')return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence,streams:[],reason:'Un autre passage détient le verrou partagé en base (autre instance) ; aucune unité lancée, aucune lecture.'};
-  if(claim.state==='missing')return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'process-only',reason:claim.reason}};
+  if(claim.state==='refused')return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence:requested.cadence,streams:[],reason:'Un autre passage détient le verrou partagé en base (autre instance) ; aucune unité lancée, aucune lecture.'};
+  if(claim.state==='missing')return {...await tickWithLock(store,env,options,degraded.cadences,degraded.cadence),lock:{kind:'process-only',reason:claim.reason}};
+  // Bail détenu : seule configuration où la cadence demandée (30 compris) s'applique.
   // Libéré dans tous les cas ; une libération perdue expire seule au bout de 90 s.
-  try{return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'shared',leaseSeconds:TICK_LEASE_SECONDS}};}
+  try{return {...await tickWithLock(store,env,options,requested.cadences,requested.cadence),lock:{kind:'shared',leaseSeconds:TICK_LEASE_SECONDS}};}
   finally{await claim.release().catch(()=>undefined);}
  }finally{release();}
 }
