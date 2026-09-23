@@ -1,3 +1,13 @@
+## 23 septembre 2026 : stockage par identifiant stable, verrou partagé, défaut 60 (local, revue requise)
+
+Le lot U4 est corrigé sur les trois points de la revue. Rien n'est appliqué en production.
+
+- Cadence : sans réglage, les six flux du pilotage Masterclass restent à 60 minutes (défaut de transition). `BLG_REFRESH_CADENCE_MINUTES=30` est la seule activation de la demi-heure, à poser après trois constats : migrations 017 et 018 appliquées, observation à 60 conforme, verrou partagé actif (`lock.kind` = `shared` dans les réponses du tick).
+- Stockage : un objet source inchangé n'ajoute plus aucune ligne ; une modification met à jour la même ligne ; un nouvel objet ajoute seulement cet objet ; un objet disparu est retiré de l'état courant sans être effacé (KPI Meta, PostHog, Wix, rapport Masterclass, publicités par jour). Inscriptions : une inscription inchangée n'est plus réécrite. Publication atomique en une transaction ; les lecteurs existants restent exacts. Aucune purge ; les versions écrites avant la migration restent en place.
+- Verrou partagé du tick en base (migration 017), branché après le verrou de processus ; si la migration manque, le passage continue avec le seul verrou de processus et le dit.
+
+Preuves : 560 tests, typage et compilation ; 99 tests PostgreSQL 17 jetable, dont lecture ancienne et nouvelle identiques après reprise des données et non-accumulation flux par flux. Ordre de mise en service : migrations 017 et 018 avant le code (docs/ACTUALISATION.md, section 5.1). Restent : application des migrations et observation à 60 (coordinateur), arbitrage de deux écarts au brief (erreur du bail en HTTP 503 ; bail par défaut sur la seule route), double en mémoire de la vérification navigateur KPI à adapter.
+
 ## 23 septembre 2026 : tableau « Suivi quotidien du funnel », colonne par colonne (local, revue requise)
 
 Chaque colonne du tableau a sa source, sa définition, son flux automatique, sa fraîcheur et sa preuve (livraison U8). Les blocs sont désormais datés par la plus ancienne des lectures dont ils dépendent et marqués « ancien » dès qu'une lecture dépasse la cadence réelle de son flux (réglage des flux pilotes, une heure pour Notion et les ventes), au lieu d'un seuil fixe d'une heure. L'heure de chaque bloc est visible au-dessus du tableau, la plus ancienne des blocs disponibles en tête, et l'export Excel reprend ces lignes.
