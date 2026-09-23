@@ -24,34 +24,51 @@ import {ConnectorError} from '../connectors/http';
 import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
 export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce'|'kpi_meta'|'kpi_posthog'|'kpi_email';
-/** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle. */
-const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean}[]=[
+/** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle.
+ * `cadence` : cadence de base (une heure). `pilot` : flux qui conditionne le pilotage Masterclass et dont chaque passage reste borné
+ * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (30 minutes par défaut). */
+const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean;pilot?:true}[]=[
+ // Chaque nouveau passage Notion relit l'inventaire complet de la base (et tout le miroir une fois par 24 h) : il reste à une heure.
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
  {id:'meta',source:'meta',stream:'meta_account_daily',cadence:3600000},
  {id:'wix',source:'wix',stream:'payments_analytics',cadence:3600000},
  {id:'receipts',source:'wix',stream:'receipt_observations',cadence:3600000},
- {id:'meta_ads',source:'meta',stream:'ad_daily',cadence:3600000},
+ {id:'meta_ads',source:'meta',stream:'ad_daily',cadence:3600000,pilot:true},
+ // Le catalogue relit toutes les publicités du compte à chaque passage : il reste à une heure.
  {id:'meta_catalog',source:'meta',stream:'ad_catalog',cadence:3600000},
  {id:'quiz',source:'posthog',stream:'quiz_observations',cadence:3600000,resumable:true},
- {id:'masterclass',source:'posthog',stream:'masterclass_observations',cadence:3600000,resumable:true},
+ {id:'masterclass',source:'posthog',stream:'masterclass_observations',cadence:3600000,resumable:true,pilot:true},
  // Inscriptions Wix (masterclass, quiz), antériorité Client (Notion) et ventes payées : mêmes lecteurs que le bouton Actualiser, sans agent.
- {id:'forms',source:'wix',stream:'lead_entries_forms',cadence:3600000,resumable:true},
+ {id:'forms',source:'wix',stream:'lead_entries_forms',cadence:3600000,resumable:true,pilot:true},
  {id:'quiz_entries',source:'wix',stream:'lead_entries_quiz',cadence:3600000,resumable:true},
  {id:'client_history',source:'notion',stream:'lead_entries_client_history',cadence:3600000,resumable:true},
- {id:'kpi_meta',source:'meta',stream:'kpi_meta_daily',cadence:3600000},
- {id:'kpi_posthog',source:'posthog',stream:'kpi_posthog_daily',cadence:3600000},
- {id:'kpi_email',source:'wix',stream:'kpi_wix_daily',cadence:3600000},
+ {id:'kpi_meta',source:'meta',stream:'kpi_meta_daily',cadence:3600000,pilot:true},
+ {id:'kpi_posthog',source:'posthog',stream:'kpi_posthog_daily',cadence:3600000,pilot:true},
+ {id:'kpi_email',source:'wix',stream:'kpi_wix_daily',cadence:3600000,pilot:true},
  {id:'commerce',source:'notion',stream:'commerce_declared_snapshot',workStream:'commerce_reader_checkpoint',cadence:3600000,resumable:true},
 ];
 const RESUMABLE=new Set<SyncJob>(definitions.filter(d=>d.resumable).map(d=>d.id));
 const MAX_CHUNKS=4;
+const HOUR_MS=3_600_000;
+/** Flux du pilotage Masterclass soumis au réglage de cadence ; tous les autres restent à une heure. */
+export const PILOT_REFRESH_JOBS:readonly SyncJob[]=definitions.filter(d=>d.pilot).map(d=>d.id);
+/** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES : `60` rétablit exactement la cadence horaire antérieure ;
+ * absent, vide ou toute autre valeur : 30 minutes. Aucune valeur ne descend sous 30 minutes. */
+export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='60'?60:30;}
+export type RefreshCadences=Record<SyncJob,number>;
+/** Cadence en millisecondes de chaque flux, d'après le seul réglage serveur. */
+export function refreshCadences(env:Record<string,string|undefined>=process.env):RefreshCadences {
+ const pilot=refreshCadenceMinutes(env)*60_000;
+ return Object.fromEntries(definitions.map(d=>[d.id,d.pilot?pilot:d.cadence])) as RefreshCadences;
+}
 export type StreamState={job:SyncJob;state:'due'|'waiting'|'failed'|'complete';retryAt?:string;errorCode?:string;lastSuccessAt:string|null;dataAsOf:string|null;stale:boolean};
 const touchedAt=(r:Row)=>Date.parse(String(r.lease_until??r.finished_at??r.started_at))||0;
 const safeCode=(value:unknown)=>typeof value==='string'&&/^[A-Za-z_][A-Za-z0-9_ ()-]{0,99}$/.test(value)?value:'SYNC_UNIT_FAILED';
 /** Inspect persisted work, including leases and failed cooldowns. No work selected
  * is not equivalent to a successful publication. */
-export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):StreamState[]{
+export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[],cadences:RefreshCadences=refreshCadences()):StreamState[]{
  return definitions.filter(d=>enabled.includes(d.id)).map(d=>{
+  const cadence=cadences[d.id]??d.cadence;
   const rows=runs.filter(r=>r.source===d.source&&r.stream_key===d.stream).sort((a,b)=>touchedAt(b)-touchedAt(a));
   // A saved Commerce page lives in another stream. It is work evidence only:
   // never a published snapshot, last success, or data-freshness observation.
@@ -63,7 +80,7 @@ export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):Stream
   // Publication time and source coverage are different for a long Notion scan.
   const bounds=success?[success.started_at,success.finished_at,d.id==='notion'?success.period_to:success.source_as_of].map(value=>Date.parse(String(value))).filter(value=>Number.isFinite(value)&&value<=now):[];
   const dataAsOf=bounds.length?new Date(Math.min(...bounds)).toISOString():null;
-  const base={job:d.id,lastSuccessAt,dataAsOf,stale:!dataAsOf||now-Date.parse(dataAsOf)>=d.cadence};
+  const base={job:d.id,lastSuccessAt,dataAsOf,stale:!dataAsOf||now-Date.parse(dataAsOf)>=cadence};
   const active=attempts.find(r=>r.status==='running'&&(r.lease_until?Date.parse(String(r.lease_until)):Date.parse(String(r.started_at))+600000)>now);
   if(active)return {...base,state:'waiting' as const,retryAt:new Date(active.lease_until?Date.parse(String(active.lease_until)):Date.parse(String(active.started_at))+600000).toISOString()};
   if(latestAttempt?.status==='failed'||latestAttempt?.error_code){
@@ -72,20 +89,35 @@ export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[]):Stream
   }
   if(!latest)return {...base,state:'due' as const};
   if(latest.status==='running')return {...base,state:'due' as const};
-  // Due from the attempt start: finishing a long import must not defer the next hourly run.
+  // Due from the attempt start: finishing a long import must not defer the next run. Entering the next
+  // UTC slot of the cadence (hour, or half hour) is also due, so a few seconds of trigger jitter never skip a slot.
   const started=Date.parse(String(latest.started_at));
-  return {...base,state:(base.stale||now-started>=d.cadence||(d.cadence===3_600_000&&Math.floor(now/d.cadence)>Math.floor(started/d.cadence))?'due':'complete') as 'due'|'complete'};
+  return {...base,state:(base.stale||now-started>=cadence||(HOUR_MS%cadence===0&&Math.floor(now/cadence)>Math.floor(started/cadence))?'due':'complete') as 'due'|'complete'};
  });
 }
-export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[]):SyncJob|null {
- const due=new Set(syncStreamStates(runs,now,enabled).filter(s=>s.state==='due').map(s=>s.job));
+export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:RefreshCadences=refreshCadences()):SyncJob|null {
+ const due=new Set(syncStreamStates(runs,now,enabled,cadences).filter(s=>s.state==='due').map(s=>s.job));
  return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
-export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
-type TickOptions={now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
+export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
+/** Verrou d'un passage. Le verrou par défaut vit dans la mémoire du processus : il empêche deux passages simultanés
+ * sur la même instance, pas entre deux instances. Entre instances, seuls les verrous par flux en base s'appliquent. */
+export type TickLock={acquire():(()=>void)|null};
+/** Un détenteur bloqué au-delà de `staleMs` (au-dessus de la durée maximale de la route, 60 s) n'empêche plus les passages suivants. */
+export function createProcessTickLock(staleMs=120_000,clock:()=>number=Date.now):TickLock {
+ let held:{token:symbol;since:number}|null=null;
+ return {acquire(){
+  const at=clock();
+  if(held&&at-held.since<staleMs)return null;
+  const token=Symbol('tick');held={token,since:at};
+  return ()=>{if(held?.token===token)held=null;};
+ }};
+}
+const processTickLock=createProcessTickLock();
+type TickOptions={lock?:TickLock;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité planifiable ; null = unité non configurée ou suspendue (elle n'est pas planifiée, jamais un zéro).
  * Le lecteur financier Notion reste hors planning tant que BLG_COMMERCE_READER n'est pas `active`. */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
@@ -163,6 +195,13 @@ export async function commerceControlPass(db:Database=database(),env:NodeJS.Proc
  * the limit; the 45 s budget cannot yet guarantee an end-to-end hard cutoff. */
 export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=process.env,options:TickOptions={}):Promise<TickSummary>{
  if(env.COCKPIT_MODE==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
+ const cadences=refreshCadences(env),cadence={pilotMinutes:refreshCadenceMinutes(env),pilotJobs:[...PILOT_REFRESH_JOBS],otherMinutes:60 as const};
+ const release=(options.lock??processTickLock).acquire();
+ // Aucun budget créé, aucune lecture : le passage déjà en cours sur cette instance garde la main.
+ if(!release)return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence,reason:'Un autre passage est déjà en cours sur cette instance ; aucune unité lancée.'};
+ try{return await tickWithLock(db,env,options,cadences,cadence);}finally{release();}
+}
+async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOptions,cadences:RefreshCadences,cadence:NonNullable<TickSummary['cadence']>):Promise<TickSummary>{
  const scopes=new Map<SyncJob,{namespace:string;profile:string}>();
  for(const d of definitions){const scope=jobScope(d.id,env);if(scope)scopes.set(d.id,scope);}
  const enabled=definitions.filter(d=>scopes.has(d.id)).map(d=>d.id);
@@ -190,31 +229,33 @@ export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=
   for(;;){
    const runnable=enabled.filter(id=>!excluded.has(id)&&(chunks.get(id)??0)<(RESUMABLE.has(id)?MAX_CHUNKS:1)),runs=await loadRuns();
    finalRuns=runs;
-   const job=chooseSyncJob(runs,now(),runnable.filter(id=>budget.canStart(sourceTimeoutMs[id])));
-   if(!job){if(chooseSyncJob(runs,now(),runnable))budgetStopped=true;break;}
+   const job=chooseSyncJob(runs,now(),runnable.filter(id=>budget.canStart(sourceTimeoutMs[id])),cadences);
+   if(!job){if(chooseSyncJob(runs,now(),runnable,cadences))budgetStopped=true;break;}
    let result:TickResult;
    const measure={job,elapsedMs:0,sourceRequests:0,sourceMs:0,dbReads:0,dbWrites:0,dbMs:0,rowsSubmitted:0},started=performance.now();
    const timed=async<T>(fn:()=>Promise<T>)=>{const at=performance.now();try{return await fn();}finally{measure.dbMs+=performance.now()-at;}};
    const measuredDb:Database={...db,select:(...args)=>{measure.dbReads++;return timed(()=>db.select(...args));},upsert:(...args)=>{measure.dbWrites++;measure.rowsSubmitted+=args[1].length;return timed(()=>db.upsert(...args));},rpc:<T>(name:string,args:Row,options?:Parameters<Database['rpc']>[2])=>{measure.dbWrites++;if(Array.isArray(args.p_records))measure.rowsSubmitted+=args.p_records.length;return timed(()=>db.rpc<T>(name,args,options));}};
    const fetcher:typeof fetch=async(...args)=>{const at=performance.now();measure.sourceRequests++;try{return await budget.sourceFetch(...args);}finally{measure.sourceMs+=performance.now()-at;}};
    try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher,...(budget.remainingWorkMs&&budget.remainingTotalMs?{budget:{remainingWorkMs:budget.remainingWorkMs,remainingTotalMs:budget.remainingTotalMs}}:{})});}
-   catch(error) {result={status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};excluded.add(job);}
+   // Flux déjà réclamé ailleurs (begin_sync_stream : 55P03 traduit en 409 source_busy) : rien n'a été écrit, le détenteur termine.
+   catch(error) {result=error instanceof AppError&&error.status===409&&error.code==='source_busy'?{status:'waiting'}:{status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};excluded.add(job);}
    invalidateSourceSnapshots(db);
    measure.elapsedMs=Math.round(performance.now()-started);measure.dbMs=Math.round(measure.dbMs);measure.sourceMs=Math.round(measure.sourceMs);measurements.push(measure);
    jobs.push(job);results.push(result);chunks.set(job,(chunks.get(job)??0)+1);
    if(!RESUMABLE.has(job)||result.status==='failed')excluded.add(job);
   }
   const unitResults=results.map((result,index)=>({job:jobs[index],status:result.status}));
-  const streams=syncStreamStates(finalRuns,now(),enabled);
+  const streams=syncStreamStates(finalRuns,now(),enabled,cadences);
   const finalStatuses=new Map(unitResults.map(unit=>[unit.job,unit.status]));
   for(const state of streams){
    const result=finalStatuses.get(state.job);
    if(result==='failed'){state.state='failed';state.errorCode=results.filter((_,index)=>jobs[index]===state.job).at(-1)?.safeError??state.errorCode??'SYNC_UNIT_FAILED';}
    else if((result==='partial'||result==='pending')&&state.state!=='waiting')state.state='due';
+   else if(result==='waiting'&&state.state!=='complete')state.state='waiting';
   }
   const due=streams.some(s=>s.state==='due'),waiting=streams.some(s=>s.state==='waiting'),failed=streams.some(s=>s.state==='failed');
   const status=due||budgetStopped?'partial':waiting?'waiting':failed?'failed':enabled.length?'complete':'failed';
-  return {status,job:jobs.at(-1)??null,jobs,units:results.length,unitResults,streams,measurements,schedulerMeasurements:Object.fromEntries(Object.entries(schedulerMeasurements).map(([k,v])=>[k,Math.round(v)])) as typeof schedulerMeasurements,
+  return {status,job:jobs.at(-1)??null,jobs,units:results.length,unitResults,cadence,streams,measurements,schedulerMeasurements:Object.fromEntries(Object.entries(schedulerMeasurements).map(([k,v])=>[k,Math.round(v)])) as typeof schedulerMeasurements,
    reason:status==='complete'?'Toutes les sources configurées ont une publication complète récente.':status==='waiting'?'Une lecture possède encore le verrou ; aucune fin globale annoncée.':status==='failed'?'Une source reste en échec ou aucune source n’est configurée ; le dernier rapport valide est conservé.':'Des lectures restent à terminer ; reprise au point enregistré.'};
  } finally {budget.dispose();}
 }
