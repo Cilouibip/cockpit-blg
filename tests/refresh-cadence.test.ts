@@ -14,7 +14,7 @@ const STREAM: Record<SyncJob, [string, string]> = {
   kpi_meta: ['meta', 'kpi_meta_daily'], kpi_posthog: ['posthog', 'kpi_posthog_daily'], kpi_email: ['wix', 'kpi_wix_daily'], commerce: ['notion', 'commerce_declared_snapshot'],
 };
 const ALL = Object.keys(STREAM) as SyncJob[];
-const PILOT: SyncJob[] = ['meta_ads', 'masterclass', 'forms', 'kpi_meta', 'kpi_posthog', 'kpi_email'];
+const PILOT: SyncJob[] = ['meta_ads', 'masterclass', 'forms', 'kpi_meta', 'kpi_posthog', 'kpi_email', 'notion'];
 const done = (job: SyncJob, at: number): Row => ({ id: `${job}-${at}`, source: STREAM[job][0], source_namespace: STREAM[job][0], stream_key: STREAM[job][1], status: 'complete', pagination_complete: true, started_at: new Date(at).toISOString(), finished_at: new Date(at + 5000).toISOString() });
 const env = (value?: string) => (value === undefined ? {} : { BLG_REFRESH_CADENCE_MINUTES: value }) as NodeJS.ProcessEnv;
 
@@ -23,14 +23,16 @@ test('réglage : absent, vide ou invalide = 60 minutes (défaut de transition) ;
   for (const value of ['', '60', ' 60\n', '15', '5', '0', '-30', '45', 'abc', '30min', '60min', '3 0']) assert.equal(refreshCadenceMinutes(env(value)), 60, `« ${value} » = 60`);
   assert.equal(refreshCadenceMinutes(env('30')), 30, 'activation explicite');
   assert.equal(refreshCadenceMinutes(env(' 30\n')), 30, 'un retour à la ligne copié avec la valeur ne change pas son sens');
-  assert.deepEqual([...PILOT_REFRESH_JOBS].sort(), [...PILOT].sort(), 'flux Masterclass bornés : publicités par jour, PostHog Masterclass, formulaires Wix, trois KPI quotidiens');
+  assert.deepEqual([...PILOT_REFRESH_JOBS].sort(), [...PILOT].sort(), 'flux Masterclass bornés : publicités par jour, PostHog Masterclass, formulaires Wix, trois KPI quotidiens, rendez-vous Notion (U9)');
   const fast = refreshCadences(env('30')), slow = refreshCadences({});
   for (const job of ALL) {
     assert.equal(fast[job], PILOT.includes(job) ? 30 * MIN : 60 * MIN, `${job} : cadence activée à 30`);
     assert.equal(slow[job], 60 * MIN, `${job} : réglage absent = comportement antérieur`);
     assert.equal(refreshCadences(env('60'))[job], 60 * MIN, `${job} : 60 explicite = comportement antérieur`);
   }
-  assert.equal(fast.notion, 60 * MIN, 'l’inventaire Notion complet n’est jamais relu plus souvent qu’aujourd’hui');
+  assert.equal(fast.notion, 30 * MIN, 'rendez-vous Notion : une tranche bornée de l’inventaire par passage (migration 021), flux pilote');
+  assert.equal(fast.client_history, 60 * MIN, 'antériorité client Notion : reste horaire');
+  assert.equal(fast.commerce, 60 * MIN, 'ventes Notion : restent horaires');
   assert.equal(fast.meta_catalog, 60 * MIN, 'le catalogue Meta complet n’est jamais relu plus souvent qu’aujourd’hui');
 });
 
@@ -67,10 +69,11 @@ test('un déclenchement toutes les 5 minutes ne fait pas dériver la cadence : p
 });
 
 test('la fraîcheur affichée suit la même cadence : une publication de plus de 30 minutes d’un flux Masterclass est ancienne', () => {
-  const rows = [done('kpi_meta', T0), done('notion', T0)];
-  const [kpi, notion] = syncStreamStates(rows, T0 + 31 * MIN, ['notion', 'kpi_meta'], refreshCadences(env('30'))).sort((a, b) => a.job.localeCompare(b.job));
+  // Flux horaire d'exemple : l'antériorité client (Notion) ; les rendez-vous Notion sont devenus pilotes (U9).
+  const rows = [done('kpi_meta', T0), done('client_history', T0)];
+  const [history, kpi] = syncStreamStates(rows, T0 + 31 * MIN, ['client_history', 'kpi_meta'], refreshCadences(env('30'))).sort((a, b) => a.job.localeCompare(b.job));
   assert.equal(kpi.job, 'kpi_meta'); assert.equal(kpi.stale, true); assert.equal(kpi.state, 'due');
-  assert.equal(notion.job, 'notion'); assert.equal(notion.stale, false); assert.equal(notion.state, 'complete');
+  assert.equal(history.job, 'client_history'); assert.equal(history.stale, false); assert.equal(history.state, 'complete');
 });
 
 // Toutes les lectures configurées, lecteur des ventes en pause (réglage absent) : 14 flux planifiables. Cadence 30 activée explicitement.
@@ -141,7 +144,7 @@ test('garde de cadence : réglage 30 et bail partagé détenu, la demi-heure s�
   const { summary, executed } = await passAt40(liveEnv, heldLease);
   assert.deepEqual(summary.lock, { kind: 'shared', leaseSeconds: 90 });
   assert.deepEqual(summary.cadence, { pilotMinutes: 30, pilotJobs: [...PILOT_REFRESH_JOBS], otherMinutes: 60 });
-  assert.deepEqual([...new Set(executed)].sort(), [...PILOT].sort(), 'les six flux Masterclass, et eux seuls');
+  assert.deepEqual([...new Set(executed)].sort(), [...PILOT].sort(), 'les sept flux Masterclass (dont les rendez-vous Notion), et eux seuls');
   assert.ok(summary.streams?.every(stream => stream.stale === PILOT.includes(stream.job)), 'fraîcheur calculée à 30 pour les flux Masterclass, 60 pour les autres');
 });
 test('garde de cadence : réglage 30, base injectée sans bail partagé, cadence 60 appliquée et signalée', async () => {

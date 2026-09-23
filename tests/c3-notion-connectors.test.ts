@@ -29,3 +29,20 @@ test('truncated relation, repeated cursor and transport/429 failure never comple
 test('the normal Notion reader rejects incomplete relations instead of silently truncating business facts',async()=>{
  const result=await syncNotion({...config,maxPages:1,fetcher:async()=>Response.json({results:[{...row,properties:{...row.properties,Clients:{relation:[],has_more:true}}}],has_more:false})});assert.equal(result.coverage.complete,false);assert.equal(result.counts.rejected,1);
 });
+test('U9 tranche d’inventaire partielle : bornes exactes [from, to), curseur de reprise transmis, page suivante signalée sans compléter',async()=>{
+ const slice={...config,from:'2026-03-01T00:00:00Z',to:'2026-03-08T00:00:00Z'},bodies:{filter:{and:Record<string,Record<string,string>>[]};start_cursor?:string;sorts:unknown[]}[]=[];
+ const fetcher=async(_url:unknown,init?:RequestInit)=>{const body=JSON.parse(String(init?.body));bodies.push(body);return Response.json(body.start_cursor?{results:[row],has_more:false}:{results:[row],has_more:true,next_cursor:'slice-2'});};
+ const first=await readNotionInventoryPage({...slice,fetcher:fetcher as typeof fetch});
+ assert.equal(first.status,'partial');assert.equal(first.safeError,'PAGE_LIMIT_REACHED');assert.deepEqual(first.checkpoint,{cursor:'slice-2'});assert.equal(first.coverage.complete,false);
+ const second=await readNotionInventoryPage({...slice,cursor:'slice-2',fetcher:fetcher as typeof fetch});
+ assert.equal(second.status,'complete');assert.equal(second.coverage.complete,true);assert.deepEqual(second.checkpoint,{});
+ for(const body of bodies){assert.deepEqual(body.filter.and,[{timestamp:'created_time',created_time:{on_or_after:slice.from}},{timestamp:'created_time',created_time:{before:slice.to}}]);assert.deepEqual(body.sorts,[{timestamp:'created_time',direction:'ascending'}]);}
+ assert.equal(bodies[0].start_cursor,undefined);assert.equal(bodies[1].start_cursor,'slice-2');
+});
+test('U9 queryTimestamp : l’intervalle des modifications filtre et trie sur last_edited_time, la lecture complète sur created_time',async()=>{
+ for(const queryTimestamp of ['last_edited_time','created_time'] as const){
+  let body:{filter:{and:Record<string,unknown>[]};sorts:{timestamp:string}[]}|undefined;
+  const result=await syncNotion({...config,queryTimestamp,maxPages:1,fetcher:async(_url,init)=>{body=JSON.parse(String(init?.body));return Response.json({results:[],has_more:false});}});
+  assert.equal(result.status,'empty');assert.deepEqual(body!.filter.and,[{timestamp:queryTimestamp,[queryTimestamp]:{on_or_after:config.from}},{timestamp:queryTimestamp,[queryTimestamp]:{before:config.to}}]);assert.equal(body!.sorts[0].timestamp,queryTimestamp);
+ }
+});
