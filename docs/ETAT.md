@@ -1,3 +1,11 @@
+## 23 septembre 2026 : Parcours, taux sur les activités couvertes (D3 option A) et bases de dates des rendez-vous (local, revue requise)
+
+Décision Mehdi du 23/09 (D3, option A) : les taux du Parcours qui font intervenir les inscriptions ou les rendez-vous ne disparaissent plus pendant une campagne. Ils portent sur les personnes dont l'activité est antérieure à l'heure de couverture des sources concernées : inscriptions pour formulaire → inscription et inscription → vidéo ; la plus ancienne des inscriptions et des rendez-vous pour vidéo → rendez-vous et calendrier → rendez-vous. Une personne plus récente sort des deux termes du taux et n'est jamais comptée comme « n'a pas fait ». Les compteurs restent complets. Chaque flèche dit « activités jusqu'au … » et combien de personnes plus récentes sont hors taux ; une ligne sous le parcours donne l'heure des taux et celle de la lecture des compteurs. Une source à actualiser, en cours de lecture ou dont la dernière tentative a échoué reste utilisable jusqu'à sa dernière couverture publiée, signalée dans la fraîcheur des chiffres ; une source absente ou sans couverture connue, une date de réservation manquante ou des rendez-vous non reliés laissent le taux indisponible, avec son motif.
+
+Résultats : la carte Rendez-vous affiche « Réservés · date de réservation » et « Réalisés · date du créneau », avec « Deux bases de dates : un écart entre les deux n'est pas une erreur. » ; la note du tableau par publicité précise les deux bases. Aucun calcul de Résultats modifié.
+
+Validation locale : 576 tests (7 nouveaux), typage et compilation ; contre-épreuve faite (garde précédente remise : le taux à deux personnes couvertes redevient indisponible). Limites : aucune lecture réelle ; recette navigateur à faire.
+
 ## 23 septembre 2026 : stockage par identifiant stable, verrou partagé, défaut 60 (local, revue requise)
 
 Le lot U4 est corrigé sur les trois points de la revue. Rien n'est appliqué en production.
