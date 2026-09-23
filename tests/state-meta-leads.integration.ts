@@ -138,6 +138,8 @@ test('non-accumulation ad_daily : identique, modifié, nouveau, disparu, rejeu, 
   assert.equal(await total(), 5 + 4, 'zone de préparation : 4 lignes invisibles de la tentative interrompue');
   note(flow, 'tentative interrompue', 5, 9, '(4 lignes préparées invisibles, nettoyées après 24 h)');
   await sql.query("UPDATE sync_runs SET started_at=started_at-interval '25 hours' WHERE id=$1", [running]);
+  // Garde « aucune purge héritée » (fusion U4c-garde) : le nettoyage à la publication de 018 ne touche que les tentatives commencées après l'application de 018 ; la migration est datée avant la tentative vieillie.
+  await sql.query("UPDATE cockpit_migrations SET applied_at=least(applied_at, clock_timestamp()-interval '26 hours') WHERE version=18");
   const cleaned = await publishMeta(ns, from, to, records);
   assert.equal(cleaned.ack.state.cleaned, 8, 'quatre lignes et quatre conversions préparées supprimées');assert.equal(await total(), 5);
   note(flow, 'nettoyage après 24 h', 9, await total());
