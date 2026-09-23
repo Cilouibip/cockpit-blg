@@ -45,12 +45,14 @@ Le clic Calendly, l'ouverture du calendrier, la conversion Meta « RDV Calendly 
 
 | Bloc | Colonnes et règle |
 |---|---|
-| Meta | dépense, impressions, clics lien, vues de page, RDV attribués Meta (conversion personnalisée, 7 jours clic / 1 jour vue) ; CTR = clics / impressions ; CPC = dépense / clics ; CPM = dépense × 1000 / impressions |
-| Inscription et navigation | soumissions confirmées du formulaire Masterclass (répétitions conservées), contacts distincts, clics bilan et confirmations navigateur (sessions PostHog) |
-| Commercial | appels prévus = créneaux effectifs Notion des inscrits de la cohorte à la date du call ; appels tenus = présences des mêmes ; taux = tenus / prévus |
+| Meta | dépense, impressions, clics lien, vues de page, RDV attribués Meta (conversion personnalisée, 7 jours clic / 1 jour vue, au jour de l'impression) ; campagnes masterclass du code (surcharge serveur `BLG_KPI_MASTERCLASS_CAMPAIGN_IDS`), reciblage exclu ; CTR = clics / impressions ; CPC = dépense / clics ; CPM = dépense × 1000 / impressions |
+| Inscription et navigation | soumissions confirmées du formulaire Masterclass (répétitions conservées), contacts distincts, clics bilan et confirmations navigateur (sessions PostHog de production, datées à leur premier événement du type) |
+| Commercial | appels prévus = créneaux effectifs Notion des inscrits de la cohorte à la date du call ; appels tenus = présences des mêmes ; taux = tenus / prévus ; bloc calculé seulement si toutes les inscriptions de la période sont reliées à une personne, sinon non mesuré avec le nombre d'inscriptions non reliées |
 | Ventes et cash | ventes = premiers paiements confirmés reliés à un inscrit de la cohorte ; cash = paiements confirmés avant remboursements, à la date du paiement ; indisponible en cas d'ambiguïté |
 
 Un total n'additionne les jours que si tous sont mesurés : un seul jour inconnu rend le total indisponible, ce qui n'est pas une absence de vente.
+
+Couverture (D3) : chaque bloc affiche l'heure, à Paris, de la plus ancienne lecture dont il dépend, et « ancien » quand une de ces lectures dépasse la cadence de son flux. Un jour passé lu en cours de journée reste non mesuré ; le jour en cours est partiel et signalé. Un taux ne rapproche que deux mesures du même bloc et du même jour. La couverture commune en tête du tableau est la plus ancienne des blocs disponibles.
 
 ## 4. Détail par publicité (colonnes principales)
 

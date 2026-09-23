@@ -82,3 +82,11 @@
 
 .kpi-funnel-tests{display:flex;gap:.55rem;align-items:center;font-size:.82rem;margin:1rem 0;color:var(--a-text-muted,#667085)}
 .kpi-funnel-heading>div:last-child{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+#atelier-a .kpi-funnel-coverage { display:flex; flex-wrap:wrap; gap:7px; list-style:none; margin:0; padding:0 24px 18px; }
+#atelier-a .kpi-funnel-coverage li { display:flex; flex-direction:column; gap:2px; min-width:0; max-width:100%; padding:7px 10px; border:1px solid var(--a-line); border-radius:8px; background:var(--a-paper); font-size:10px; line-height:1.45; }
+#atelier-a .kpi-funnel-coverage li strong { color:var(--a-ink); font-weight:600; }
+#atelier-a .kpi-funnel-coverage li span { color:var(--a-muted); overflow-wrap:anywhere; }
+#atelier-a .kpi-funnel-coverage li.is-stale { border-color:#f0b37e; }
+#atelier-a .kpi-funnel-coverage li.is-stale span { color:#9a3412; }
+#atelier-a .kpi-funnel-coverage li.is-missing { border-style:dashed; }
+@media(max-width:650px) { #atelier-a .kpi-funnel-coverage { padding:0 16px 15px; } }
