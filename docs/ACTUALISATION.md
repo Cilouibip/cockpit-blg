@@ -1,6 +1,8 @@
 # Actualisation toutes les 30 minutes : analyse et procédure de bascule
 
-Document de travail pour Codex. Rien n'est activé : le code est local, le SQL est préparé dans `supabase/manual/` et le workflow GitHub est inchangé. La collecte actuelle (GitHub, départs à 17, 37 et 57 minutes) reste en service jusqu'à la bascule décrite en section 5.
+Document de travail pour Codex. Rien n'est activé : le code est local, le déclencheur est préparé dans `supabase/manual/`, les migrations 017 (verrou partagé du tick) et 018 (état courant par identifiant stable) sont préparées dans `supabase/migrations/` et testées sur PostgreSQL 17 jetable, non appliquées. Le workflow GitHub est inchangé. La collecte actuelle (GitHub, départs à 17, 37 et 57 minutes) reste en service jusqu'à la bascule décrite en section 5.
+
+Mise à jour du lot U4b (23 septembre) : défaut de transition à 60 minutes (30 seulement sur activation explicite, section 2), verrou partagé du tick branché (section 3), plus aucune version complète par passage pour les six flux Masterclass (section 4).
 
 Principe : un déclenchement toutes les 30 minutes ne prouve pas une actualisation toutes les 30 minutes. La seule preuve est la table `sync_runs` : date de la dernière publication complète de chaque flux (`status` `complete` ou `empty`, `pagination_complete`).
 
@@ -56,16 +58,22 @@ Cas courant (rien de nouveau) : avec un déclenchement toutes les 2 minutes, 16 
 
 ## 2. Cadence par flux
 
-Réglage serveur unique `BLG_REFRESH_CADENCE_MINUTES` : absent, vide ou toute autre valeur que `60` = 30 minutes ; `60` = comportement horaire actuel, à l'identique. Aucune valeur ne descend sous 30 minutes. La réponse du tick expose `cadence` (`pilotMinutes`, `pilotJobs`) pour vérifier le réglage réellement lu.
+Réglage serveur unique `BLG_REFRESH_CADENCE_MINUTES`. Défaut de transition : absent, vide, `60` ou toute valeur autre que `30` = 60 minutes, comportement horaire actuel à l'identique. `30` (espaces ignorés) est la seule activation de la demi-heure. Aucune valeur ne descend sous 30 minutes. 60 n'est pas la cible finale : c'est l'état sûr tant que les conditions ci-dessous ne sont pas réunies. La réponse du tick expose `cadence` (`pilotMinutes`, `pilotJobs`) pour vérifier le réglage réellement lu.
+
+Activer 30 (`BLG_REFRESH_CADENCE_MINUTES=30` en production, puis redéploiement) est une étape explicite, possible seulement quand les trois conditions sont constatées :
+
+1. migrations 017 et 018 appliquées en production (contrôle 5.1.1 : `cockpit_migrations` contient 17 et 18) ;
+2. observation à 60 conforme (section 6, critères des flux horaires) avec le code de ce lot déployé, y compris le volume de 6.6 : aucune croissance des tables métier pour une source inchangée ;
+3. verrou partagé constaté actif : `lock.kind` = `shared` dans les réponses du tick relevées dans `net._http_response` (section 3.2), jamais `process-only`.
 
 Flux qui conditionnent le pilotage Masterclass (lu dans `kpi-funnel-live.ts`, `visual-journey-analytics.ts`, `ad-funnel.ts`, `posthog-dashboard.ts`) :
 
 | Flux | Lu par | Ce qu'un passage relit | Cadence |
 |---|---|---|---|
-| `masterclass_observations` (PostHog) | rapport Masterclass | un rapport agrégé du 1er du mois précédent à demain | 30 min |
-| `lead_entries_forms` (Wix) | parcours, tableau quotidien | delta depuis la dernière couverture, moins 2 jours | 30 min |
-| `kpi_meta_daily`, `kpi_posthog_daily`, `kpi_wix_daily` | tableau quotidien | fenêtre de 36 jours | 30 min |
-| `ad_daily` (Meta) | détail par publicité | fenêtre de 36 jours, 20 pages au plus | 30 min |
+| `masterclass_observations` (PostHog) | rapport Masterclass | un rapport agrégé du 1er du mois précédent à demain | 60 min, 30 sur activation |
+| `lead_entries_forms` (Wix) | parcours, tableau quotidien | delta depuis la dernière couverture, moins 2 jours | 60 min, 30 sur activation |
+| `kpi_meta_daily`, `kpi_posthog_daily`, `kpi_wix_daily` | tableau quotidien | fenêtre de 36 jours | 60 min, 30 sur activation |
+| `ad_daily` (Meta) | détail par publicité | fenêtre de 36 jours, 20 pages au plus | 60 min, 30 sur activation |
 | `prospects_business` (Notion) | parcours, tableau quotidien, détail par publicité | delta, plus l'inventaire complet de la base à chaque passage, plus un miroir complet toutes les 24 h | 60 min, voir ci-dessous |
 | `ad_catalog` (Meta) | noms et campagnes des publicités | toutes les publicités du compte | 60 min, voir ci-dessous |
 | `lead_entries_client_history` (Notion) | tableau quotidien, seulement le bloc ventes et cash | delta, moins 2 jours | 60 min (bloc indisponible tant que le lecteur des ventes est suspendu) |
@@ -84,46 +92,74 @@ Les verrous par flux sont en base et valent entre instances : jamais deux lectur
 
 - Un refus 409 `source_busy` est classé « waiting » et non plus « failed » : un passage concurrent n'annonce plus une panne de source.
 - Verrou de passage en mémoire du processus : un second passage sur la même instance répond « waiting » sans aucune lecture. Limite : il ne voit pas une autre instance Vercel. Un détenteur bloqué plus de 120 s n'empêche plus les passages suivants.
-- Verrou partagé en base, préparé et non branché : `supabase/manual/2026-09-23_cockpit_tick_lease.sql` (une ligne de bail, `cockpit_claim_tick`, `cockpit_release_tick`). Il empêcherait qu'un passage relise un flux qu'un autre vient de publier. Il exigerait une migration numérotée, l'ajout des deux RPC à `allowedRPC` (`src/lib/db.ts`) et un `TickLock` en base dans `sync-jobs.ts` (détail en tête du fichier). Avec un seul déclencheur toutes les 2 minutes et une route limitée à 60 s, il n'est pas nécessaire à la bascule.
+- Verrou partagé en base, branché (lot U4b) : migration `017_cockpit_tick_lease.sql` (une ligne de bail, `cockpit_claim_tick`, `cockpit_release_tick`, droits `service_role` seulement ; le fichier `supabase/manual/2026-09-23_cockpit_tick_lease.sql` n'est plus qu'un renvoi). Ordre dans `tickSyncJobs` : verrou de processus d'abord (aucun appel en base si cette instance travaille déjà), puis bail en base de 90 s (au-dessus des 60 s de la route), détenteur aléatoire par passage, rendu dans le `finally` même après une exception, jamais renouvelé. Un bail interrompu expire seul au bout de 90 s.
+
+Champ `lock` de la réponse du tick, à contrôler dans `net._http_response` (section F du fichier du déclencheur, colonne `content`) :
+
+| Réponse | Sens |
+|---|---|
+| `"lock":{"kind":"shared","leaseSeconds":90}` | bail pris ; un seul passage à la fois, toutes instances confondues |
+| `status` `waiting`, `reason` « Un autre passage détient le verrou partagé en base… » | bail détenu par un autre passage : aucune lecture du journal ni des sources, aucune écriture |
+| `"lock":{"kind":"process-only","reason":"…migration 017 non appliquée…"}` | fonctions absentes de la base (codes « fonction inconnue » 42883 ou PGRST202, traduits en `schema_missing` par `db.ts`) : le passage continue avec le seul verrou de processus ; les verrous par flux protègent toujours les données. À corriger avant d'activer 30 |
+| HTTP 503 | base injoignable pendant la réclamation : aucune lecture, erreur visible comme toute panne de stockage (contrat existant de la route) |
+
+Le bail est pris par défaut pour la base de production (appel sans base, c'est-à-dire la route du tick). Un appel qui injecte sa propre base (tests, scripts) le reçoit explicitement (`sharedLease`), sinon sa réponse l'indique en `process-only`. Aucun passage ne commence de réclamation s'il n'a aucune source configurée.
 
 Preuves par test (`tests/refresh-overlap.test.ts`, double de base qui reproduit `begin_sync_stream`, `finish_sync` et la clé unique de `source_aggregates`) :
 - même instance : deux passages simultanés, une seule unité exécutée, l'autre « waiting » sans lecture ;
 - deux instances : les deux croient le flux dû, une seule réclamation réussit, l'autre reçoit 409 et répond « waiting » ; une lecture source, une publication, aucune ligne dupliquée ;
 - reprise : une tentative interrompue bloque le flux 10 minutes, puis la suivante publie ; la tentative abandonnée ne laisse aucune ligne publiée.
 
-Limite des tests : ils utilisent un double de base, pas la base réelle. Les 59 tests PostgreSQL existants passent sur une base 17 locale jetable, sans viser ces fichiers.
+- bail partagé (lot U4b) : bail refusé = « waiting » sans aucune lecture ; bail rendu après une unité qui lève et après une erreur du journal ; fonction absente = passage « process-only » signalé ; verrou de processus toujours premier ; deux instances : une seule lit le journal et réclame le flux, l'autre ne lit rien (`tests/refresh-overlap.test.ts`, `tests/state-tick-lease.test.ts` pour le chemin de la route).
+
+Sur PostgreSQL 17 (`tests/state-tick-lease.integration.ts`) : deux réclamations concurrentes, une seule réussit ; bail expiré repris par un autre détenteur ; libération par un mauvais détenteur refusée ; durée bornée 30 à 300 s ; `anon` et `authenticated` sans droit ; migration rejouable ; base sans 017 reconnue comme « fonction absente ».
 
 ### 3.3 Passage sans travail (`tests/refresh-cadence.test.ts`)
 
-Quand rien n'est dû : aucun appel Meta, PostHog, Wix ou Notion, aucune écriture, deux lectures du journal par flux en parallèle, réponse `complete`. C'est ce qui rend acceptable un déclenchement toutes les 2 minutes.
+Quand rien n'est dû : aucun appel Meta, PostHog, Wix ou Notion, aucune écriture métier ni dans le journal `sync_runs`, deux lectures du journal par flux en parallèle, réponse `complete`. Depuis le lot U4b, le passage réclame puis rend le bail partagé (mise à jour de l'unique ligne de `cockpit_tick_lease`, aucune ligne ajoutée). C'est ce qui rend acceptable un déclenchement toutes les 2 minutes.
 
-## 4. Données : rejeu et volume
+## 4. Données : état courant par identifiant stable (migration 018)
 
-Écritures lues : `source_aggregates` est écrit par `upsert` avec la clé `source, source_namespace, metric_key, period_from, period_to, dimensions_key, report_profile_key, sync_run_id` ; `finish_sync` ne termine qu'une tentative encore « running ». `ad_daily` et `meta_conversions_daily` ont une clé unique qui contient `sync_run_id` (`ON CONFLICT DO NOTHING`) ; `lead_source_observations` est unique par tentative et par inscription ; le staging Notion rejoue une page grâce à son reçu.
+Règle (Mehdi, 23 septembre) : un objet source inchangé ne produit aucune nouvelle ligne ; une modification met à jour la même ligne ; un nouvel objet ajoute seulement cet objet ; un objet disparu de la source est retiré de l'état courant sans être effacé. Plus aucune version complète par passage pour les six flux Masterclass ; la volumétrie métier ne dépend plus de la cadence.
 
-- Rejouer une unité (réponse perdue, même tentative) ne duplique aucune ligne. Prouvé par test pour `source_aggregates`.
-- Une tentative interrompue passe en échec au bout de 10 minutes ; ses lignes éventuelles restent stockées mais ne sont jamais lues (les lectures ne retiennent que des tentatives complètes).
-- Chaque nouvelle tentative écrit sa propre version complète de sa fenêtre et rien n'est purgé. Aucun flux ne copie la base entière, mais pour les six flux Masterclass le volume ajouté par jour double à 30 minutes (48 versions au lieu de 24) : KPI et publicités par jour (36 jours par version), rapport PostHog, observations d'inscriptions de la fenêtre de 2 jours. À mesurer avant et après la bascule (requête 6.6) et à arbitrer au regard de la consigne « sans copies complètes cumulatives ». Retour au volume actuel : `BLG_REFRESH_CADENCE_MINUTES=60`.
+Modèle « préparation puis publication atomique » :
+
+| Flux | Table | Clé métier (sans tentative) | Préparation | Publication |
+|---|---|---|---|---|
+| `kpi_meta_daily`, `kpi_posthog_daily`, `kpi_wix_daily` | `source_aggregates` | source, espace, profil, métrique, période, `dimensions_key` | `upsert` par lots de 100 (`syncKpiSource`) | `cockpit_publish_aggregate_state` ; périmètre : jours compris dans la fenêtre |
+| `masterclass_observations` | `source_aggregates` | idem | insertion dans `cockpit_publish_posthog` | même transaction ; périmètre : période exacte du rapport |
+| `ad_daily` | `ad_daily`, `meta_conversions_daily` | publicité, jour, profil (et action, nature pour les conversions) | `import_meta_page` page par page | `cockpit_publish_meta_daily` si la lecture est complète, sinon `finish_sync` comme avant ; périmètre : publicités de l'espace, jours de la fenêtre |
+| `lead_entries_forms` (et `quiz`, `client_history`) | `lead_source_observations` | espace, famille, identifiant | `cockpit_stage_lead_entries` : une observation identique à la ligne courante n'est plus insérée (`checkpoint.unchangedSkipped`) | `cockpit_publish_lead_entries` inchangée, sauf `counts.unchanged` qui inclut ces observations |
+
+- Préparation : lignes écrites avec `sync_run_id` = tentative et `is_current` = false ; aucun lecteur ne les voit.
+- Publication (une transaction, tentative verrouillée) : pour chaque ligne préparée comparée à la ligne courante de même clé (valeurs `numeric`/`jsonb`, jamais un texte sérialisé) : identique = ligne courante confirmée (`sync_run_id` = tentative) ; différente = ligne courante mise à jour en place (même `id`) ; absente = la ligne préparée devient courante ; la ligne préparée fusionnée est supprimée. Une ligne courante du périmètre absente de la tentative passe `is_current` = false, jamais effacée. Puis clôture `complete`/`empty`, `rows_written` = lignes courantes du périmètre, `checkpoint.state` = `{inserted, changed, confirmed, retired, cleaned}`.
+- Pourquoi la confirmation met à jour `sync_run_id` : les lecteurs SQL existants (`cockpit_source_window`, `v_ad_daily`, `v_meta_conversions_daily`, `004` et l'attribution) lisent « les lignes de la dernière tentative complète couvrant la période ». Les lignes courantes portent toujours cette tentative : ces lecteurs restent exacts sans modification (prouvé par test, contre-épreuve comprise).
+- Rejeu : une publication rejouée après un accusé perdu renvoie l'accusé déjà enregistré sans rien changer. Tentative interrompue : ses lignes préparées restent invisibles, la tentative passe en échec au bout de 10 minutes (`expired_worker`) et la suivante publie normalement.
+- Nettoyage borné de la zone de préparation : chaque publication supprime au plus 5 000 lignes préparées de tentatives `failed` du même flux, âgées de plus de 24 h. Jamais une ligne d'une tentative `complete`/`empty`, jamais une ligne courante ou retirée. Les tentatives `partial` de `ad_daily` (lecture incomplète) ne sont pas nettoyées par ce lot.
+- Lignes anciennes conservées : les versions écrites avant la migration restent en place (non courantes), aucune purge. La reprise (dans 018) a marqué courante, pour chaque clé, la ligne de la dernière tentative complète couvrant sa période (KPI, Masterclass en période exacte, `ad_daily`, conversions) ; les lignes quiz restent par tentative.
+- Inscriptions : une modification réelle ajoute toujours une observation d'audit et bascule la ligne courante (règle 009 inchangée) ; une absence dans une lecture par delta ne retire rien.
+- `sync_runs` garde une ligne par tentative (journal technique, voir la livraison U4b pour l'estimation et la proposition de rétention, rien n'est purgé).
 
 ## 5. Procédure de bascule (ordre exact)
 
 ### 5.1 Prérequis
 
-1. Ce lot relu, fusionné et déployé en production avec `BLG_REFRESH_CADENCE_MINUTES=60` : comportement identique à aujourd'hui, mêmes flux, mêmes cadences.
-2. Valeur de `CRON_SECRET` : celle de Vercel Production, au moins 32 caractères. Si elle n'est pas relisible, en créer une nouvelle et la poser au même moment dans Vercel (puis redéployer), dans le secret GitHub `CRON_SECRET` (recours manuel) et dans Vault (étape 5.2.2).
-3. Quotas du plan Vercel relevés (page Usage) : estimation 720 appels par jour, environ 5 à 10 minutes de fonction active par heure. Repère Hobby : 1 000 000 d'appels, 4 h de CPU actif et 360 Go-heures de mémoire par mois. Aucune dépense nouvelle attendue sur Supabase (extensions incluses).
-4. Relevé de départ : requêtes 6.1 et 6.6 enregistrées.
+1. Migrations 017 et 018 appliquées AVANT le déploiement du code de ce lot (le code appelle `cockpit_publish_aggregate_state`, `cockpit_publish_meta_daily` et lit `is_current`). Contrôle : `SELECT version, applied_at FROM cockpit_migrations WHERE version IN (17, 18);` renvoie deux lignes. Relevé 6.6 enregistré juste avant et juste après la migration 018 (la reprise ne supprime rien).
+2. Ce lot relu, fusionné et déployé en production sans `BLG_REFRESH_CADENCE_MINUTES` (ou avec `60`) : cadence horaire, mêmes flux. Contrôle : `cadence.pilotMinutes` = 60 et `lock.kind` = `shared` dans la réponse d'un passage.
+3. Valeur de `CRON_SECRET` : celle de Vercel Production, au moins 32 caractères. Si elle n'est pas relisible, en créer une nouvelle et la poser au même moment dans Vercel (puis redéployer), dans le secret GitHub `CRON_SECRET` (recours manuel) et dans Vault (étape 5.2.2).
+4. Quotas du plan Vercel relevés (page Usage) : estimation 720 appels par jour, environ 5 à 10 minutes de fonction active par heure. Repère Hobby : 1 000 000 d'appels, 4 h de CPU actif et 360 Go-heures de mémoire par mois. Aucune dépense nouvelle attendue sur Supabase (extensions incluses).
+5. Relevé de départ : requêtes 6.1 et 6.6 enregistrées.
 
 ### 5.2 Étapes
 
 1. SQL, sections A et C de `supabase/manual/2026-09-23_cockpit_refresh_cron.sql` : extensions `pg_cron` et `pg_net`, schéma privé `cockpit_ops` et fonction `request_refresh_tick`. Rien n'est planifié.
-2. Secret : Vault, « Add new secret », nom `cockpit_cron_secret`, valeur de l'étape 5.1.2. Contrôle de la section B (longueur seulement, jamais la valeur).
-3. Essai unique, section D : un appel réel. Attendu : `status_code` 200, `tick_status` renseigné, `cadence.pilotMinutes` = 60, et une nouvelle ligne dans `sync_runs` si un flux était dû.
+2. Secret : Vault, « Add new secret », nom `cockpit_cron_secret`, valeur de l'étape 5.1.3. Contrôle de la section B (longueur seulement, jamais la valeur).
+3. Essai unique, section D : un appel réel. Attendu : `status_code` 200, `tick_status` renseigné, `cadence.pilotMinutes` = 60, `lock.kind` = `shared`, et une nouvelle ligne dans `sync_runs` si un flux était dû.
 4. Arrêt des départs GitHub : pousser sur la branche par défaut la modification de 5.3. Vérifier dans Actions qu'aucun passage « Actualiser le cockpit » n'est en cours (sinon attendre sa fin, 15 minutes au plus).
 5. Dans les minutes qui suivent : section E, `cron.schedule('cockpit-refresh-tick', '*/2 * * * *', ...)`. Facultatif : la tâche de purge de l'historique pg_cron à 7 jours.
 6. Contrôle des trois premières exécutions : section F (`cron.job_run_details`, `net._http_response`).
-7. Observation 2 à 3 heures à cadence horaire : chaque flux publié dans l'heure (6.1, 6.2).
-8. Passage à 30 minutes : supprimer `BLG_REFRESH_CADENCE_MINUTES` (ou la mettre à `30`) en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 dans `net._http_response`.
+7. Observation à cadence horaire (au moins 24 heures) : chaque flux publié dans l'heure (6.1, 6.2), `lock.kind` = `shared` sur toutes les réponses, 6.6 sans croissance des tables métier pour une source inchangée.
+8. Activation de 30 minutes, seulement si les trois conditions de la section 2 sont constatées : `BLG_REFRESH_CADENCE_MINUTES=30` en production, redéployer. Contrôle : `cadence.pilotMinutes` = 30 dans `net._http_response`.
 9. Observation 24 à 48 heures (section 6), puis décision.
 
 ### 5.3 Modification exacte de `.github/workflows/hourly-sync.yml` (au moment de l'étape 5.2.4)
@@ -206,16 +242,41 @@ SELECT source, stream_key,
 
 Une ligne pour `prospects_business` peut être normale (republication immédiate d'un passage plus long qu'une heure). Pour les autres flux, toute ligne est à expliquer.
 
-6.6 Volume ajouté par publication et taille des tables :
+6.6 Volume : lignes courantes et total par table, effet des publications, croissance par jour, zone de préparation, taille.
 
 ```sql
-SELECT r.stream_key, count(DISTINCT r.id) AS publications_24h, round(count(a.*)::numeric / nullif(count(DISTINCT r.id), 0)) AS lignes_par_publication
-  FROM sync_runs r LEFT JOIN source_aggregates a ON a.sync_run_id = r.id
- WHERE r.status IN ('complete','empty') AND r.finished_at > now() - interval '24 hours'
-   AND r.stream_key IN ('kpi_meta_daily','kpi_posthog_daily','kpi_wix_daily','masterclass_observations')
- GROUP BY r.stream_key;
+-- Lignes courantes et total (les lignes non courantes = versions héritées d'avant 018, objets retirés, lignes préparées).
+SELECT 'source_aggregates' AS t, count(*) FILTER (WHERE is_current) AS courantes, count(*) AS total FROM source_aggregates
+UNION ALL SELECT 'ad_daily', count(*) FILTER (WHERE is_current), count(*) FROM ad_daily
+UNION ALL SELECT 'meta_conversions_daily', count(*) FILTER (WHERE is_current), count(*) FROM meta_conversions_daily
+UNION ALL SELECT 'lead_source_observations', count(*) FILTER (WHERE is_current), count(*) FROM lead_source_observations;
+
+-- Effet des publications sur 24 h (checkpoint.state) : pour une source inchangée, inserted = 0 et retired = 0.
+SELECT stream_key, count(*) AS publications,
+       sum((checkpoint->'state'->>'inserted')::int) AS ajoutees, sum((checkpoint->'state'->>'changed')::int) AS modifiees,
+       sum((checkpoint->'state'->>'confirmed')::int) AS confirmees, sum((checkpoint->'state'->>'retired')::int) AS retirees,
+       sum((checkpoint->'state'->>'cleaned')::int) AS nettoyees
+  FROM sync_runs WHERE status IN ('complete','empty') AND finished_at > now() - interval '24 hours' AND checkpoint ? 'state'
+ GROUP BY stream_key;
+SELECT stream_key, sum((checkpoint->'counts'->>'unchangedSkipped')::int) AS inscriptions_inchangees_non_ecrites
+  FROM sync_runs WHERE stream_key LIKE 'lead_entries_%' AND finished_at > now() - interval '24 hours' GROUP BY stream_key;
+
+-- Croissance par jour des tables métier (lignes nouvelles, d'après leur tentative d'origine).
+SELECT date_trunc('day', r.started_at) AS jour, count(*) AS lignes_source_aggregates
+  FROM source_aggregates a JOIN sync_runs r ON r.id = a.sync_run_id WHERE r.started_at > now() - interval '7 days' GROUP BY 1 ORDER BY 1;
+SELECT date_trunc('day', r.started_at) AS jour, count(*) AS lignes_ad_daily
+  FROM ad_daily d JOIN sync_runs r ON r.id = d.sync_run_id WHERE r.started_at > now() - interval '7 days' GROUP BY 1 ORDER BY 1;
+-- Remarque : une ligne confirmée porte la dernière tentative ; ces requêtes montrent où vivent les lignes, la croissance réelle
+-- se lit sur le total ci-dessus relevé chaque jour.
+
+-- Lignes préparées orphelines (tentatives non publiées) : doivent rester bornées et disparaître 24 h après l'échec.
+SELECT 'source_aggregates' AS t, r.status, count(*) AS lignes, min(r.started_at) AS plus_ancienne
+  FROM source_aggregates a JOIN sync_runs r ON r.id = a.sync_run_id WHERE NOT a.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2
+UNION ALL SELECT 'ad_daily', r.status, count(*), min(r.started_at)
+  FROM ad_daily d JOIN sync_runs r ON r.id = d.sync_run_id WHERE NOT d.is_current AND r.status IN ('running','failed','partial') GROUP BY 1, 2;
+
 SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) AS taille
-  FROM pg_class WHERE relname IN ('source_aggregates','ad_daily','meta_conversions_daily','lead_source_observations','sync_runs');
+  FROM pg_class WHERE relname IN ('source_aggregates','ad_daily','meta_conversions_daily','lead_source_observations','sync_runs','cockpit_tick_lease');
 ```
 
 6.7 Déclencheur : section F du fichier SQL (`cron.job_run_details` : statut « succeeded » ; `net._http_response` : 200, `timed_out` faux). Un « succeeded » pg_cron signifie seulement que la requête a été mise en file.
@@ -227,7 +288,8 @@ SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) AS taille
 - Requête 6.4 vide ; requête 6.5 vide hors cas Notion expliqué.
 - Chaque échec de 6.3 suivi d'une publication complète en moins de 40 minutes, sinon panne de source à traiter à part.
 - Au moins 95 % des réponses `net._http_response` en 200 sans dépassement de délai.
-- Usage Vercel dans les quotas du plan, aucune facturation additionnelle ; volume de 6.6 conforme à l'arbitrage de la section 4.
+- Usage Vercel dans les quotas du plan, aucune facturation additionnelle ; 6.6 : total des tables métier stable pour une source inchangée (seule `sync_runs` croît d'une ligne par tentative), lignes préparées orphelines bornées.
+- `lock.kind` = `shared` sur toutes les réponses du tick relevées.
 
 Si l'écart maximal dépasse 45 minutes de façon répétée : relever `measurements` dans les réponses du tick pour identifier l'unité lente ; le déclenchement toutes les minutes est l'option suivante (la route de 60 s peut alors toucher le déclenchement suivant, le verrou de processus et les verrous par flux s'appliquent).
 
@@ -237,9 +299,14 @@ Ordre sans chevauchement : arrêter pg_cron d'abord, rétablir GitHub ensuite.
 
 1. SQL section G : `cron.unschedule('cockpit-refresh-tick')` (et la tâche de purge si créée), suppression de la fonction et du schéma `cockpit_ops`. Extensions laissées en place ; ne pas supprimer `pg_cron` (cela effacerait toutes les tâches). Secret : laissé, ou neutralisé par une valeur aléatoire.
 2. Workflow : rétablir le bloc `schedule` d'origine (annulation du commit de 5.3).
-3. Cadence : `BLG_REFRESH_CADENCE_MINUTES=60` puis redéploiement, ou annulation du commit de code de ce lot. Aucune donnée n'est à reprendre : aucune table ni fonction existante n'est modifiée.
-4. Si le verrou partagé a été adopté entre-temps : son propre retour arrière est en fin de `supabase/manual/2026-09-23_cockpit_tick_lease.sql`.
+3. Cadence : retirer `BLG_REFRESH_CADENCE_MINUTES` (défaut 60) ou la mettre à `60`, puis redéploiement. Aucune donnée n'est à reprendre.
+4. Code du lot U4b : un retour au code antérieur sans retirer les migrations reste compatible. L'ancien code lit par tentative (`readKpiSource` d'avant, `cockpit_source_window`, `v_ad_daily`) et les lignes courantes portent la dernière tentative : il lit exactement ce que lisait le nouveau. Ce qui se passe s'il écrit de nouveau :
+   - KPI : il écrit une version complète par passage (lignes `is_current` = false) et clôt par `finish_sync` ; son lecteur lit cette dernière version, donc des données justes, mais le volume par passage revient et `is_current` n'est plus tenu à jour pour ces tentatives ;
+   - Masterclass et inscriptions : les fonctions SQL de 018 restent en place et continuent de publier dans l'état courant (le code antérieur appelle les mêmes RPC) ;
+   - `ad_daily` : `finish_sync` clôt la tentative sans publication d'état ; `v_ad_daily` lit les lignes de cette dernière tentative, justes ; les lignes courantes gardent une tentative plus ancienne et ne sont plus lues tant que l'ancien code tourne.
+   Revenir ensuite au code de ce lot : la publication suivante de chaque flux fusionne à nouveau les lignes préparées dans l'état courant ; les versions écrites entre-temps restent non courantes (aucune purge).
+5. Migrations : ne jamais les retirer en supprimant des données. 018 : les colonnes `is_current`, les index partiels et les nouvelles fonctions peuvent rester (inutilisés par le code antérieur) ; pour revenir aux fonctions antérieures sans toucher aux lignes, réappliquer par `CREATE OR REPLACE` les corps de `cockpit_publish_posthog` (016) et de `cockpit_stage_lead_entries` / `cockpit_publish_lead_entries` (009). 017 : son retour arrière est en fin de fichier (fonctions et table du bail, sans donnée métier) ; avec le code de ce lot encore déployé, le tick passe alors en `process-only`, signalé dans sa réponse.
 
 ## 8. Pourquoi ce SQL n'est ramassé par rien
 
-`scripts/migrate-local.ts` et tous les tests d'intégration lisent `readdirSync('supabase/migrations')`, sans parcours récursif ; aucun ne lit `supabase/manual/`. Le dépôt n'a pas de `supabase/config.toml` et le CI (`ci.yml`) lance seulement `npm run check` et `npm run test:db`. Le fichier du déclencheur commence en plus par une garde qui arrête une exécution d'un bloc.
+`scripts/migrate-local.ts` et tous les tests d'intégration lisent `readdirSync('supabase/migrations')`, sans parcours récursif ; aucun ne lit `supabase/manual/`. Les migrations 017 et 018 sont, elles, dans `supabase/migrations/` : elles sont lues par ces scripts et tests locaux, et s'appliquent en production par le coordinateur (section 5.1.1). Le dépôt n'a pas de `supabase/config.toml` et le CI (`ci.yml`) lance seulement `npm run check` et `npm run test:db`. Le fichier du déclencheur commence en plus par une garde qui arrête une exécution d'un bloc.

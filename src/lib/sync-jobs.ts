@@ -23,10 +23,11 @@ import {invalidateSourceSnapshots} from './source-snapshots';
 import {ConnectorError} from '../connectors/http';
 import {AppError} from './errors';
 import {createSyncExecutionBudget} from './sync-budget';
+import {randomUUID} from 'node:crypto';
 export type SyncJob='notion'|'meta'|'wix'|'receipts'|'meta_ads'|'meta_catalog'|'quiz'|'masterclass'|'forms'|'quiz_entries'|'client_history'|'commerce'|'kpi_meta'|'kpi_posthog'|'kpi_email';
 /** Unités de lecture planifiables. `resumable` : la lecture reprend son point enregistré en base et peut enchaîner plusieurs unités par tick tant qu'elle est partielle.
  * `cadence` : cadence de base (une heure). `pilot` : flux qui conditionne le pilotage Masterclass et dont chaque passage reste borné
- * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (30 minutes par défaut). */
+ * (fenêtre datée ou delta) ; sa cadence suit BLG_REFRESH_CADENCE_MINUTES (60 minutes par défaut, 30 sur activation explicite). */
 const definitions:{id:SyncJob;source:string;stream:string;workStream?:string;cadence:number;resumable?:boolean;pilot?:true}[]=[
  // Chaque nouveau passage Notion relit l'inventaire complet de la base (et tout le miroir une fois par 24 h) : il reste à une heure.
  {id:'notion',source:'notion',stream:'prospects_business',cadence:3600000,resumable:true},
@@ -52,9 +53,10 @@ const MAX_CHUNKS=4;
 const HOUR_MS=3_600_000;
 /** Flux du pilotage Masterclass soumis au réglage de cadence ; tous les autres restent à une heure. */
 export const PILOT_REFRESH_JOBS:readonly SyncJob[]=definitions.filter(d=>d.pilot).map(d=>d.id);
-/** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES : `60` rétablit exactement la cadence horaire antérieure ;
- * absent, vide ou toute autre valeur : 30 minutes. Aucune valeur ne descend sous 30 minutes. */
-export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='60'?60:30;}
+/** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES. Défaut de transition : absent, vide, `60` ou toute valeur
+ * autre que `30` = 60 minutes (cadence horaire antérieure, à l'identique). `30` (espaces ignorés) est une activation
+ * explicite, à poser seulement après les conditions de docs/ACTUALISATION.md §2. Aucune valeur ne descend sous 30 minutes. */
+export function refreshCadenceMinutes(env:Record<string,string|undefined>=process.env):30|60 {return env.BLG_REFRESH_CADENCE_MINUTES?.trim()==='30'?30:60;}
 export type RefreshCadences=Record<SyncJob,number>;
 /** Cadence en millisecondes de chaque flux, d'après le seul réglage serveur. */
 export function refreshCadences(env:Record<string,string|undefined>=process.env):RefreshCadences {
@@ -102,10 +104,33 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:R
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
-export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
+export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60};streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
 /** Verrou d'un passage. Le verrou par défaut vit dans la mémoire du processus : il empêche deux passages simultanés
- * sur la même instance, pas entre deux instances. Entre instances, seuls les verrous par flux en base s'appliquent. */
+ * sur la même instance, pas entre deux instances. Entre instances, le bail partagé en base (migration 017) s'ajoute
+ * aux verrous par flux (begin_sync_stream, cockpit_claim_*), qui restent inchangés. */
 export type TickLock={acquire():(()=>void)|null};
+/** Durée du bail partagé : au-dessus des 60 s de la route, avec marge ; jamais renouvelé pendant un passage. */
+export const TICK_LEASE_SECONDS=90;
+/** Protection réellement appliquée au passage, exposée dans la réponse du tick (`lock`). */
+export type TickLockReport={kind:'shared';leaseSeconds:number}|{kind:'process-only';reason:string};
+type LeaseClaim={state:'acquired';release:()=>Promise<unknown>}|{state:'refused'}|{state:'missing';reason:string};
+/** Bail partagé de niveau passage. */
+export type SharedTickLease={claim():Promise<LeaseClaim>};
+/** Bail en base : cockpit_claim_tick(détenteur aléatoire, 90 s) puis cockpit_release_tick du même détenteur.
+ * Seule l'absence des fonctions est tolérée : db.ts ne traduit en `schema_missing` que les codes « fonction ou table
+ * inconnue » (42883, PGRST202, 42P01, PGRST205) ; pour cet appel, c'est la migration 017 non appliquée. Toute autre
+ * erreur remonte telle quelle (aucune lecture n'a eu lieu). */
+export function databaseTickLease(db:Database,holder:()=>string=randomUUID):SharedTickLease {
+ return {async claim(){
+  const id=holder();let acquired:unknown;
+  try{acquired=await db.rpc<boolean>('cockpit_claim_tick',{p_holder:id,p_seconds:TICK_LEASE_SECONDS});}
+  catch(error){
+   if(error instanceof AppError&&error.code==='schema_missing')return {state:'missing',reason:'Verrou partagé absent de la base (migration 017 non appliquée) : seul le verrou de cette instance protège ce passage ; les verrous par flux en base restent actifs.'};
+   throw error;
+  }
+  return acquired===true?{state:'acquired',release:()=>db.rpc('cockpit_release_tick',{p_holder:id})}:{state:'refused'};
+ }};
+}
 /** Un détenteur bloqué au-delà de `staleMs` (au-dessus de la durée maximale de la route, 60 s) n'empêche plus les passages suivants. */
 export function createProcessTickLock(staleMs=120_000,clock:()=>number=Date.now):TickLock {
  let held:{token:symbol;since:number}|null=null;
@@ -117,7 +142,7 @@ export function createProcessTickLock(staleMs=120_000,clock:()=>number=Date.now)
  }};
 }
 const processTickLock=createProcessTickLock();
-type TickOptions={lock?:TickLock;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
+type TickOptions={lock?:TickLock;sharedLease?:SharedTickLease|null;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité planifiable ; null = unité non configurée ou suspendue (elle n'est pas planifiée, jamais un zéro).
  * Le lecteur financier Notion reste hors planning tant que BLG_COMMERCE_READER n'est pas `active`. */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
@@ -192,14 +217,30 @@ export async function commerceControlPass(db:Database=database(),env:NodeJS.Proc
 }
 /** A tick runs small persisted units while its shared budget permits it. No scheduler is enabled here.
  * Database calls have no abort signal today, so their own client timeout remains
- * the limit; the 45 s budget cannot yet guarantee an end-to-end hard cutoff. */
-export async function tickSyncJobs(db:Database=database(),env:NodeJS.ProcessEnv=process.env,options:TickOptions={}):Promise<TickSummary>{
+ * the limit; the 45 s budget cannot yet guarantee an end-to-end hard cutoff.
+ * Ordre des verrous : verrou de processus (aucun appel en base si cette instance travaille déjà), puis bail partagé en base.
+ * Le bail en base est pris par défaut pour la base de production (appel sans base, seul appel réel : la route du tick) ;
+ * une base injectée (tests, scripts) le reçoit explicitement par `sharedLease`, sinon la réponse l'indique (`process-only`). */
+export async function tickSyncJobs(db?:Database,env:NodeJS.ProcessEnv=process.env,options:TickOptions={}):Promise<TickSummary>{
  if(env.COCKPIT_MODE==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
  const cadences=refreshCadences(env),cadence={pilotMinutes:refreshCadenceMinutes(env),pilotJobs:[...PILOT_REFRESH_JOBS],otherMinutes:60 as const};
  const release=(options.lock??processTickLock).acquire();
  // Aucun budget créé, aucune lecture : le passage déjà en cours sur cette instance garde la main.
  if(!release)return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence,reason:'Un autre passage est déjà en cours sur cette instance ; aucune unité lancée.'};
- try{return await tickWithLock(db,env,options,cadences,cadence);}finally{release();}
+ try{
+  const store=db??database();
+  // Aucune source configurée : rien à lire ni à protéger, aucun appel en base (réponse « failed » inchangée).
+  if(!definitions.some(d=>jobScope(d.id,env)))return await tickWithLock(store,env,options,cadences,cadence);
+  const lease=options.sharedLease!==undefined?options.sharedLease:db===undefined?databaseTickLease(store):null;
+  if(!lease)return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'process-only',reason:'Aucun bail partagé fourni à ce passage (base injectée) : seul le verrou de cette instance s’applique.'}};
+  const claim=await lease.claim();
+  // Bail détenu par un autre passage (autre instance) : ni lecture du journal, ni source, ni écriture.
+  if(claim.state==='refused')return {status:'waiting',job:null,jobs:[],units:0,unitResults:[],cadence,streams:[],reason:'Un autre passage détient le verrou partagé en base (autre instance) ; aucune unité lancée, aucune lecture.'};
+  if(claim.state==='missing')return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'process-only',reason:claim.reason}};
+  // Libéré dans tous les cas ; une libération perdue expire seule au bout de 90 s.
+  try{return {...await tickWithLock(store,env,options,cadences,cadence),lock:{kind:'shared',leaseSeconds:TICK_LEASE_SECONDS}};}
+  finally{await claim.release().catch(()=>undefined);}
+ }finally{release();}
 }
 async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOptions,cadences:RefreshCadences,cadence:NonNullable<TickSummary['cadence']>):Promise<TickSummary>{
  const scopes=new Map<SyncJob,{namespace:string;profile:string}>();

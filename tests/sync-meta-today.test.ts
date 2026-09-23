@@ -17,3 +17,19 @@ test('the hourly ad report includes today in Paris, with the stored upper bound 
  assert.equal(range?.until,today.toString());
  assert.equal(runs[0].p_date_to,today.add({days:1}).toString());
 });
+
+test('ad report: a complete read is published atomically, an incomplete read is only closed', async () => {
+ const today = Temporal.Now.plainDateISO('Europe/Paris'), day = today.subtract({ days: 1 }).toString();
+ for (const complete of [true, false]) {
+  const calls: string[] = [];
+  const db: Database = { probe: async () => {}, select: async () => [], upsert: async () => {}, rpc: async <T>(name: string, args: Row) => { calls.push(name); if (name === 'cockpit_publish_meta_daily') { assert.equal(args.p_rejected, 0); return { status: 'complete' } as T; } return 'synthetic-run' as T; } };
+  const fetcher: typeof fetch = async input => {
+   const url = new URL(String(input));
+   if (url.pathname.endsWith('/insights')) return new Response(JSON.stringify({ data: [{ account_id: '123', ad_id: '42', date_start: day, date_stop: day, spend: '1.00', impressions: '10', ...(complete ? {} : { account_id: 'other' }) }] }));
+   return new Response(JSON.stringify({ account_id: '123', currency: 'EUR', timezone_name: 'Europe/Paris' }));
+  };
+  const result = await synchronizeMetaAds(undefined, undefined, { db, fetcher, env: { NODE_ENV: 'test', COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: '123', META_ACCESS_TOKEN: 'synthetic' } });
+  if (complete) { assert.equal(result.status, 'complete'); assert.deepEqual(calls, ['begin_sync_stream', 'import_meta_page', 'cockpit_publish_meta_daily']); }
+  else { assert.equal(result.coverage.complete, false); assert.deepEqual(calls, ['begin_sync_stream', 'import_meta_page', 'finish_sync'], 'lignes rejetées : aucune publication'); }
+ }
+});

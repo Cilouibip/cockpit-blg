@@ -20,6 +20,8 @@ test('KPI publication persists through PostgreSQL JSONB and failed cycles preser
   await assert.rejects(()=>syncKpiSource(db,'meta','synthetic-only',from,to,async()=>{throw new ConnectorError('UPSTREAM_HTTP_ERROR',503);}));
   read=await readKpiSource(db,'meta','synthetic-only',from,to);assert.equal(read.days.get(from)?.rows[0].data.spend_eur,12);assert.equal(read.latestAttempt?.status,'failed');assert.equal(read.latestAttempt?.error_code,'UPSTREAM_HTTP_ERROR HTTP 503');
   assert.equal((await setup.query('SELECT count(*)::int AS n FROM sync_runs')).rows[0].n,3);
-  assert.equal((await setup.query("SELECT count(*)::int AS n FROM source_aggregates WHERE metric_key='kpi_daily_row'")).rows[0].n,2);
+  // État courant (migration 018) : la valeur modifiée met à jour la même ligne, aucune version par passage.
+  assert.equal((await setup.query("SELECT count(*)::int AS n FROM source_aggregates WHERE metric_key='kpi_daily_row'")).rows[0].n,1);
+  assert.equal((await setup.query("SELECT count(*)::int AS n FROM source_aggregates WHERE is_current")).rows[0].n,3,'une ligne et deux manifestes courants');
  }finally{await setup.end();await new Promise(resolve=>setTimeout(resolve,5500));await admin.query(`DROP DATABASE ${name}`);await admin.end();}
 });

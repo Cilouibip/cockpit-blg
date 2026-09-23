@@ -12,8 +12,9 @@ const STREAM: Record<SyncJob, [string, string]> = {
   forms: ['wix', 'lead_entries_forms'], quiz_entries: ['wix', 'lead_entries_quiz'], client_history: ['notion', 'lead_entries_client_history'],
   kpi_meta: ['meta', 'kpi_meta_daily'], kpi_posthog: ['posthog', 'kpi_posthog_daily'], kpi_email: ['wix', 'kpi_wix_daily'], commerce: ['notion', 'commerce_declared_snapshot'],
 };
+// Cadence 30 activée explicitement (le défaut de transition est 60) : ce test dimensionne le déclencheur pour 30 minutes.
 const env = {
-  COCKPIT_MODE: 'live', NOTION_DATA_SOURCE_ID: 'notion', NOTION_TOKEN: 's', NOTION_CLIENT_DATA_SOURCE_ID: 'clients', META_AD_ACCOUNT_ID: 'meta', META_ACCESS_TOKEN: 's',
+  COCKPIT_MODE: 'live', BLG_REFRESH_CADENCE_MINUTES: '30', NOTION_DATA_SOURCE_ID: 'notion', NOTION_TOKEN: 's', NOTION_CLIENT_DATA_SOURCE_ID: 'clients', META_AD_ACCOUNT_ID: 'meta', META_ACCESS_TOKEN: 's',
   WIX_SITE_ID: 'wix', WIX_API_KEY: 's', IDENTITY_HMAC_SECRET: 'x'.repeat(32), POSTHOG_PROJECT_ID: '123', POSTHOG_PERSONAL_API_KEY: 's',
   WIX_LEAD_ENTRY_CONFIG: JSON.stringify({ formIds: ['form-1'], quiz: { collectionId: 'Quiz', originFields: { ad: 'publicite' } } }),
 } as unknown as NodeJS.ProcessEnv;
