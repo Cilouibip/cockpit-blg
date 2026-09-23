@@ -8,7 +8,10 @@ export const KPI_PROFILE = 'kpi-funnel-sources-v1';
 export type KpiSource = 'meta' | 'posthog' | 'wix';
 export const kpiStream = (source: KpiSource) => `kpi_${source}_daily`;
 export interface KpiSourceRow { day: string; key: string; data: Row }
-export interface KpiSourceBatch { rows: KpiSourceRow[]; observedAt: string; from: string; to: string }
+/** Ligne de fenêtre (U8b) : lecture de la fenêtre entière [from, to) à la source, pour un jeu de campagnes ; data null = fenêtre lue sans diffusion. */
+export interface KpiWindowRow { from: string; to: string; key: string; data: Row | null }
+export interface KpiSourceBatch { rows: KpiSourceRow[]; observedAt: string; from: string; to: string; windows?: KpiWindowRow[] }
+export interface KpiStoredWindow { from: string; to: string; key: string; data: Row | null; observedAt: string; runId: string }
 export interface KpiStoredSource { days: Map<string, { rows: KpiSourceRow[]; observedAt: string; runId: string }>; latestAttempt: Row | null }
 export const nextDay = (day: string) => Temporal.PlainDate.from(day).add({ days: 1 }).toString();
 export function kpiDays(from: string, to: string) {
@@ -38,6 +41,10 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(ca
  * db.ts transmet un tableau JS en JSON, que PostgreSQL ne convertit pas en text[] ; la forme littérale est lue
  * à l'identique par PostgreSQL et par PostgREST. */
 const KPI_STATE_METRICS = '{kpi_daily_row,kpi_daily_manifest}';
+/** Avec des lignes de fenêtre (U8b), la même publication tient aussi leur état courant : une fenêtre identique confirme la même
+ * ligne, une valeur modifiée met à jour la même ligne, une fenêtre sortie du périmètre est retirée (is_current = false), jamais effacée. */
+const KPI_STATE_METRICS_WITH_WINDOWS = '{kpi_daily_row,kpi_daily_manifest,kpi_window_row,kpi_window_manifest}';
+export const kpiWindowId = (from: string, to: string, key: string) => `${from}|${to}|${key}`;
 /** Only complete source responses become a publication. Earlier publications and failed attempts stay intact.
  * Les lignes sont préparées (sync_run_id = tentative, is_current = false) puis publiées en une transaction par
  * cockpit_publish_aggregate_state (migration 018) : un objet inchangé n'ajoute aucune ligne, un objet modifié met à
@@ -53,6 +60,13 @@ export async function syncKpiSource(db: Database, source: KpiSource, namespace: 
    if (!dates.includes(row.day) || keys.has(key)) throw new ConnectorError('KPI_SOURCE_DUPLICATE_OR_SCOPE');
    keys.add(key);
   }
+  const windowIds = new Set<string>();
+  for (const window of batch.windows ?? []) {
+   const id = kpiWindowId(window.from, window.to, window.key);
+   // Une fenêtre est entière, comprise dans la tentative, unique par (période, jeu de campagnes).
+   if (!dates.includes(window.from) || window.to <= window.from || window.to > to || !window.key || window.key.length > 200 || windowIds.has(id)) throw new ConnectorError('KPI_SOURCE_WINDOW_SCOPE');
+   windowIds.add(id);
+  }
   const base = { source, source_namespace: namespace, report_profile_key: KPI_PROFILE, sync_run_id: run, timezone: 'Europe/Paris', coverage_state: 'partial', unit: 'count', currency: null, currency_exponent: null, tax_basis: 'unknown', definition_version: KPI_PROFILE, source_locator: `${source}:kpi-daily` };
   const rows: Row[] = [];
   for (const day of dates) {
@@ -62,9 +76,14 @@ export async function syncKpiSource(db: Database, source: KpiSource, namespace: 
    for (const row of daily) rows.push({ ...base, metric_key: 'kpi_daily_row', period_from: startOfParisDay(day), period_to: startOfParisDay(nextDay(day)), dimensions_key: row.key, value: 1, dimensions: row });
    rows.push({ ...base, metric_key: 'kpi_daily_manifest', period_from: startOfParisDay(day), period_to: startOfParisDay(nextDay(day)), dimensions_key: day, value: daily.length, dimensions: { day, count: daily.length, hash: digest(daily), observedAt: batch.observedAt } });
   }
+  for (const window of batch.windows ?? []) {
+   const period = { period_from: startOfParisDay(window.from), period_to: startOfParisDay(window.to), dimensions_key: window.key };
+   if (window.data) rows.push({ ...base, ...period, metric_key: 'kpi_window_row', value: 1, dimensions: { from: window.from, to: window.to, key: window.key, data: window.data } });
+   rows.push({ ...base, ...period, metric_key: 'kpi_window_manifest', value: window.data ? 1 : 0, dimensions: { from: window.from, to: window.to, key: window.key, count: window.data ? 1 : 0, hash: digest(window.data), observedAt: batch.observedAt } });
+  }
   if (rows.some(row => Buffer.byteLength(JSON.stringify(row.dimensions), 'utf8') > 3800)) throw new ConnectorError('KPI_ROW_TOO_LARGE');
   for (let i = 0; i < rows.length; i += 100) await db.upsert('source_aggregates', rows.slice(i, i + 100), 'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');
-  const published = await db.rpc<{ status: string }>('cockpit_publish_aggregate_state', { p_run: run, p_metric_keys: KPI_STATE_METRICS, p_read: batch.rows.length });
+  const published = await db.rpc<{ status: string }>('cockpit_publish_aggregate_state', { p_run: run, p_metric_keys: batch.windows ? KPI_STATE_METRICS_WITH_WINDOWS : KPI_STATE_METRICS, p_read: batch.rows.length + (batch.windows?.length ?? 0) });
   return { status: published?.status === 'empty' ? 'empty' : 'complete', runId: run, counts: { read: batch.rows.length }, observedAt: batch.observedAt };
  } catch (error) {
   const code = safeConnectorError(error).replace(/[()]/g, '');
@@ -94,6 +113,22 @@ export async function readKpiSource(db: Database, source: KpiSource, namespace: 
   const rows = (data.get(day) ?? []).filter(r => String(r.sync_run_id) === String(manifest.sync_run_id)).map(r => r.dimensions as unknown as KpiSourceRow).sort((a, b) => a.key.localeCompare(b.key));
   if (rows.length !== info.count || digest(rows) !== info.hash) continue;
   result.days.set(day, { rows, observedAt: String(info.observedAt), runId: String(manifest.sync_run_id) });
+ }
+ return result;
+}
+/** Lignes de fenêtre courantes (U8b) d'une source : une par (fenêtre, jeu de campagnes), validée contre son manifeste de la même
+ * tentative. Une ligne qui ne correspond pas à son manifeste est ignorée (fenêtre non lue), jamais remplacée par une somme de jours. */
+export async function readKpiWindows(db: Database, source: KpiSource, namespace: string | undefined): Promise<Map<string, KpiStoredWindow>> {
+ const result = new Map<string, KpiStoredWindow>();
+ if (!namespace) return result;
+ const current = await pagedRows(db, 'source_aggregates', { eq: { source, source_namespace: namespace, report_profile_key: KPI_PROFILE, is_current: 'true' }, in: { metric_key: ['kpi_window_row', 'kpi_window_manifest'] }, order: 'period_from,metric_key,dimensions_key,id' });
+ const data = new Map<string, Row>();
+ for (const row of current) if (row.metric_key === 'kpi_window_row') { const d = row.dimensions as Row; data.set(kpiWindowId(String(d.from), String(d.to), String(d.key)) + '|' + String(row.sync_run_id), d); }
+ for (const manifest of current.filter(row => row.metric_key === 'kpi_window_manifest')) {
+  const info = manifest.dimensions as Row, id = kpiWindowId(String(info.from), String(info.to), String(info.key));
+  const row = data.get(id + '|' + String(manifest.sync_run_id)), value = row ? (row.data as Row) : null;
+  if ((row ? 1 : 0) !== info.count || digest(value) !== info.hash) continue;
+  result.set(id, { from: String(info.from), to: String(info.to), key: String(info.key), data: value, observedAt: String(info.observedAt), runId: String(manifest.sync_run_id) });
  }
  return result;
 }

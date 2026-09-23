@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Client } from 'pg';
 import { postgresDatabase, type Database, type Row } from '../src/lib/db';
-import { syncKpiSource, readKpiSource, kpiDays, kpiStream, nextDay, pagedRows, KPI_PROFILE, type KpiSource, type KpiSourceBatch, type KpiSourceRow, type KpiStoredSource } from '../src/lib/kpi-source-store';
+import { syncKpiSource, readKpiSource, readKpiWindows, kpiDays, kpiStream, nextDay, pagedRows, KPI_PROFILE, type KpiSource, type KpiSourceBatch, type KpiSourceRow, type KpiStoredSource } from '../src/lib/kpi-source-store';
+import { kpiWindows } from '../src/connectors/kpi-meta';
 import { startOfParisDay } from '../src/domain/dates';
 import { ConnectorError, safeConnectorError } from '../src/connectors/http';
 
@@ -331,6 +332,41 @@ test('non-accumulation Masterclass (masterclass_observations) : identique, modif
   }
   assert.equal(await count(`${scope} AND report_profile_key='quiz-state-v1'`), 2, 'quiz : une version par tentative, comme avant');
   assert.equal(await count(`${scope} AND report_profile_key='quiz-state-v1' AND is_current`), 0);
+});
+
+// U8b · lignes de fenêtre CTRU (kpi_window_row / kpi_window_manifest), publiées par cockpit_publish_aggregate_state (018) avec
+// leurs clés : état courant par identifiant stable (fenêtre × jeu de campagnes), aucune accumulation par passage.
+test('non-accumulation fenêtres KPI Meta (kpi_window_row) : collecte identique 6 → 6, valeur modifiée même id, rejeu, lendemain', async () => {
+  const ns = 'na-windows', flow = 'kpi_window_row', rowsScope = `source_namespace='${ns}' AND metric_key='kpi_window_row'`, from = '2026-08-20';
+  const windowsFor = (today: string, reach: number) => kpiWindows(from, nextDay(today)).map(w => ({ from: w.since, to: nextDay(w.until), key: 'c1,c2', data: { level: 'account', campaignIds: ['c1', 'c2'], reach, impressions: 9000, link_clicks: 90, unique_link_clicks: 60, outbound_clicks: 50 } }));
+  const collect = (today: string, reach: number, observedAt: string) => syncKpiSource(pdb, 'meta', ns, from, nextDay(today), async () => ({ from, to: nextDay(today), observedAt, rows: [], windows: windowsFor(today, reach) }));
+  const ids = async () => (await sql.query(`SELECT id FROM source_aggregates WHERE ${rowsScope} ORDER BY id`)).rows.map(r => r.id);
+  await collect('2026-09-23', 1000, '2026-09-23T08:00:00Z');
+  const initial = await count(rowsScope), first = await ids();
+  assert.equal(initial, 6);assert.equal(await count(`source_namespace='${ns}' AND metric_key='kpi_window_manifest'`), 6);
+  note(flow, 'première collecte', 0, initial);
+  // 1. Collecte identique : 6 → 6, mêmes lignes.
+  await collect('2026-09-23', 1000, '2026-09-23T08:30:00Z');
+  assert.equal(await count(rowsScope), 6);assert.deepEqual(await ids(), first, 'mêmes lignes');
+  note(flow, 'collecte identique', initial, await count(rowsScope));
+  // 2. Valeur modifiée : même identifiant, nouvelle valeur.
+  const changed = await collect('2026-09-23', 1100, '2026-09-23T09:00:00Z');
+  assert.deepEqual(await ids(), first, 'valeur modifiée : même identifiant');
+  assert.equal(await count(`${rowsScope} AND is_current AND (dimensions->'data'->>'reach')::int=1100`), 6);
+  assert.equal(((await stateOf(changed.runId)).state as Row).inserted, 0);
+  note(flow, 'valeur modifiée', initial, await count(rowsScope), '(même id)');
+  // 3. Rejeu de la même publication : aucun changement.
+  const snapshot = (await sql.query(`SELECT id,sync_run_id,is_current,value,dimensions FROM source_aggregates WHERE source_namespace='${ns}' ORDER BY id`)).rows;
+  const replay = await rpc('cockpit_publish_aggregate_state', { p_run: changed.runId, p_metric_keys: '{kpi_daily_row,kpi_daily_manifest,kpi_window_row,kpi_window_manifest}', p_read: 6 });
+  assert.equal(replay.duplicate, true);
+  assert.deepEqual((await sql.query(`SELECT id,sync_run_id,is_current,value,dimensions FROM source_aggregates WHERE source_namespace='${ns}' ORDER BY id`)).rows, snapshot);
+  note(flow, 'rejeu de publication', initial, await count(rowsScope));
+  const read = await readKpiWindows(pdb, 'meta', ns);
+  assert.equal(read.size, 6);assert.equal(read.get('2026-09-21|2026-09-24|c1,c2')?.data?.reach, 1100);
+  // 4. Lendemain : trois fenêtres reprises (même id), trois nouvelles, trois retirées et conservées.
+  await collect('2026-09-24', 1100, '2026-09-24T08:00:00Z');
+  assert.equal(await count(rowsScope), 9);assert.equal(await count(`${rowsScope} AND is_current`), 6);assert.equal(await count(`${rowsScope} AND NOT is_current`), 3);
+  note(flow, 'lendemain', initial, await count(rowsScope), '(3 nouvelles fenêtres, 3 retirées conservées)');
 });
 
 test('droits et rejeu des nouvelles fonctions d’état', async () => {

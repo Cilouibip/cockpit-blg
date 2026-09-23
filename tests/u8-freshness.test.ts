@@ -104,14 +104,20 @@ test('U8 D3 : un jour passé lu en cours de journée n’est pas présenté comm
   }
   assert.deepEqual(snapshot.daily.map(d => [d.calls_scheduled, d.calls_held]), [[0, 0], [2, 1], [0, 0]]);
   assert.equal(snapshot.daily[2].partial_day, 'Journée en cours ou à venir');
+  // Schéma 3 : taux en colonnes propres. Un taux Meta n'existe que sur un jour couvert par Meta ; le motif nomme le bloc.
+  assert.equal(snapshot.daily[0].ratios.ctr, 40 / 2000);
+  assert.equal(snapshot.daily[1].ratios.ctr, null);
+  assert.equal(snapshot.daily[1].reasons.ctr, 'Non mesuré : Diffusion Meta ne couvre pas ce jour.');
+  assert.equal(snapshot.daily[1].ratios.booking_confirmation_rate, 1 / 4, 'le taux PostHog reste calculé : ses deux termes sont couverts');
+  assert.equal(snapshot.daily[1].ratios.attendance, 1 / 2);
+  assert.equal(snapshot.summaries[0].ratios.ctr, null, 'total Meta non mesuré : aucun taux Meta au récapitulatif global');
   const html = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot }));
   const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>')).split('</tr>');
-  const [total, day20, day21] = body;
-  assert.match(day20, /CTR/); assert.match(day20, /des clics bilan/);
-  assert.doesNotMatch(day21, /CTR|CPM|\/ clic|RDV Meta<\/small>/, 'pas de taux Meta sur un jour Meta non couvert');
-  assert.match(day21, /des clics bilan/, 'le taux PostHog reste affiché : ses deux termes sont couverts');
-  assert.match(day21, /de présence/);
-  assert.doesNotMatch(total, /CTR/, 'total Meta non mesuré : aucun taux Meta au total');
+  const [global, , , day20, day21] = body;
+  assert.match(day20, /2,0\u00a0%|2,0 %/, 'CTR du 20/09 affiché dans sa colonne');
+  assert.match(day21, /title="Non mesuré : Diffusion Meta ne couvre pas ce jour\."/, 'le motif nomme le bloc non couvert');
+  assert.match(day21, /50,0/, 'présence du 21/09 (Notion couvert)');
+  assert.match(global, /title="Non mesuré : Diffusion Meta ne couvre pas toute la fenêtre\."/);
 });
 
 test('U8 affichage : heure de couverture de chaque bloc, état « ancien », couverture commune en tête, responsables des non mesurés', async () => {

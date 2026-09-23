@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { KpiFunnelDay, KpiFunnelResponse, KpiFunnelSnapshot } from '../lib/kpi-funnel-contract';
+import type { KpiFunnelResponse, KpiFunnelSnapshot } from '../lib/kpi-funnel-contract';
 import type { DashboardFilters } from '../lib/ui-contract';
 import { filtersQuery } from './ui-format';
-import { kpiCommonCoverage, kpiFunnelCsv } from '../lib/kpi-funnel-export';
+import { KPI_DETAIL_COLUMNS, KPI_EXCEL_COLUMNS, KPI_GROUPS, kpiCellReason, kpiCellValue, kpiCommonCoverage, kpiFunnelCsv, type KpiColumn, type KpiGroupKey, type KpiRow } from '../lib/kpi-funnel-export';
 import { request } from '../lib/cockpit-request';
-
-type FunnelNumbers = Omit<KpiFunnelDay, 'date' | 'partial_day'>;
 
 const count = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
 const money = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 });
-const percent = new Intl.NumberFormat('fr-FR', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const percent = new Intl.NumberFormat('fr-FR', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 2 });
+const multiple = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const unitCost = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const day = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' });
 const instant = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
 
@@ -22,45 +22,33 @@ function shown(value: number | null, unit: 'count' | 'money' = 'count') {
 
 const plainCount = (value: number | null) => value === null ? 'Non mesuré' : count.format(value);
 
-function ratio(numerator: number | null, denominator: number | null) {
-  return numerator === null || denominator === null || denominator <= 0 ? null : numerator / denominator;
+/** Cellule : valeur formatée, « Non mesuré » avec son motif en info-bulle, ou « Sans objet » grisé. */
+function cellContent(row: KpiRow, column: Pick<KpiColumn,'id'|'format'|'field'|'ratio'|'derived'>) {
+  const value = kpiCellValue(row, column), reason = kpiCellReason(row, column) ?? undefined;
+  if (value === 'na') return <span className="kpi-funnel-na" title={reason}>Sans objet</span>;
+  if (value === null) return <span className="kpi-funnel-missing" title={reason}>Non mesuré</span>;
+  return column.format === 'money' ? (column.ratio ? unitCost : money).format(value) : column.format === 'percent' ? percent.format(value) : column.format === 'multiple' ? multiple.format(value) : count.format(value);
 }
 
-function cost(spend: number | null, result: number | null) {
-  return spend === null || result === null || result <= 0 ? null : spend / result;
+const groupSize = (group: KpiGroupKey) => KPI_EXCEL_COLUMNS.filter(column => column.group === group).length;
+const firstOfGroup = (index: number) => index === 0 || KPI_EXCEL_COLUMNS[index - 1].group !== KPI_EXCEL_COLUMNS[index].group;
+
+function rowHeader(row: KpiRow) {
+  if ('key' in row) {
+    const [name, dates] = row.label.split(' · ');
+    return <th scope="row"><strong>{name}</strong><small>{dates}</small>{row.partial_day && <small>{row.partial_day}</small>}</th>;
+  }
+  return <th scope="row"><strong>{day.format(new Date(`${row.date}T12:00:00+02:00`))}</strong>{partialLabel(row.partial_day) && <small>{partialLabel(row.partial_day)}</small>}</th>;
 }
 
-function context(parts: Array<string | null>) {
-  const values = parts.filter((value): value is string => Boolean(value));
-  return values.length ? <small>{values.join(' · ')}</small> : null;
+function ExcelRow({ row }: { row: KpiRow }) {
+  return <tr className={'key' in row ? `kpi-funnel-total kpi-funnel-summary kpi-summary-${row.key}` : undefined}>{rowHeader(row)}{KPI_EXCEL_COLUMNS.map((column, index) => <td key={column.id} className={`kpi-g-${column.group}${firstOfGroup(index) ? ' kpi-funnel-separated' : ''}${column.format === 'na' ? ' kpi-funnel-na-cell' : ''}`}>{cellContent(row, column)}</td>)}</tr>;
 }
 
-function metricCells(row: FunnelNumbers) {
-  const ctr = ratio(row.link_clicks, row.impressions);
-  const cpm = row.impressions !== null && row.impressions > 0 && row.spend_eur !== null ? row.spend_eur / row.impressions * 1000 : null;
-  const cpc = cost(row.spend_eur, row.link_clicks);
-  const metaBookingCost = cost(row.spend_eur, row.booking_meta_attributed);
-  const clickToBooking = ratio(row.booking_confirmed_browser, row.booking_clicks);
-  const attendance = ratio(row.calls_held, row.calls_scheduled);
-  const offerRate = ratio(row.offers_made, row.calls_held);
-  const closeRate = ratio(row.sales, row.offers_made);
-  return <>
-    <td className="kpi-group-meta">{shown(row.spend_eur, 'money')}</td>
-    <td className="kpi-group-meta">{shown(row.impressions)}{context([cpm === null ? null : `${money.format(cpm)} CPM`])}</td>
-    <td className="kpi-group-meta">{shown(row.link_clicks)}{context([ctr === null ? null : `${percent.format(ctr)} CTR`, cpc === null ? null : `${money.format(cpc)} / clic`])}</td>
-    <td className="kpi-group-meta">{shown(row.landing_page_views)}</td>
-    <td className="kpi-group-acquisition kpi-funnel-separated">{shown(row.wix_form_submission_occurrences)}<small>Occurrences confirmées</small></td>
-    <td className="kpi-group-acquisition">{shown(row.reached_cta_oral)}</td>
-    <td className="kpi-group-acquisition">{shown(row.booking_clicks)}</td>
-    <td className="kpi-group-acquisition">{shown(row.booking_confirmed_browser)}{context([clickToBooking === null ? null : `${percent.format(clickToBooking)} des clics bilan`])}</td>
-    <td className="kpi-group-acquisition">{shown(row.booking_meta_attributed)}{context([metaBookingCost === null ? null : `${money.format(metaBookingCost)} / RDV Meta`])}</td>
-    <td className="kpi-group-commercial kpi-funnel-separated">{shown(row.calls_scheduled)}</td>
-    <td className="kpi-group-commercial">{shown(row.calls_held)}{context([attendance === null ? null : `${percent.format(attendance)} de présence`])}</td>
-    <td className="kpi-group-commercial">{shown(row.offers_made)}{context([offerRate === null ? null : `${percent.format(offerRate)} des appels tenus`])}</td>
-    <td className="kpi-group-commercial">{shown(row.sales)}{context([closeRate === null ? null : `${percent.format(closeRate)} des offres`])}</td>
-    <td className="kpi-group-commercial">{shown(row.cash_collected_eur, 'money')}</td>
-    <td className="kpi-group-commercial">{shown(row.contracted_revenue_eur, 'money')}</td>
-  </>;
+/** Mesures sans équivalent dans l'Excel : par jour et par récapitulatif, dans le détail. */
+function DetailMeasures({ snapshot }: { snapshot: KpiFunnelSnapshot }) {
+  const rows: KpiRow[] = [...snapshot.summaries, ...snapshot.daily];
+  return <section className="kpi-funnel-detail-measures"><h3>Autres mesures par jour</h3><div className="kpi-attribution kpi-detail-scroll" tabIndex={0} aria-label="Autres mesures par jour, défilement horizontal"><table><thead><tr><th scope="col">Jour</th>{KPI_DETAIL_COLUMNS.map(column => <th key={column.id} scope="col" title={column.definition}>{column.label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={'key' in row ? row.key : row.date}>{'key' in row ? <th scope="row">{row.label}</th> : <th scope="row">{day.format(new Date(`${row.date}T12:00:00+02:00`))}</th>}{KPI_DETAIL_COLUMNS.map(column => <td key={column.id}>{cellContent(row, column)}</td>)}</tr>)}</tbody></table></div><p className="kpi-detail-note">Ces mesures restent dans l’export. « Ventes / appels réalisés » est une variante mesurable, jamais présentée comme le taux de closing de l’Excel (ventes / offres).</p></section>;
 }
 
 function partialLabel(value: string | null) {
@@ -79,14 +67,14 @@ function EmailSummary({ snapshot }: { snapshot: KpiFunnelSnapshot }) {
 }
 
 function SnapshotDetails({ snapshot }: { snapshot: KpiFunnelSnapshot }) {
-  const labels: Record<string, string> = { spend_eur:'Dépenses Meta',impressions:'Impressions',link_clicks:'Clics lien',unique_link_clicks_campaign_sum:'Clics uniques additionnés',landing_page_views:'Vues de page Meta',wix_form_submission_occurrences:'Occurrences du formulaire Wix',wix_distinct_contacts:'Contacts Wix distincts',reached_cta_oral:'CTA oral atteint',booking_clicks:'Clics bilan',booking_confirmed_browser:'Confirmation navigateur',booking_meta_attributed:'RDV attribués Meta',calls_scheduled:'Appels prévus',calls_held:'Appels tenus',offers_made:'Offres',sales:'Ventes',cash_collected_eur:'Cash encaissé',contracted_revenue_eur:'CA contracté' };
+  const labels: Record<string, string> = { ...Object.fromEntries([...KPI_EXCEL_COLUMNS, ...KPI_DETAIL_COLUMNS].map(column => [column.id, column.label])), unique_link_clicks_campaign_sum: 'Clics uniques additionnés (relevé seulement)', wix_distinct_contacts: 'Contacts distincts de la période' };
   const statuses: Record<string, string> = { available:'Disponible',disponible:'Disponible',available_not_paid_attributed:'Disponible, sans attribution publicitaire',missing:'Non mesuré',manquant:'Non mesuré' };
   const sourceLabels: Record<string,string> = {'Meta daily campaign export':'Export quotidien des campagnes Meta','Wix submissions summary':'Synthèse des soumissions Wix','Wix submissions live bounded context read':'Lecture bornée des contextes Wix','PostHog booking cohort':'Cohorte des clics bilan PostHog','Wix email analytics':'Statistiques email Wix','Definitions and limitations':'Définitions et limites'};
   const contextLabels: Record<string,string> = { unresolved_macro_ad_id:'Macro annonce non résolue',missing_context:'Contexte manquant' };
   const wixContext = Object.entries(snapshot.attribution_breakdown.wix_submission_context.selected_first_origin_else_arrival);
   // Une date n’est affichée que si une lecture complète des clics bilan existe : une tentative ne prouve pas la couverture.
   const bookingRead = snapshot.coverage.find(item => item.field_group === 'Clics bilan et confirmations navigateur')?.through ?? null;
-  return <details className="kpi-funnel-details"><summary>Sources, fraîcheur et définitions</summary><div className="kpi-funnel-detail-grid"><section><h3>Couverture</h3><ul>{snapshot.coverage.map(item => <li key={item.field_group}><strong>{item.field_group}</strong><span>{statuses[item.status] ?? item.status}{item.stale ? ' · ancien (actualisation en retard)' : ''}{item.last_error ? ' · dernière tentative en échec' : ''}{item.through ? ` · jusqu’au ${instant.format(new Date(item.through))}` : ''}</span>{(item.reason || item.warning) && <p>{item.reason ?? item.warning}</p>}{item.detail && <p>{item.detail}</p>}</li>)}</ul></section><section><h3>Répartition des clics bilan</h3><div className="kpi-attribution"><table><thead><tr><th>Publicité</th><th>Clics bilan</th><th>Confirmations</th></tr></thead><tbody>{snapshot.attribution_breakdown.rows.map((row, index) => <tr key={`${row.ad_id ?? ''}|${row.label}|${index}`}><td>{row.label}</td><td>{count.format(row.booking_click_sessions)}</td><td>{count.format(row.booking_confirmed_browser)}</td></tr>)}</tbody></table></div><p className="kpi-detail-note">{snapshot.attribution_breakdown.metric} · {bookingRead ? `lu jusqu’au ${instant.format(new Date(bookingRead))}` : 'aucune lecture complète des clics bilan sur la période'}.</p><h3 className="kpi-subheading">Contexte Wix retenu</h3><div className="kpi-context-list">{wixContext.map(([label,value]) => <span key={label}><strong>{contextLabels[label] ?? label}</strong>{count.format(value)}</span>)}</div><p className="kpi-detail-note">Première origine lorsqu’elle existe, sinon arrivée. {snapshot.attribution_breakdown.wix_submission_context.interpretation}</p></section><section><h3>Sources</h3><ul>{snapshot.source_locators.map(item => <li key={`${item.source}-${item.locator}`}><strong>{sourceLabels[item.source] ?? item.source}</strong><span>{item.locator}</span></li>)}</ul></section><section className="kpi-funnel-definitions"><h3>Définitions</h3><dl>{Object.entries(snapshot.definitions).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{value}</dd></div>)}</dl></section></div></details>;
+  return <details className="kpi-funnel-details"><summary>Sources, fraîcheur et définitions</summary><div className="kpi-funnel-detail-grid"><DetailMeasures snapshot={snapshot} /><section><h3>Couverture</h3><ul>{snapshot.coverage.map(item => <li key={item.field_group}><strong>{item.field_group}</strong><span>{statuses[item.status] ?? item.status}{item.stale ? ' · ancien (actualisation en retard)' : ''}{item.last_error ? ' · dernière tentative en échec' : ''}{item.through ? ` · jusqu’au ${instant.format(new Date(item.through))}` : ''}</span>{(item.reason || item.warning) && <p>{item.reason ?? item.warning}</p>}{item.detail && <p>{item.detail}</p>}</li>)}</ul></section><section><h3>Répartition des clics bilan</h3><div className="kpi-attribution"><table><thead><tr><th>Publicité</th><th>Clics bilan</th><th>Confirmations</th></tr></thead><tbody>{snapshot.attribution_breakdown.rows.map((row, index) => <tr key={`${row.ad_id ?? ''}|${row.label}|${index}`}><td>{row.label}</td><td>{count.format(row.booking_click_sessions)}</td><td>{count.format(row.booking_confirmed_browser)}</td></tr>)}</tbody></table></div><p className="kpi-detail-note">{snapshot.attribution_breakdown.metric} · {bookingRead ? `lu jusqu’au ${instant.format(new Date(bookingRead))}` : 'aucune lecture complète des clics bilan sur la période'}.</p><h3 className="kpi-subheading">Contexte Wix retenu</h3><div className="kpi-context-list">{wixContext.map(([label,value]) => <span key={label}><strong>{contextLabels[label] ?? label}</strong>{count.format(value)}</span>)}</div><p className="kpi-detail-note">Première origine lorsqu’elle existe, sinon arrivée. {snapshot.attribution_breakdown.wix_submission_context.interpretation}</p></section><section><h3>Sources</h3><ul>{snapshot.source_locators.map(item => <li key={`${item.source}-${item.locator}`}><strong>{sourceLabels[item.source] ?? item.source}</strong><span>{item.locator}</span></li>)}</ul></section><section className="kpi-funnel-definitions"><h3>Définitions</h3><dl>{Object.entries(snapshot.definitions).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{value}</dd></div>)}</dl></section></div></details>;
 }
 
 /** Heure de couverture de chaque bloc, visible sans ouvrir le détail : « à jour » ou « ancien » selon la cadence de son flux. */
@@ -105,7 +93,7 @@ function ReadyTable({ snapshot }: { snapshot: KpiFunnelSnapshot }) {
   const oldest = snapshot.coverage.filter(item => item.through).map(item => item.through!).sort((a,b)=>Date.parse(a)-Date.parse(b))[0];
   const headline = `${instant.format(new Date(meta.window_start))} → ${instant.format(new Date(meta.window_end_meta))}`;
   const download = () => { const url = URL.createObjectURL(new Blob([kpiFunnelCsv(snapshot)], { type:'text/csv;charset=utf-8' })); const link=document.createElement('a');link.href=url;link.download=`blg-kpi-${meta.window_start.slice(0,10)}-${meta.window_end_meta.slice(0,10)}.csv`;link.click();URL.revokeObjectURL(url); };
-  return <section className="a-d-stage kpi-funnel" aria-labelledby="kpi-funnel-title"><header className="kpi-funnel-heading"><div><span className="blg-eyebrow">SUIVI AUTOMATIQUE · MASTERCLASS</span><h2 id="kpi-funnel-title">Suivi quotidien du funnel</h2><p>{headline} · heure de Paris</p></div><div><span className="kpi-funnel-badge">Lecture automatique</span><button className="a-button a-secondary" onClick={download}>Exporter pour Excel</button></div></header><div className="kpi-funnel-notes"><p><strong>{delayed ? 'Certaines sources attendent une mise à jour.' : 'Derniers relevés disponibles.'}</strong> {common.through ? `Lecture la plus ancienne des blocs disponibles (couverture commune) : ${instant.format(new Date(common.through))}, heure de Paris.` : oldest ? `Lecture la plus ancienne : ${instant.format(new Date(oldest))}, heure de Paris ; aucun bloc n’est complet sur toute la période.` : 'Aucune lecture complète sur la période.'} Chaque bloc indique ci-dessous sa propre heure.</p><p>La période et les filtres sélectionnés s’appliquent à la masterclass. Chaque bloc garde sa propre source et sa fraîcheur.</p><p>{plainCount(snapshot.totals.wix_form_submission_occurrences)} occurrences Wix : {plainCount(snapshot.totals.wix_distinct_contacts)} contacts distincts et {plainCount(snapshot.totals.wix_repeat_occurrences)} répétitions. Conversion page et CPL restent indisponibles.</p></div><CoverageStrip snapshot={snapshot} /><div className="kpi-funnel-scroll" tabIndex={0} aria-label="Tableau quotidien du funnel, défilement horizontal"><table><thead><tr><th rowSpan={2}>Jour</th><th className="kpi-group-heading kpi-group-meta" colSpan={4}>Publicité Meta</th><th className="kpi-group-heading kpi-group-acquisition" colSpan={5}>Inscription et rendez-vous</th><th className="kpi-group-heading kpi-group-commercial" colSpan={6}>Commercial et revenu</th></tr><tr><th className="kpi-group-meta">Dépenses</th><th className="kpi-group-meta">Impressions</th><th className="kpi-group-meta">Clics lien</th><th className="kpi-group-meta">Vues page</th><th className="kpi-group-acquisition kpi-funnel-separated">Occurrences Wix</th><th className="kpi-group-acquisition">CTA oral atteint</th><th className="kpi-group-acquisition">Clics bilan</th><th className="kpi-group-acquisition">Confirmation navigateur</th><th className="kpi-group-acquisition">RDV attribués Meta</th><th className="kpi-group-commercial kpi-funnel-separated">Appels prévus</th><th className="kpi-group-commercial">Appels tenus</th><th className="kpi-group-commercial">Offres</th><th className="kpi-group-commercial">Ventes</th><th className="kpi-group-commercial">Cash encaissé</th><th className="kpi-group-commercial">CA contracté</th></tr></thead><tbody><tr className="kpi-funnel-total"><th scope="row"><strong>Total</strong><small>Fenêtre du relevé</small></th>{metricCells(snapshot.totals)}</tr>{snapshot.daily.map(row => <tr key={row.date}><th scope="row"><strong>{day.format(new Date(`${row.date}T12:00:00+02:00`))}</strong>{partialLabel(row.partial_day) && <small>{partialLabel(row.partial_day)}</small>}</th>{metricCells(row)}</tr>)}</tbody></table></div><p className="kpi-funnel-legend"><strong>RDV attribués Meta</strong> désigne la conversion publicitaire Meta. La confirmation navigateur, l’appel prévu, l’appel tenu et le client restent des mesures distinctes. « Non mesuré » ne signifie jamais zéro.</p><EmailSummary snapshot={snapshot} /><SnapshotDetails snapshot={snapshot} /></section>;
+  return <section className="a-d-stage kpi-funnel" aria-labelledby="kpi-funnel-title"><header className="kpi-funnel-heading"><div><span className="blg-eyebrow">SUIVI AUTOMATIQUE · MASTERCLASS</span><h2 id="kpi-funnel-title">Suivi quotidien du funnel</h2><p>{headline} · heure de Paris</p></div><div><span className="kpi-funnel-badge">Lecture automatique</span><button className="a-button a-secondary" onClick={download}>Exporter pour Excel</button></div></header><div className="kpi-funnel-notes"><p><strong>{delayed ? 'Certaines sources attendent une mise à jour.' : 'Derniers relevés disponibles.'}</strong> {common.through ? `Lecture la plus ancienne des blocs disponibles (couverture commune) : ${instant.format(new Date(common.through))}, heure de Paris.` : oldest ? `Lecture la plus ancienne : ${instant.format(new Date(oldest))}, heure de Paris ; aucun bloc n’est complet sur toute la période.` : 'Aucune lecture complète sur la période.'} Chaque bloc indique ci-dessous sa propre heure.</p><p>La période et les filtres sélectionnés s’appliquent à la masterclass. Chaque bloc garde sa propre source et sa fraîcheur.</p><p>{plainCount(snapshot.totals.wix_form_submission_occurrences)} soumissions du formulaire : {plainCount(snapshot.totals.registrants)} inscrits (contacts distincts) et {plainCount(snapshot.totals.wix_repeat_occurrences)} répétitions sur la période. Récapitulatifs : sommes des jours puis taux des sommes ; inscrits et CTRU relus sur la fenêtre entière, jamais additionnés ni moyennés.</p></div><CoverageStrip snapshot={snapshot} /><div className="kpi-funnel-scroll" tabIndex={0} aria-label="Tableau quotidien du funnel, défilement horizontal"><table className="kpi-funnel-excel"><thead><tr><th rowSpan={2} scope="col">Jour</th>{KPI_GROUPS.map(group => <th key={group.key} scope="colgroup" colSpan={groupSize(group.key)} className={`kpi-group-heading kpi-g-${group.key} kpi-funnel-separated`}>{group.label}</th>)}</tr><tr>{KPI_EXCEL_COLUMNS.map((column, index) => <th key={column.id} scope="col" title={column.definition} className={`kpi-g-${column.group}${firstOfGroup(index) ? ' kpi-funnel-separated' : ''}${column.format === 'na' ? ' kpi-funnel-na-cell' : ''}`}>{column.label}</th>)}</tr></thead><tbody>{snapshot.summaries.map(summary => <ExcelRow key={summary.key} row={summary} />)}{snapshot.daily.map(row => <ExcelRow key={row.date} row={row} />)}</tbody></table></div><p className="kpi-funnel-legend">« Non mesuré » ne signifie jamais zéro : survoler la cellule pour lire le motif et le responsable. Un taux ou un coût qui croise deux sources n’est calculé que si chacune couvre le jour, ou toute la fenêtre pour un récapitulatif. <strong>Sans objet</strong> : étape absente de ce tunnel, colonne conservée en attente d’arbitrage. Les définitions s’affichent au survol des en-têtes ; les mesures sans équivalent dans l’Excel (vues de page Meta, clics bilan, confirmations navigateur, RDV attribués Meta, soumissions et répétitions) sont dans le détail et dans l’export.</p><EmailSummary snapshot={snapshot} /><SnapshotDetails snapshot={snapshot} /></section>;
 }
 
 /** Rendu d’un relevé prêt, exporté pour les tests de rendu serveur. */
