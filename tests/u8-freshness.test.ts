@@ -147,3 +147,16 @@ test('U8 export : les lignes de couverture (bloc, état, actualisation, heure de
   assert.equal(parisMinute('2026-09-22T12:55:00Z'), '22/09/2026 14:55');
   assert.equal(parisMinute('2026-12-01T12:55:00Z'), '01/12/2026 13:55', 'heure d’hiver');
 });
+
+test('U8 détail par annonce : sans lecture complète des clics bilan, aucune date de lecture n’est affichée', async () => {
+  const memory = memoryKpiDatabase({});
+  const response = await readLiveKpiFunnel(memory.db, filters, { env: withCadence('30'), now: NOW });
+  assert.equal(response.status, 'ready'); if (response.status !== 'ready') return;
+  const html = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot: response.snapshot }));
+  assert.ok(html.includes('aucune lecture complète des clics bilan sur la période'));
+  assert.ok(!html.includes('Sessions de clic bilan ; lecture automatique. · lu'), 'l’heure de la requête n’est pas présentée comme une lecture');
+  const read = await snapshotFor(withCadence('30'));
+  const withData = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot: read }));
+  assert.ok(withData.includes('Sessions de clic bilan ; lecture automatique. · lu jusqu’au '));
+  assert.equal(response.snapshot.daily.every(d => d.booking_clicks === null), true, 'aucune session lue : non mesuré, pas zéro');
+});
