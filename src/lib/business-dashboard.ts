@@ -3,7 +3,7 @@ import {AppError} from './errors';
 import type {DashboardResponse,DashboardFilters,Metric} from './ui-contract';
 import {readWixTransactionCount} from './wix-transaction-counts';
 import {readMetaAccountPeriod} from './meta-account-dashboard';
-import {readNotionCommerceReport,type CommerceReadMemo} from './notion-commerce-storage';
+import {readNotionCommerceReport,type CommerceDashboard,type CommerceReadMemo} from './notion-commerce-storage';
 import {readLeadDefinitions} from './lead-entry-dashboard';
 export interface BusinessRollup {
  available:boolean;observedAt:string|null;sourceRows:number;
@@ -29,6 +29,8 @@ export function applyNotionBusiness(response:DashboardResponse,r:BusinessRollup,
  }
  return response;
 }
+/** Une lecture du rapport des ventes en échec rend seulement ses mesures indisponibles ; jamais de zéro, jamais d’échec du tableau entier. */
+const commerceReadFailed=():CommerceDashboard=>({available:false,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt:null,counts:null,paidSales:null,coverage:null,reason:'La lecture du rapport des ventes a échoué. Les autres indicateurs restent affichés.'});
 const missing:BusinessRollup={available:false,observedAt:null,sourceRows:0,leads:{rows:0,known:0,unresolved:0,creationOnly:0},appointments:{total:0,attended:0,explicitFinished:0,noShow:0,cancelled:0,unknown:0,booked:0,closed:0}};
 export interface StoredBusinessReads {notion:BusinessRollup|null;leadDefinitions:Awaited<ReturnType<typeof readLeadDefinitions>>;commerce:Awaited<ReturnType<typeof readNotionCommerceReport>>;receipts:Metric|null;meta:Awaited<ReturnType<typeof readMetaAccountPeriod>>|null}
 /** Stored data only, read together: each source can be unavailable without hiding other available metrics. */
@@ -39,7 +41,7 @@ export async function readStoredBusiness(db:Database,filters:DashboardFilters,to
  const [notion,leadDefinitions,commerce,receipts,meta]=await Promise.all([
   namespace?db.rpc<BusinessRollup>('cockpit_business_rollup',{p_namespace:namespace,p_from:filters.from,p_to:to}).catch((e:unknown)=>{if(e instanceof AppError&&e.code==='schema_missing')return missing;throw e;}):null,
   readLeadDefinitions(db,filters,to),
-  readNotionCommerceReport(db,filters,process.env,memo),
+  readNotionCommerceReport(db,filters,process.env,memo).catch(commerceReadFailed),
   all?readWixTransactionCount(db,filters.from,to):null,
   metaScope?readMetaAccountPeriod(db,filters.from,to):null,
  ]);

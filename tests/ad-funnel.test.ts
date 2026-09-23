@@ -6,6 +6,7 @@ import {foldVisits,foldVisitorCohort,visitQueries,masterclassPagePath,masterclas
 import type {Database,Row,SelectOptions,TableName} from '../src/lib/db';
 import {COMMERCE_COUNTERS,NOTION_COMMERCE_VERSION} from '../src/lib/notion-commerce-report';
 import {notionCommerceConfig,notionCommerceProfile} from '../src/connectors/notion-commerce';
+import {AppError} from '../src/lib/errors';
 
 // Données synthétiques uniquement : aucune personne, publicité ou paiement réels.
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
@@ -410,6 +411,17 @@ test('commerce absent : ventes, encaissements et remboursements restent indispon
  assert.equal(row.firstSalesConfirmed,null);assert.equal(row.cashMinor,null);assert.equal(row.refundsMinor,null);assert.equal(report.totals.firstSalesConfirmed,null);assert.equal(report.totals.cashMinor,null);assert.equal(report.totals.refundsMinor,null);
 });
 
+test('pause du lecteur des ventes : ventes et encaissé restent lus avec la date du rapport ; une lecture en échec ne les transforme ni en zéro ni en erreur',async()=>{
+ // env ne porte pas BLG_COMMERCE_READER : lecteur suspendu, lectures des publications conservées.
+ const paused=await buildAdFunnel(fixture().db,period,{env,visits,now:NOW});const rowA=paused.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(paused.coverage.commerce.available,true);assert.equal(paused.coverage.commerce.observedAt,'2026-09-15T08:00:00Z');assert.equal(rowA.firstSalesConfirmed,1);assert.equal(rowA.cashMinor,78000);
+ const failing=fixture(),select=failing.db.select.bind(failing.db);let commerceReads=0;
+ failing.db.select=async(table,options)=>{if(table==='sync_runs'&&options?.eq?.stream_key==='commerce_declared_snapshot'){commerceReads++;throw new AppError('Le chargement des données a été interrompu. Réessaie.',503,'database_query_interrupted');}return select(table,options);};
+ const report=await buildAdFunnel(failing.db,period,{env,visits,now:NOW});const row=report.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(commerceReads,1);assert.equal(report.coverage.commerce.available,false);assert.match(report.coverage.commerce.reason!,/a échoué/);assert.equal(report.coverage.commerce.observedAt,null);
+ assert.equal(row.firstSalesConfirmed,null);assert.equal(row.cashMinor,null);assert.equal(report.totals.cashMinor,null);assert.ok(report.notices.includes(report.coverage.commerce.reason!));
+ assert.equal(row.registrations,rowA.registrations);assert.equal(row.appointmentsBooked,rowA.appointmentsBooked);assert.equal(row.spendMinor,rowA.spendMinor,'les autres colonnes restent servies');
+});
 
 test('les reprises et les imports incomplets ne sont jamais additionnés aux dépenses publiées',async()=>{
  const {db,calls}=fixture([],{ad_daily:[{id:'stale-copy',ad_id:'ad-uuid-a',date:'2026-09-03',spend_minor:999999,impressions:999999,outbound_clicks:999999}]});

@@ -226,9 +226,11 @@ export async function buildAdFunnel(db:Database,filters:AdFunnelFilters,options:
  const appointments=await pages(db,'appointments',{order:'id'});
  const prospectById=new Map(prospects.map(p=>[String(p.id),{personId:p.person_id?String(p.person_id):null,business:p.business&&typeof p.business==='object'?p.business as Row:null,archived:p.archived===true}]));
  // 5. Ventes payées déjà classées (relevé Notion-commerce), reliées à la personne par le Client Notion.
-	 const commerce=options.includeCommerce===false?null:await readNotionCommerceReport(db,{from:'1900-01-01',to:'2999-12-31',source:'all',tunnel:'all',campaign:'all',compare:false},env,commerceReadMemo());
+	 // Une lecture en échec rend seulement ventes et encaissements indisponibles ; les autres colonnes restent servies.
+	 let commerceReadFailed=false;
+	 const commerce=options.includeCommerce===false?null:await readNotionCommerceReport(db,{from:'1900-01-01',to:'2999-12-31',source:'all',tunnel:'all',campaign:'all',compare:false},env,commerceReadMemo()).catch(()=>{commerceReadFailed=true;return null;});
 	 const commerceAvailable=!!commerce?.available&&!!commerce.paidSales;
-	 const commerceReason=commerceAvailable?null:commerce?.reason??'Le relevé détaillé des ventes payées n’est pas configuré : ventes et encaissements restent indisponibles.';
+	 const commerceReason=commerceAvailable?null:commerceReadFailed?'La lecture du relevé des ventes payées a échoué : ventes et encaissements restent indisponibles, les autres colonnes restent affichées.':commerce?.reason??'Le relevé détaillé des ventes payées n’est pas configuré : ventes et encaissements restent indisponibles.';
 	 const paidSales:PaidSaleDetail[]=commerceAvailable?commerce!.paidSales!.details:[];
 	 if(!commerceAvailable)notices.push(commerceReason!);
  // 6. Lignes.

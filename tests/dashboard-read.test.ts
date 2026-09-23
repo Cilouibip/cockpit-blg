@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import {dashboard} from '../src/lib/dashboard';
 import type {Database,Row} from '../src/lib/db';
 import type {DashboardRollup} from '../src/lib/dashboard-rollup';
+import {createHash} from 'node:crypto';
+import {AppError} from '../src/lib/errors';
+import {COMMERCE_COUNTERS,NOTION_COMMERCE_VERSION} from '../src/lib/notion-commerce-report';
+import {notionCommerceConfig,notionCommerceProfile} from '../src/connectors/notion-commerce';
 const filters={from:'2026-09-01',to:'2026-09-07',source:'all' as const,tunnel:'all' as const,campaign:'',compare:false};
 const rollup:DashboardRollup={
  leads:{registrations:15005,unique:12001,unresolved:0,observedAt:'2026-09-08T00:00:00Z',byTunnel:[{tunnel:'quiz',count:15005,unique:12001,unresolved:0}]},
@@ -74,4 +78,46 @@ test('une lecture acquisition interrompue conserve les autres métriques et ne r
   assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);assert.equal(result.metrics.find(m=>m.id==='leads')?.value,null);
   assert.ok(result.notices.some(n=>n.includes('autres sources restent affichées')));
  }finally{if(before===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=before;}
+});
+
+// Lecteur des ventes suspendu (réglage absent) : publication synthétique relue telle quelle, dates issues du rapport.
+const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value as Row).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
+const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+const commerceRaw=JSON.stringify({clients:{dataSourceId:'ds-clients'},payments:{dataSourceId:'ds-payments'},schedule:{dataSourceId:'ds-schedule'},parcours:{dataSourceId:'ds-parcours'}});
+function commercePublication(observedAt:string):Record<string,Row[]>{
+ const profile=notionCommerceProfile(notionCommerceConfig(commerceRaw)!),run='run-'+observedAt;
+ const counts=Object.fromEntries(COMMERCE_COUNTERS.map(key=>[key,key==='firstAccompanimentsStarted'?1:0])),daily=[{date:'2026-09-03',counts}];
+ const details=[{paymentId:'pay-1',paymentUrl:null,clientIds:['client-1'],clientName:null,clientUrl:null,scheduleIds:[],scheduleUrls:[],parcoursIds:[],day:'2026-09-03',amountMinor:10000,state:'confirmed',reasons:['first_succeeded_payment_for_client']}];
+ const summary={confirmedInitialSales:1,reconciledInitialSales:0,pendingInitialPaymentCases:0,excludedSubsequentPayments:0,refundCases:0,coverage:{payments:1,schedules:0,parcours:0,unlinkedPayments:0}};
+ const base={source:'notion',source_namespace:'ds-parcours',report_profile_key:profile,sync_run_id:run};
+ return {
+  sync_runs:[{id:run,source:'notion',source_namespace:'ds-parcours',stream_key:'commerce_declared_snapshot',status:'complete',pagination_complete:true,rows_rejected:0,query_profile_key:profile,period_to:observedAt,started_at:observedAt,finished_at:observedAt}],
+  source_aggregates:[
+   {...base,metric_key:'notion_commerce_overview',dimensions_key:'all',dimensions:{version:NOTION_COMMERCE_VERSION,observedAt,totals:counts,dailyCount:1,dailyHash:digest(daily),paidSalesSummary:summary,paidSalesCount:1,paidSalesHash:digest(details),coverage:{sourceRows:{},undatedClientStarts:0,futureClientStarts:0}}},
+   {...base,metric_key:'notion_commerce_day',dimensions_key:'2026-09-03',dimensions:daily[0]},
+   {...base,metric_key:'notion_commerce_paid_sales',dimensions_key:'paid-sales:000000',dimensions:{details}},
+  ],
+ };
+}
+const selectFrom=(tables:Record<string,Row[]>)=>async(table:string,options:{eq?:Record<string,string>}={})=>(tables[table]??[]).filter(row=>Object.entries(options.eq??{}).every(([key,value])=>String(row[key])===value));
+test('pause du lecteur des ventes : la dernière publication reste lue avec sa propre date ; une lecture en échec ne fait pas échouer le tableau',async()=>{
+ const saved={NOTION_COMMERCE_CONFIG:process.env.NOTION_COMMERCE_CONFIG,BLG_COMMERCE_READER:process.env.BLG_COMMERCE_READER};
+ process.env.NOTION_COMMERCE_CONFIG=commerceRaw;delete process.env.BLG_COMMERCE_READER;
+ try{
+  for(const observedAt of ['2026-09-05T07:00:00Z','2026-08-20T16:30:00Z']){
+   const {db}=stub();db.select=selectFrom(commercePublication(observedAt)) as Database['select'];
+   const result=await dashboard(db,filters,'live');
+   const clients=result.metrics.find(m=>m.id==='new_clients')!,sales=result.metrics.find(m=>m.id==='paid_sales')!;
+   assert.equal(clients.value,1);assert.equal(clients.updatedAt,observedAt,'date du rapport lu, jamais figée');
+   assert.equal(sales.value,1);assert.equal(sales.updatedAt,observedAt);
+   assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
+  }
+  const {db}=stub();let commerceReads=0;
+  db.select=async(table,options)=>{if(table==='sync_runs'&&options?.eq?.stream_key==='commerce_declared_snapshot'){commerceReads++;throw new AppError('Le chargement des données a été interrompu. Réessaie.',503,'database_query_interrupted');}return [];};
+  const result=await dashboard(db,{...filters,compare:true},'live');
+  assert.ok(commerceReads>0);
+  for(const id of ['new_clients','paid_sales']){const metric=result.metrics.find(m=>m.id===id)!;assert.equal(metric.value,null,id);assert.equal(metric.updatedAt,null,id);assert.match(metric.unavailableReason!,/a échoué/,id);}
+  assert.equal(result.commerce?.available,false);
+  assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000,'les autres blocs restent servis');assert.equal(result.metrics.find(m=>m.id==='cash')?.previous,199000);
+ }finally{for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });
