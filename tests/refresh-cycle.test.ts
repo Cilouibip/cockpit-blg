@@ -19,8 +19,9 @@ const env = {
   WIX_LEAD_ENTRY_CONFIG: JSON.stringify({ formIds: ['form-1'], quiz: { collectionId: 'Quiz', originFields: { ad: 'publicite' } } }),
 } as unknown as NodeJS.ProcessEnv;
 type Profile = Partial<Record<SyncJob, [units: number, seconds: number]>>;
-// Pessimiste : Notion 4 s par unité, rapports PostHog en quatre unités de 20 s, autres unités deux fois plus longues que le profil central.
-const PESSIMISTIC: Profile = { notion: [36, 4], meta: [1, 12], wix: [1, 12], receipts: [1, 12], meta_ads: [1, 20], meta_catalog: [1, 12], quiz: [4, 20], masterclass: [4, 20], forms: [1, 8], quiz_entries: [1, 8], client_history: [1, 8], kpi_meta: [1, 16], kpi_posthog: [1, 16], kpi_email: [1, 16] };
+// Pessimiste : Notion en delta (migration 021 : 5 unités par passage) à 4 s par unité, rapports PostHog en quatre unités de 20 s, autres unités deux
+// fois plus longues que le profil central. La relecture Notion complète (36 unités, une fois par 24 h) est mesurée dans tests/refresh-mechanism.test.ts.
+const PESSIMISTIC: Profile = { notion: [5, 4], meta: [1, 12], wix: [1, 12], receipts: [1, 12], meta_ads: [1, 20], meta_catalog: [1, 12], quiz: [4, 20], masterclass: [4, 20], forms: [1, 8], quiz_entries: [1, 8], client_history: [1, 8], kpi_meta: [1, 16], kpi_posthog: [1, 16], kpi_email: [1, 16] };
 const PILOT: SyncJob[] = ['meta_ads', 'masterclass', 'forms', 'kpi_meta', 'kpi_posthog', 'kpi_email'];
 
 async function simulate(profile: Profile, everyMinutes: number, hours: number) {
@@ -64,7 +65,11 @@ test('dimensionnement : un déclenchement toutes les 2 minutes tient 30 minutes 
     assert.ok(mean <= 31, `${job} : écart moyen ${mean.toFixed(1)} min`);
     assert.ok(Math.max(...g) <= 45, `${job} : écart maximal ${Math.max(...g).toFixed(1)} min`);
   }
-  for (const job of ['notion', 'meta', 'wix', 'receipts', 'meta_catalog', 'quiz', 'quiz_entries', 'client_history'] as SyncJob[]) assert.ok(Math.max(...gaps(job)) <= 60.5, `${job} reste horaire`);
+  // Flux horaires : ils passent après les flux à 30 minutes (chooseSyncJob) ; en profil pessimiste ils attendent jusqu'à une demi-heure de plus
+  // (mesure tests/refresh-mechanism.test.ts : 60 à 90 min), sans famine (garde d'échéance).
+  const hourly = Object.fromEntries((['meta', 'wix', 'receipts', 'meta_catalog', 'quiz', 'quiz_entries', 'client_history'] as SyncJob[]).map(job => [job, Math.max(...gaps(job))]));
+  console.log('HOURLY_MAX ' + JSON.stringify(hourly));
+  for (const job of ['meta', 'wix', 'receipts', 'meta_catalog', 'quiz', 'quiz_entries', 'client_history'] as SyncJob[]) assert.ok(gaps(job).length >= 9 && Math.max(...gaps(job)) <= 95, `${job} : horaire, retardé d'au plus une demi-heure par les flux pilotes (${Math.max(...gaps(job)).toFixed(1)} min)`);
   assert.ok(maxTickMs <= 45_000, 'un passage ne dépasse jamais son budget, bien en dessous des 120 s entre deux déclenchements');
 });
 

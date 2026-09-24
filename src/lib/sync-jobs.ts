@@ -107,9 +107,21 @@ export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[],cadence
   return {...base,state:(base.stale||now-started>=cadence||(HOUR_MS%cadence===0&&Math.floor(now/cadence)>Math.floor(started/cadence))?'due':'complete') as 'due'|'complete'};
  });
 }
+/** Flux dû suivant. 1. Un flux en retard de plus d'une cadence sur son échéance (dernier contact + cadence) passe d'abord : garde
+ * contre la famine d'un flux horaire si les flux à 30 saturaient le budget (jamais atteint dans les profils mesurés). 2. Cadence la
+ * plus courte d'abord : à 30, au changement d'heure, les flux horaires (touchés depuis 60 min) passaient avant les flux Masterclass
+ * (touchés depuis 30 min) et retardaient leur publication de 6 à 16 min selon le profil (mesure `tests/refresh-mechanism.test.ts`) ;
+ * les flux à 30 gardent désormais leur place (écart 30 min exact en simulation) et les flux horaires attendent la fin du passage des
+ * flux pilotes (quelques minutes, jusqu'à une demi-heure en profil pessimiste). 3. Le flux touché le plus anciennement. À cadence 60
+ * partout (défaut de transition), l'ordre reste celui du seul « touché ». Variante mesurée et non retenue : échéance la plus proche
+ * d'abord, plus douce pour les flux horaires mais 34 à 38 min d'écart maximal pour le rapport Masterclass. */
 export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:RefreshCadences=refreshCadences()):SyncJob|null {
  const due=new Set(syncStreamStates(runs,now,enabled,cadences).filter(s=>s.state==='due').map(s=>s.job));
- return definitions.filter(d=>due.has(d.id)).map(d=>({id:d.id,touched:Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt))})).sort((a,b)=>a.touched-b.touched)[0]?.id??null;
+ const candidates=definitions.filter(d=>due.has(d.id)).map(d=>{
+  const cadence=cadences[d.id]??d.cadence,touched=Math.max(0,...runs.filter(r=>r.source===d.source&&(r.stream_key===d.stream||(d.workStream&&r.stream_key===d.workStream))).map(touchedAt));
+  return {id:d.id,cadence,touched,starving:touched>0&&now-(touched+cadence)>cadence};
+ });
+ return candidates.sort((a,b)=>Number(b.starving)-Number(a.starving)||a.cadence-b.cadence||a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
 type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
