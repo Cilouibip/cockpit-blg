@@ -13,6 +13,17 @@ interface Partition {from:string;to:string;inventoriedAt?:string}
 /** Mesures de la tranche d'inventaire d'un passage delta (migration 021), recopiées dans la réponse. */
 interface InventoryPlan {partitions:number;pages:number;budget:number;fraction:number;trancheCount:number;tranchePages:number;overdue:number;newPartition:boolean;oldestInventoriedAt?:string;cursor?:string}
 interface Claim {busy:boolean;runId:string;lease?:string;checkpoint?:{intervals:Interval[];version?:number;mode?:'full'|'delta';page?:number;inventoryThrough?:string;partitions?:Partition[];tranche?:{from:string;to:string}[];inventoryPlan?:InventoryPlan};from?:string;to?:string;rowsRead?:number}
+/** Réglage serveur BLG_NOTION_FULL_HOURS (migration 023) : fenêtre horaire « de-à » (heures entières 0-23, Europe/Paris, de <= à)
+ * pendant laquelle la relecture Notion complète quotidienne est autorisée ; hors fenêtre, elle attend (au plus 36 h en tout).
+ * Absent ou vide : règle 021 inchangée (relecture complète dès 24 h). Valeur invalide : erreur explicite (l'unité Notion échoue
+ * avec ce code, rien n'est réclamé), jamais une valeur par défaut choisie à la place du réglage. */
+export function notionFullHours(env:Record<string,string|undefined>=process.env):[number,number]|null {
+ const raw=env.BLG_NOTION_FULL_HOURS?.trim();
+ if(!raw)return null;
+ const match=/^([01]?\d|2[0-3])-([01]?\d|2[0-3])$/.exec(raw);
+ if(!match||Number(match[1])>Number(match[2]))throw new AppError('Le réglage BLG_NOTION_FULL_HOURS doit être de la forme « 2-4 » (heures 0-23, Europe/Paris, début <= fin).',503,'notion_full_hours_invalid');
+ return [Number(match[1]),Number(match[2])];
+}
 /** One short worker invocation. Stable bounds + page staging survive interruption;
  * only the terminal database transaction replaces the published business mirror.
  * Delta (migration 021) : l'intervalle des modifications (last_edited_time) puis la seule tranche d'inventaire choisie à la
@@ -24,7 +35,9 @@ export async function synchronizeNotionChunk(options:{db?:Database;env?:Record<s
  if(!env.NOTION_TOKEN||!env.NOTION_DATA_SOURCE_ID)throw new AppError('La connexion Notion doit être renseignée.',503,'source_missing');
  if(!env.IDENTITY_HMAC_SECRET||env.IDENTITY_HMAC_SECRET.length<32)throw new AppError('La clé privée de rapprochement des contacts doit être configurée.',503,'identity_key_missing');
  const schema=await (options.schemaReader??readNotionBusinessSchema)({token:env.NOTION_TOKEN,dataSourceId:env.NOTION_DATA_SOURCE_ID,fetcher:options.fetcher});
- const claim=await db.rpc<Claim>('cockpit_claim_notion',{p_namespace:env.NOTION_DATA_SOURCE_ID,p_profile:NOTION_BUSINESS_VERSION,p_schema:schema.proof});
+ // Migration 023 : fenêtre horaire de la relecture complète, transmise avec la preuve de schéma ; absente = règle 021 (24 h).
+ const fullHours=notionFullHours(env);
+ const claim=await db.rpc<Claim>('cockpit_claim_notion',{p_namespace:env.NOTION_DATA_SOURCE_ID,p_profile:NOTION_BUSINESS_VERSION,p_schema:schema.proof&&fullHours?{...schema.proof,fullHours}:schema.proof});
  if(claim.busy)return {status:'partial',counts:{read:0,accepted:0,rejected:0,pages:0},coverage:{complete:false,reason:'Une lecture Notion est déjà en cours.'},runId:claim.runId};
  const lease=claim.lease!,intervals=claim.checkpoint!.intervals.map(i=>({...i}));
  let read=0,pages=0,pageNumber=claim.checkpoint?.page??0;const partitions:Partition[]=[...(claim.checkpoint?.partitions??[])];

@@ -229,3 +229,23 @@ test('U9 retour arrière : le bloc commenté de 021 remet les corps 013 (passage
  const again=await pass(MID);assert.equal(again.result.status,'complete');assert.equal(again.result.coverage.mode,'delta');assert.ok(again.run.checkpoint.tranche,'021 réappliquée : tranche depuis un point de reprise 013');
  assert.ok(again.inventory<legacy.inventory);assert.equal(await archivedCount(),archivedBefore);
 });
+test('023 fenêtre de relecture complète : hors fenêtre, 25 h sans relecture = delta ; dans la fenêtre = full ; 37 h = full quoi qu’il arrive ; sans fenêtre = règle 021 ; forme invalide refusée',async()=>{
+ // Espace propre à ce scénario ; la migration 023 est réappliquée (rejouable) : le scénario de retour arrière 021 ci-dessus a remis le corps 021.
+ const WIN='77777777-7777-4777-8777-777777777777';sources.set(WIN,midRows.slice(0,300));await sql.query(readFileSync('supabase/migrations/023_notion_full_window.sql','utf8'));
+ const parisHour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+ const inside:[number,number]=[parisHour,parisHour],outside:[number,number]=[(parisHour+2)%24,(parisHour+2)%24],windowed=(hours:[number,number])=>({...proof,fullHours:hours});
+ const ageFull=async(hours:number)=>sql.query("UPDATE sync_runs SET checkpoint=checkpoint||jsonb_build_object('fullThrough',now()-make_interval(hours=>$2)) WHERE id=$1",[(await published(WIN)).id,hours]);
+ assert.equal((await pass(WIN,windowed(outside))).result.coverage.mode,'full','première fois : relecture complète, fenêtre ou non');
+ assert.equal((await pass(WIN,windowed(outside))).result.coverage.mode,'delta');
+ await ageFull(25);
+ assert.equal((await pass(WIN,windowed(outside))).result.coverage.mode,'delta','25 h sans relecture complète, hors fenêtre : elle attend');
+ assert.equal((await pass(WIN,windowed(inside))).result.coverage.mode,'full','dans la fenêtre : relecture complète');
+ assert.equal((await pass(WIN,windowed(inside))).result.coverage.mode,'delta','puis delta (moins de 24 h)');
+ await ageFull(37);
+ assert.equal((await pass(WIN,windowed(outside))).result.coverage.mode,'full','37 h : relecture complète même hors fenêtre (garantie dure)');
+ await ageFull(25);
+ assert.equal((await pass(WIN)).result.coverage.mode,'full','sans fenêtre : règle 021, relecture complète dès 24 h');
+ const runsBefore=(await sql.query("SELECT count(*) n FROM sync_runs WHERE source_namespace=$1",[WIN])).rows[0].n;
+ for(const bad of [[5],[7,3],[2.5,4],[-1,4],['2','4'],[0,24],'2-4'])await assert.rejects(rpc('cockpit_claim_notion',{p_namespace:WIN,p_profile:'v1',p_schema:{...proof,fullHours:bad}}),{code:'23514'},JSON.stringify(bad));
+ assert.equal((await sql.query("SELECT count(*) n FROM sync_runs WHERE source_namespace=$1",[WIN])).rows[0].n,runsBefore,'forme invalide : aucune tentative créée');
+});
