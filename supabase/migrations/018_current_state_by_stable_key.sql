@@ -16,7 +16,8 @@
 -- exacts sans modification.
 --
 -- Rejouable : colonnes et index « IF NOT EXISTS », fonctions « CREATE OR REPLACE », reprise des données idempotente,
--- version inscrite une fois. Aucune suppression de ligne publiée dans cette migration.
+-- version inscrite une fois. Aucune suppression de ligne publiée dans cette migration. Deux transactions : DDL et fonctions
+-- (verrous brefs), puis reprise des données (sans blocage des lectures) qui inscrit la version.
 BEGIN;
 
 ALTER TABLE public.source_aggregates ADD COLUMN IF NOT EXISTS is_current boolean NOT NULL DEFAULT false;
@@ -359,6 +360,24 @@ END $$;
  GRANT EXECUTE ON FUNCTION public.cockpit_publish_lead_entries(uuid,uuid) TO service_role;
 END $migration$;
 
+REVOKE ALL ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) TO service_role;
+COMMIT;
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Reprise des données existantes, dans une SECONDE transaction (reprise CP2, 24 septembre). Mesure sur volume synthétique
+-- représentatif (673 000 lignes, private/derived/fable-cockpit-20260923/cp2-reprise-20260924/volume/) : la reprise KPI ci-dessous
+-- dure environ 75 s ; tenue dans la même transaction que les ALTER TABLE et CREATE INDEX (verrous exclusifs gardés jusqu'au COMMIT),
+-- elle bloquait toute lecture du cockpit pendant ce temps. Ici, le DDL ci-dessus valide en moins d'une seconde ; les mises à jour
+-- ci-dessous ne bloquent pas les lectures (elles bloquent seulement les écritures des mêmes lignes : appliquer hors passage).
+-- La version 18 n'est inscrite qu'à la fin : une reprise interrompue laisse le DDL en place et 018 se rejoue entièrement (idempotent).
+BEGIN;
 -- ---------------------------------------------------------------------------------------------------------------
 -- Reprise des données existantes (idempotente, aucune suppression) : pour chaque clé métier, est courante la ligne de la
 -- dernière tentative complète couvrant sa période (status complete/empty, pagination complète, aucun rejet ; ordre
@@ -418,14 +437,6 @@ WHERE w.run_id IS NOT NULL AND a.id=d.ad_id AND a.source='meta' AND a.source_nam
  AND NOT EXISTS(SELECT FROM public.meta_conversions_daily c WHERE c.is_current AND c.ad_id=d.ad_id AND c.date=d.date AND c.report_profile_key=d.report_profile_key
   AND c.action_type=d.action_type AND c.metric_kind=d.metric_kind);
 
-REVOKE ALL ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean) FROM PUBLIC,anon,authenticated;
-REVOKE ALL ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) FROM PUBLIC,anon,authenticated;
-REVOKE ALL ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) FROM PUBLIC,anon,authenticated;
-REVOKE ALL ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.cockpit_apply_aggregate_state(uuid,text[],boolean) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cockpit_publish_aggregate_state(uuid,text[],integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cockpit_publish_meta_daily(uuid,integer,integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cockpit_publish_posthog(uuid,uuid,jsonb,integer) TO service_role;
 INSERT INTO public.cockpit_migrations(version) VALUES(18) ON CONFLICT (version) DO NOTHING;
 COMMIT;
 
