@@ -15,6 +15,8 @@ export function memoryKpiDatabase(initial: Partial<Record<TableName,Row[]>> = {}
    const rows=get('source_aggregates'),metrics=String(args.p_metric_keys).replace(/[{}]/g,'').split(',');
    const key=(r:Row)=>['source','source_namespace','report_profile_key','metric_key','period_from','period_to','dimensions_key'].map(k=>String(r[k])).join('|');
    for(const row of rows.filter(r=>r.sync_run_id===run.id&&!r.is_current)){const current=rows.find(r=>r.is_current&&key(r)===key(row));if(current){Object.assign(current,{...row,id:current.id,is_current:true});rows.splice(rows.indexOf(row),1);}}
+   // Réapparition (migration 022) : sans ligne courante, une ligne retirée de même clé (tentative terminée) redevient courante, même id.
+   for(const row of rows.filter(r=>r.sync_run_id===run.id&&!r.is_current)){const retired=rows.filter(r=>!r.is_current&&r.sync_run_id!==run.id&&key(r)===key(row)&&['complete','empty'].includes(String(get('sync_runs').find(x=>x.id===r.sync_run_id)?.status))).at(-1);if(retired){Object.assign(retired,{...row,id:retired.id,is_current:true});rows.splice(rows.indexOf(row),1);}}
    const inScope=(r:Row)=>r.source===run.source&&r.source_namespace===run.source_namespace&&r.report_profile_key===run.query_profile_key&&metrics.includes(String(r.metric_key))&&String(r.period_from)>=String(run.period_from)&&String(r.period_to)<=String(run.period_to);
    for(const row of rows)if(row.is_current&&row.sync_run_id!==run.id&&inScope(row))row.is_current=false;
    for(const row of rows)if(row.sync_run_id===run.id)row.is_current=true;
