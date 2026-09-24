@@ -1,3 +1,13 @@
+## 24 septembre 2026 : reprise CP2, stockage au fil des jours, cadence et bascule réversible (local, revue requise)
+
+Rien n'est appliqué en production. Réponse aux réserves de la revue Codex du 24/09 sur la version `748c6d0`.
+
+- Stockage au fil des jours (35 jours simulés sur PostgreSQL, changement de mois compris) : zéro ligne par passage (48 passages le premier jour) ; par jour, seulement les objets nouveaux du jour (lignes par campagne, manifeste), trois fenêtres CTRU nouvelles avec leurs manifestes (celles de l'avant-veille sont retirées, conservées) et les lignes du rapport Masterclass de la nouvelle période. Un échec avant publication laisse ses lignes préparées jusqu'au nettoyage borné (24 h). Constat corrigé (migration 022) : un objet retiré puis réapparu (fenêtre non lue à un passage, campagne absente d'une lecture) était promu comme un nouvel objet à côté de la ligne retirée ; il redevient courant sur la même ligne. Les rapports Masterclass des périodes précédentes restent courants (périmètre exact) : croissance par jour documentée, décision de conservation ouverte.
+- Cadence : le mécanisme des retards est mesuré avec le vrai planificateur. Cause principale : au changement d'heure, les flux horaires passaient avant les flux Masterclass (6 à 16 min de retard, écarts de 32 à 44 min). Correction : les flux à 30 minutes passent d'abord (garde contre la famine des flux horaires) ; en simulation, écart de 30 min exact pour les six flux Masterclass, rendez-vous Notion à 32 à 36 min, 50 à 58 min pendant la relecture complète quotidienne, que la migration 023 permet de placer la nuit (réglage facultatif `BLG_NOTION_FULL_HOURS`). Les flux horaires attendent derrière les flux pilotes (jusqu'à une demi-heure de plus en profil pessimiste). Le seuil d'acceptation reste à décider par Mehdi.
+- Bascule réversible : contrôle des migrations 017 à 023 corrigé dans le runbook ; ordre protégé du retour au nouveau code (déclencheur suspendu, reprise de l'état courant, contrôle « reprise nécessaire » prouvé, redéploiement, déclencheur rétabli) ; blocs de retour arrière de 022 et 023.
+
+Preuves : `tests/state-days.integration.ts`, `tests/refresh-mechanism.test.ts`, `tests/notion-full-window.test.ts`, scénarios ajoutés à `c3-notion-incremental` et `state-rollback` ; relevés dans `private/derived/fable-cockpit-20260923/cp2-reprise-20260924/`. Limites : durées de la simulation supposées hors Notion ; aucune donnée réelle ; volumes mesurés sur données synthétiques.
+
 ## 23 septembre 2026 : rendez-vous Notion à 30 minutes, inventaire tournant borné (U9-notion-30, local, revue requise)
 
 Rien n'est appliqué en production.

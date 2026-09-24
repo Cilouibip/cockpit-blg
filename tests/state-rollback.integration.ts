@@ -34,6 +34,15 @@ const rpc = async <T = any>(fn: string, args: Record<string, unknown>): Promise<
   return (await one(`SELECT public.${fn}(${entries.map(([key], i) => `${key}=>$${i + 1}`).join(',')}) AS result`, entries.map(([, value]) => value && typeof value === 'object' ? JSON.stringify(value) : value))).result;
 };
 const report: Record<string, unknown> = {};
+const RESUME_NEEDED = `SELECT r.source, r.stream_key, r.id AS derniere_tentative, r.finished_at
+  FROM sync_runs r
+ WHERE r.stream_key IN ('kpi_meta_daily','kpi_posthog_daily','kpi_wix_daily','ad_daily') AND r.status IN ('complete','empty') AND r.pagination_complete
+   AND r.finished_at = (SELECT max(x.finished_at) FROM sync_runs x WHERE x.source = r.source AND x.source_namespace = r.source_namespace AND x.stream_key = r.stream_key
+                         AND x.query_profile_key = r.query_profile_key AND x.status IN ('complete','empty') AND x.pagination_complete)
+   AND (EXISTS (SELECT FROM source_aggregates a WHERE a.sync_run_id = r.id) OR EXISTS (SELECT FROM ad_daily d WHERE d.sync_run_id = r.id))
+   AND NOT EXISTS (SELECT FROM source_aggregates a WHERE a.sync_run_id = r.id AND a.is_current)
+   AND NOT EXISTS (SELECT FROM ad_daily d WHERE d.sync_run_id = r.id AND d.is_current)`;
+const resumeNeeded = async () => (await sql.query(RESUME_NEEDED)).rows.map(r => `${r.source}/${r.stream_key}`).sort();
 
 // ---------------------------------------------------------------------------------------------------------------
 // Copie locale, à l'identique, de l'ancien chemin d'écriture et de l'ancien lecteur KPI (src/lib/kpi-source-store.ts au
@@ -191,6 +200,7 @@ test('1. après 018 : collectes par le nouveau chemin (modifié, disparu, apparu
   const interrupted = await mcClaim();await sql.query("UPDATE sync_runs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1", [interrupted.runId]);
   const resumed = await rpc('cockpit_claim_posthog', { p_namespace: NS.mc, p_stream: 'masterclass_observations', p_profile: MC_PROFILE, p_from: MC.from, p_to: MC.to, p_context: mcContext });
   assert.equal(resumed.runId, interrupted.runId, 'bail expiré : la même tentative reprend');await mcPublish({ a: 7, c: 1 }, resumed);
+  assert.deepEqual(await resumeNeeded(), [], 'contrôle 7.1.3.b : rien à reprendre après des collectes du nouveau chemin');
   const read = await assertSameReads('après les collectes du nouveau chemin');
   assert.equal(spend(read.fresh, '2026-09-11', 'c1'), 15);assert.equal(spend(read.fresh, '2026-09-13', 'c2'), undefined);assert.equal(spend(read.fresh, '2026-09-14', 'c3'), 30);
   assert.ok(![...read.fresh.days.values()].some(day => day.rows.some(row => row.data.spend_eur === 777)), 'la tentative interrompue n’est lue par personne');
@@ -211,6 +221,8 @@ test('2. retour arrière du code : une collecte par l’ancien chemin (finish_sy
   assert.equal(spend(legacy, '2026-09-15', 'c1'), 99);assert.equal(spend(legacy, '2026-09-14', 'c4'), 40);assert.equal(spend(legacy, '2026-09-14', 'c3'), undefined);
   assert.ok((await adView()).every(row => row.sync_run_id === ad), 'v_ad_daily lit la tentative de l’ancien chemin');
   assert.equal((await mcWindow()).exactRunId !== null, true);
+  // Contrôle 7.1.3.b (docs/ACTUALISATION.md) : les écritures de l'ancien code sont détectées avant toute reprise.
+  assert.deepEqual(await resumeNeeded(), ['meta/ad_daily', 'meta/kpi_meta_daily'], 'reprise nécessaire : dernière tentative complète non portée par les lignes courantes');
   // Constat : le nouveau lecteur ne voit pas cette tentative (lignes non courantes) tant que la reprise n'est pas faite.
   assert.equal(spend(fresh, '2026-09-15', 'c1'), 10, 'nouveau lecteur : valeur d’avant le retour arrière');
   const after = await totals();transition.totals = after;
@@ -225,6 +237,7 @@ test('3. redéploiement : rejeu de la reprise de 018 puis reprise de l’état c
   assert.notDeepStrictEqual(replay.fresh.days, replay.legacy.days, 'constat : le rejeu de 018 seul ne reprend pas les données arrivées pendant la transition');
   // Reprise de l'état courant (019) : pour chaque clé, la ligne de la publication que lisent les anciens lecteurs devient courante.
   const resumed = await rpc('cockpit_resume_current_state', {});
+  assert.deepEqual(await resumeNeeded(), [], 'contrôle 7.1.3.b vide après la reprise');
   await assertSameReads('après la reprise');
   const read = await readers();
   assert.equal(spend(read.fresh, '2026-09-15', 'c1'), 99);assert.equal(spend(read.fresh, '2026-09-14', 'c4'), 40);assert.equal(spend(read.fresh, '2026-09-14', 'c3'), undefined);
