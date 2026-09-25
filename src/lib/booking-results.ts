@@ -120,7 +120,7 @@ function publishedLeadRows(rows:Row[],prospects:Row[],runs:Row[],env:Record<stri
 function requestState(rows:Row[],includeTests:boolean){
  const scope:TrafficScope={...DEFAULT_TRAFFIC_SCOPE,includeTests};
  const requests=rows.filter(row=>['forms','quiz'].includes(String(row.family))&&row.eligible===true&&row.person_id&&row.identity_state==='linked'&&row.occurred_at&&row.occurred_day);
- const isTest=(row:Row)=>{const properties=record(row.properties),origin=record(properties.origin),firstTouch=record(properties.firstTouch);return isExcludedTestTraffic(scope,origin,firstTouch,{is_test:properties.is_test,isTest:properties.isTest});};
+ const isTest=(row:Row)=>{const properties=record(row.properties),origin=record(properties.origin),firstTouch=record(properties.firstTouch);return isExcludedTestTraffic(scope,properties,origin,firstTouch);};
  const retained=requests.filter(row=>!isTest(row));
  const excludedPeople=new Set(requests.filter(isTest).map(row=>String(row.person_id)));
  const retainedPeople=new Set(retained.map(row=>String(row.person_id)));

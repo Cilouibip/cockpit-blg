@@ -14,7 +14,7 @@
 import {Temporal} from '@js-temporal/polyfill';
 import {readJson,object} from '../connectors/http';
 import {originKeyFor,type CohortVisitor,type FunnelTunnel,type VisitCounts,type VisitsByOrigin,type VisitorCohort} from './ad-funnel';
-import type {TrafficScope} from './traffic-scope';
+import {EXCLUDED_TEST_SESSION_IDS,type TrafficScope} from './traffic-scope';
 
 const ALLOWED_HOSTS=['https://eu.posthog.com','https://us.posthog.com','https://app.posthog.com'];
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,6 +52,7 @@ const firstTestFlag=`(lower(${quizFirst('is_test')}) IN ('true','1') OR lower(${
 /** Même liste fermée de marqueurs que les inscriptions Wix. Aucun indice (nom, IP ou navigateur) ne sert à écarter du trafic. */
 export const POSTHOG_EXPLICIT_TEST_TRAFFIC=`(
  lower(coalesce(nullIf(toString(properties.is_test),''), ${url('is_test')}, '')) IN ('true','1') OR
+ lower(coalesce(toString(properties.sid),'')) IN (${EXCLUDED_TEST_SESSION_IDS.map(id=>`'${id}'`).join(',')}) OR
  ${firstTestFlag} OR
  lower(${current('utm_source')})='test' OR lower(${current('source')})='test' OR
  lower(${quizFirst('source')})='test' OR lower(${firstJson('source')})='test' OR

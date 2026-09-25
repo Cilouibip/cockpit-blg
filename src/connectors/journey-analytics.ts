@@ -2,6 +2,7 @@ import { Temporal } from '@js-temporal/polyfill';
 import { ConnectorError, object, readJson, safeConnectorError } from './http';
 import type { PostHogConfig } from './posthog';
 import { readPostHogQuery } from './posthog-query';
+import { EXCLUDED_TEST_SESSION_IDS } from '../lib/traffic-scope';
 import type {
   JourneyAvailability,
   JourneyMetric,
@@ -132,6 +133,7 @@ function explicitTest(first: ReturnType<typeof firstTouchDimensions>) {
   const urlParameter = (key: string) => `decodeURLComponent(extractURLParameter(${url}, '${key}'))`;
   const current = (key: string) => `coalesce(nullIf(${property(key)}, ''), ${urlParameter(key)}, '')`;
   return `(lower(coalesce(nullIf(${property('is_test')}, ''), ${urlParameter('is_test')}, '')) IN ('1','true') OR
+    lower(${session}) IN (${EXCLUDED_TEST_SESSION_IDS.map(literal).join(', ')}) OR
     lower(${property('test_traffic')}) IN ('1','true') OR lower(${property('traffic_type')}) = 'test' OR
     match(lower(${property('first_origin')}), '"is_test"[ ]*:[ ]*(true|"true"|"1"|1)') OR match(lower(${property('first_touch')}), '"is_test"[ ]*:[ ]*(true|"true"|"1"|1)') OR
     lower(${first.source}) = 'test' OR lower(${current('utm_source')}) = 'test' OR lower(${current('source')}) = 'test' OR

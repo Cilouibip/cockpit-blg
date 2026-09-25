@@ -7,6 +7,7 @@ import {emptyDashboard} from '../src/lib/dashboard';
 import type {DashboardFilters} from '../src/lib/ui-contract';
 import type {Database,Row} from '../src/lib/db';
 import {postHogSyncMemory,syntheticPostHogEnv} from './helpers/posthog-sync';
+import {EXCLUDED_TEST_SESSION_IDS} from '../src/lib/traffic-scope';
 const from='2026-01-01T23:00:00Z',to='2026-01-03T23:00:00Z';
 const scope={source:'paid' as const,campaignId:'12345'},schema={sessionIdAvailable:true,questionNumberProperty:'numero' as const};
 const filters:DashboardFilters={from:'2026-01-02',to:'2026-01-03',source:'paid',tunnel:'quiz',campaign:'meta:12345',compare:false};
@@ -18,6 +19,7 @@ function mcConfig(rows:unknown[][]=mcRows):PostHogAnalyticsConfig{
 test('Each PostHog query uses the selected UTM scope; profile separates custom clients and scopes',()=>{
  const queries=postHogAggregateQueries(from,to,schema,scope,client);
  for(const sql of Object.values(queries)){assert.match(sql!,/utm_campaign/);assert.match(sql!,/'12345'/);assert.match(sql!,/utm_medium/);assert.match(sql!,/uniqExactIf/);assert.doesNotMatch(sql!,/blg-studio/);}
+ for(const sid of EXCLUDED_TEST_SESSION_IDS)assert.match(queries.overview,new RegExp(sid));
  assert.notEqual(postHogScopeProfile(scope),postHogScopeProfile());assert.notEqual(postHogScopeProfile(scope,client),postHogScopeProfile(scope,POSTHOG_DEFAULT_CLIENT));
  assert.throws(()=>postHogAggregateQueries(from,to,schema,{...scope,campaignId:"12' OR 1=1"},client),/INVALID_POSTHOG_SCOPE/);
  assert.equal(postHogScopeFromFilters({...filters,campaign:'ad:12345'}),null);assert.deepEqual(postHogScopeFromFilters(filters),scope);
@@ -35,7 +37,7 @@ test('A stored global report is never read as a selected campaign report',async(
  }finally{if(old===undefined)delete process.env.POSTHOG_PROJECT_ID;else process.env.POSTHOG_PROJECT_ID=old;}
 });
 test('Masterclass observations preserve period identities and distinguish kit sessions from host coverage',async()=>{
- const query=postHogMasterclassQuery(from,to,client);assert.match(query,/properties.sid/);assert.doesNotMatch(query,/properties.\$session_id/);assert.match(query,/page_id/);assert.match(query,/GROUP BY event/);
+ const query=postHogMasterclassQuery(from,to,client);assert.match(query,/properties.sid/);assert.doesNotMatch(query,/properties.\$session_id/);assert.match(query,/page_id/);assert.match(query,/GROUP BY event/);for(const sid of EXCLUDED_TEST_SESSION_IDS)assert.match(query,new RegExp(sid));
  const report=await readPostHogMasterclassAnalytics(mcConfig());assert.equal(report.status,'complete');assert.equal(report.byEvent[0].visitors,3);assert.equal(report.byEvent[0].kitSessions,2);assert.equal(report.coverage.hostVerified,false);
  const selected={...filters,source:'all' as const,campaign:'',tunnel:'masterclass' as const},data=emptyDashboard(selected,'live');
  const result=applyPostHogMasterclass(data,report,selected),journey=result.journeys.find(j=>j.id==='masterclass')!;

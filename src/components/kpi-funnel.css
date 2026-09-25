@@ -81,6 +81,11 @@
 }
 
 .kpi-funnel-tests{display:flex;gap:.55rem;align-items:center;font-size:.82rem;margin:1rem 0;color:var(--a-text-muted,#667085)}
+.kpi-focused-summary .a-d-cards{padding:0 24px 24px}
+.kpi-focused-stage .kpi-stage-tabs{display:flex;gap:6px;overflow:auto;padding:0 24px 16px}
+#atelier-a .kpi-focused-stage .kpi-stage-table{min-width:max(650px,100%)}
+.kpi-stage-more{padding:16px 24px}
+@media(max-width:700px){.kpi-focused-summary .a-d-cards{padding:0 16px 16px}.kpi-focused-stage .kpi-stage-tabs{padding:0 16px 14px}.kpi-stage-more{padding:14px 16px}}
 .kpi-funnel-heading>div:last-child{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 #atelier-a .kpi-funnel-coverage { display:flex; flex-wrap:wrap; gap:7px; list-style:none; margin:0; padding:0 24px 18px; }
 #atelier-a .kpi-funnel-coverage li { display:flex; flex-direction:column; gap:2px; min-width:0; max-width:100%; padding:7px 10px; border:1px solid var(--a-line); border-radius:8px; background:var(--a-paper); font-size:10px; line-height:1.45; }

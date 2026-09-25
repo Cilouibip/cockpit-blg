@@ -7,8 +7,26 @@ export interface TrafficScope { includeTests: boolean }
 
 export const DEFAULT_TRAFFIC_SCOPE: TrafficScope = {includeTests:false};
 
+/** Sessions de recette iPhone relevées le 25 septembre 2026, sans marqueur
+ * événementiel. La liste est fermée afin de ne jamais assimiler un navigateur
+ * ou une session réelle à de la recette. */
+export const EXCLUDED_TEST_SESSION_IDS = [
+ 'mc-48297eb4-9138-4ef2-98f9-2c7a7d52f949',
+ 'mc-d7c043c8-6a29-4a8a-9646-d535ea295e26',
+ 'mc-cdf71364-e11a-4b50-b766-4e7e7973a2de',
+ 'mc-a9f12135-e503-4ac2-9a42-3615ab31067b',
+ 'mc-94524f30-dc32-470f-8fb9-fd60599f41c9',
+] as const;
+const excludedTestSessions = new Set<string>(EXCLUDED_TEST_SESSION_IDS);
+
 const marker=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase():'';
 const truthy=(value:unknown)=>value===true||marker(value)==='true'||marker(value)==='1';
+const record=(value:unknown):Record<string,unknown>|null=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
+const sessionValues=(value:Record<string,unknown>)=>[
+ value.sid,value.session,value.session_id,value.sessionId,value.blg_session,value.blgSession,
+ ...['origin','firstTouch','first_touch'].flatMap(key=>{const nested=record(value[key]);return nested?[nested.sid,nested.session,nested.session_id,nested.sessionId,nested.blg_session,nested.blgSession]:[];}),
+];
+const knownTestSession=(value:Record<string,unknown>)=>sessionValues(value).some(session=>excludedTestSessions.has(marker(session)));
 
 /** Test déterministe des champs d'origine conservés par Wix et les parcours Web.
  * `test-mehdi…` est volontairement précis : les autres noms de campagne restent
@@ -16,7 +34,7 @@ const truthy=(value:unknown)=>value===true||marker(value)==='true'||marker(value
 export function isExplicitTestTraffic(record:Record<string,unknown>|null|undefined):boolean {
  if(!record)return false;
  const source=marker(record.source??record.utm_source),medium=marker(record.medium??record.utm_medium),campaign=marker(record.campaign??record.utm_campaign);
- return truthy(record.is_test??record.isTest)||source==='test'||medium==='recette'||campaign.startsWith('test-mehdi');
+ return knownTestSession(record)||truthy(record.is_test??record.isTest)||source==='test'||medium==='recette'||campaign.startsWith('test-mehdi');
 }
 
 /** Une origine A de recette reste un marqueur de recette même si l'arrivée courante diffère. */

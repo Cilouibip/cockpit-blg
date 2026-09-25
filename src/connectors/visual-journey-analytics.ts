@@ -1,7 +1,7 @@
 import { Temporal } from '@js-temporal/polyfill';
 import type { Database, Row, TableName } from '../lib/db';
 import type { SourceFilter } from '../lib/ui-contract';
-import { isExcludedTestTraffic } from '../lib/traffic-scope';
+import { EXCLUDED_TEST_SESSION_IDS, isExcludedTestTraffic } from '../lib/traffic-scope';
 import type { VisualJourneyPostHogTiming, VisualJourneyQueryOutcome, VisualJourneyReport } from '../lib/visual-journey-contract';
 import {
   buildVisualJourneyReport,
@@ -61,7 +61,7 @@ const firstLink = `coalesce(nullIf(${json(first, 'linkId')}, ''), nullIf(${json(
 const browser = `coalesce(toString(distinct_id), '')`, visitor = `lower(${property('visitor_id')})`, session = property('sid');
 const currentUrl = property('$current_url'), rawHost = `lower(${property('$host')})`, urlHost = `lower(domain(${currentUrl}))`;
 const host = `coalesce(nullIf(${rawHost}, ''), ${urlHost})`;
-const test = `(lower(coalesce(nullIf(${property('is_test')}, ''), extractURLParameter(${currentUrl}, 'is_test'), '')) IN ('1','true') OR lower(${property('test_traffic')}) IN ('1','true') OR lower(${property('traffic_type')}) = 'test' OR lower(${firstSource}) = 'test' OR lower(${firstMedium}) = 'recette' OR startsWith(lower(${firstCampaign}), 'test-mehdi'))`;
+const test = `(lower(coalesce(nullIf(${property('is_test')}, ''), extractURLParameter(${currentUrl}, 'is_test'), '')) IN ('1','true') OR lower(${session}) IN (${EXCLUDED_TEST_SESSION_IDS.map(literal).join(', ')}) OR lower(${property('test_traffic')}) IN ('1','true') OR lower(${property('traffic_type')}) = 'test' OR lower(${firstSource}) = 'test' OR lower(${firstMedium}) = 'recette' OR startsWith(lower(${firstCampaign}), 'test-mehdi'))`;
 const numeric = (key: string) => `if(match(${property(key)}, '^[0-9]+([.][0-9]+)?$'), toFloatOrZero(${property(key)}), 0)`;
 const numericValid = (key: string) => `match(${property(key)}, '^[0-9]+([.][0-9]+)?$')`;
 

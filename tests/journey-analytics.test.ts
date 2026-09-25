@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { journeyQueries, readJourneyAnalytics, type JourneyAnalyticsConfig } from '../src/connectors/journey-analytics';
+import { EXCLUDED_TEST_SESSION_IDS } from '../src/lib/traffic-scope';
 
 const columns = {
   overview: ['queried_events','included_events','included_sessions','events_with_session_id','events_missing_session_id','identifiable_test_events','unversioned_sessions','first_observed_at','last_observed_at'],
@@ -40,6 +41,7 @@ test('les requetes ferment le perimetre, excluent la recette et groupent d abord
   assert.match(excluded.overview, /utm_medium[^\n]+recette/);
   assert.match(excluded.steps, /GROUP BY journey_session, journey_version/);
   assert.match(excluded.steps, /eligible_sessions AS[\s\S]+GROUP BY journey_session HAVING[\s\S]+max\(if\([\s\S]+test-mehdi/);
+  for(const sid of EXCLUDED_TEST_SESSION_IDS)assert.match(excluded.steps,new RegExp(sid));
   assert.match(excluded.steps, /sid\), ''\) IN \(SELECT journey_session FROM eligible_sessions\)/, 'le marqueur porte sur la session puis toutes ses etapes restent eligibles');
   assert.match(excluded.steps, /last_t1 >= first_t0/);
   assert.ok((excluded.overview.match(/test-mehdi/g)?.length ?? 0) > (included.overview.match(/test-mehdi/g)?.length ?? 0), 'inclure les tests retire seulement leur exclusion ; le compteur de couverture reste present');

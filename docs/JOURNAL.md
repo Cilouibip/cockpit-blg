@@ -1,3 +1,9 @@
+## 25 septembre 2026 — lot de publication campagne et actualisation
+
+Lot reçu : exclusion fermée de cinq sessions de recette dans sept lecteurs ; deux campagnes et six annonces sélectionnables ; synthèse campagne de huit cartes, détail en cinq étapes et suivi quotidien. Première origine et définitions existantes conservées, aucune somme implicite des deux campagnes.
+
+Réception locale : tests ciblés, TypeScript, build et vues desktop/mobile synthétiques réussis. Publication autorisée, réception en ligne à suivre. Migrations préparées 017–023 à appliquer avant le code ; reprise des lignes courantes sans purge historique. Retour arrière : version de production précédente et procédure ACTUALISATION §7, migrations conservées. Déclencheur GitHub existant maintenu ; aucun basculement pg_cron ni cadence de trente minutes revendiquée. Lecteur financier en pause par défaut, dernier rapport conservé.
+
 ## 24 septembre 2026 : reprise CP2 (Fable, cinquième conversation), migrations 022 et 023, ordre de la file, runbook
 
 `tests/state-days.integration.ts` (nouveau, `test:db`) : 35 jours de collectes KPI Meta (lignes par jour + fenêtres CTRU) et de rapports Masterclass avec 48 passages le premier jour, changement de mois, valeur modifiée, échec puis nettoyage 019, lectures d'uniques en échec, fenêtre retirée puis réapparue ; relevé jour par jour ; constat du doublon de réapparition sur `748c6d0` puis migration 022 sur la base peuplée. Migration `022_reappearance_same_row.sql` : `cockpit_apply_aggregate_state` et `cockpit_publish_meta_daily` remplacés (018) ; un objet réapparu reprend sa ligne retirée (ou la version antérieure la plus récente d'une tentative terminée), compteur `reappeared` ; double `tests/helpers/kpi-memory.ts` aligné.

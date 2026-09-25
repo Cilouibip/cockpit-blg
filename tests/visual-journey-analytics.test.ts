@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { Database, Row, SelectOptions, TableName } from '../src/lib/db';
 import { readVisualJourneyReport, sourceFreshness, visualJourneyQueries } from '../src/connectors/visual-journey-analytics';
 import { VISUAL_JOURNEY_FORM_ID } from '../src/lib/visual-journey-report';
+import { EXCLUDED_TEST_SESSION_IDS } from '../src/lib/traffic-scope';
 
 const SITE = 'synthetic-site';
 const VISITOR = '00000000-0000-4000-8000-000000000011';
@@ -61,6 +62,7 @@ test('les requêtes utilisent blg_vid, la durée unique et les placements sans p
   assert.doesNotMatch(queries.identity, /position_seconds/);
   assert.doesNotMatch(queries.identity, /page_version =/);
   assert.match(queries.identity, /GROUP BY browser_id, visitor_id, sid/);
+  for(const sid of EXCLUDED_TEST_SESSION_IDS)assert.match(queries.identity,new RegExp(sid));
 });
 
 test('le lecteur joint visitor_id à Wix, conserve le RDV lié et reste strictement en lecture seule', async () => {

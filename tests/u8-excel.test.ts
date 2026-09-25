@@ -97,6 +97,12 @@ test('U8b colonnes : ordre et intitulés de l’Excel (A→AI, V vide), huit gro
   assert.match(body[1], /<strong>3 derniers jours<\/strong><small>du 20\/09\/2026 au 22\/09\/2026<\/small>/);
   assert.match(body[2], /<strong>7 derniers jours<\/strong><small>du 16\/09\/2026 au 22\/09\/2026<\/small>/);
   assert.doesNotMatch(html, /Conversion page et CPL restent indisponibles/);
+  const focused = renderToStaticMarkup(createElement(KpiFunnelReadyTable, { snapshot, campaignLabel: 'Campagne froide' }));
+  const focusedTop = focused.slice(0, focused.indexOf('id="kpi-funnel-title"'));
+  assert.equal((focusedTop.match(/class="a-d-card results-kpi"/g) ?? []).length, 8, 'la synthèse utilise les huit colonnes du récapitulatif de la période');
+  for (const label of ['Publicité','Inscription','Vidéo','Rendez-vous','Commercial et finance']) assert.match(focusedTop, new RegExp(`>${label}</button>`));
+  assert.match(focusedTop, /<h2>Synthèse<\/h2>/);
+  assert.doesNotMatch(focusedTop, />Non mesuré<|>Sans objet</, 'une mesure absente reste un tiret dans la synthèse visible');
 });
 
 test('U8b inscrits : contacts distincts du jour, puis de la fenêtre (jamais la somme des jours) ; une clé manquante rend le jour non mesuré', async () => {

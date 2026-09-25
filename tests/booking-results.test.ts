@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type {Database,Row,SelectOptions,TableName} from '../src/lib/db';
 import {ORGANIC,UNATTRIBUTED,type AdFunnelReport,type AdFunnelRow} from '../src/lib/ad-funnel';
 import {buildBookingResults} from '../src/lib/booking-results';
+import {EXCLUDED_TEST_SESSION_IDS} from '../src/lib/traffic-scope';
 
 const AD='120248712470690714',NOW='2026-09-18T12:00:00Z';
 const filters={from:'2026-09-01',to:'2026-09-30',tunnel:'all' as const,source:'all' as const,campaign:'',includeTests:false};
@@ -142,8 +143,8 @@ test('les filtres du funnel bornent les lignes et un funnel d’un autre périm�
 });
 
 test('les essais explicites et les rendez-vous inconnus restent distincts',async()=>{
- const regular=prospect('unknown','unknown','Inconnu',{scheduledDay:'2026-09-08',bookedDay:'2026-09-02',dates:{booked:'2026-09-02'},attendance:'unknown'}),testProspect=prospect('test','test','Test',{scheduledDay:'2026-09-09',bookedDay:'2026-09-03',dates:{booked:'2026-09-03'},attendance:'scheduled',is_test:true});
- const report=await buildBookingResults(database(baseTables({prospects:[regular,testProspect],appointments:[appointment('unknown','unknown','2026-09-08'),appointment('test','test','2026-09-09')],lead_source_observations:[observation('unknown',{ad:AD}),observation('test',{ad:AD},{properties:{origin:{ad:AD},is_test:true}})]})),filters,{now:NOW,funnel:fixtureFunnel([funnelRow({appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1})],{appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1,spendMinor:12000})});
+ const regular=prospect('unknown','unknown','Inconnu',{scheduledDay:'2026-09-08',bookedDay:'2026-09-02',dates:{booked:'2026-09-02'},attendance:'unknown'}),testProspect=prospect('test','test','Test',{scheduledDay:'2026-09-09',bookedDay:'2026-09-03',dates:{booked:'2026-09-03'},attendance:'scheduled'});
+ const report=await buildBookingResults(database(baseTables({prospects:[regular,testProspect],appointments:[appointment('unknown','unknown','2026-09-08'),appointment('test','test','2026-09-09')],lead_source_observations:[observation('unknown',{ad:AD}),observation('test',{ad:AD},{properties:{origin:{ad:AD},sid:EXCLUDED_TEST_SESSION_IDS[0]}})]})),filters,{now:NOW,funnel:fixtureFunnel([funnelRow({appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1})],{appointmentsReserved:1,appointmentsBooked:1,appointmentsUnknown:1,spendMinor:12000})});
  assert.deepEqual(report.rows.map(row=>row.id),['unknown']);assert.equal(report.rows[0].outcome,'unknown');assert.equal(report.coverage.rowsExcludedAsTests,1);
 });
 

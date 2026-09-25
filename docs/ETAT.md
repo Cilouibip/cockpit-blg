@@ -1,3 +1,9 @@
+## 25 septembre 2026 — lot de publication campagne et actualisation
+
+Lot reçu : exclusion fermée de cinq sessions de recette dans sept lecteurs ; deux campagnes et six annonces sélectionnables ; synthèse campagne de huit cartes, détail en cinq étapes et suivi quotidien. Première origine et définitions existantes conservées, aucune somme implicite des deux campagnes.
+
+Réception locale : tests ciblés, TypeScript, build et vues desktop/mobile synthétiques réussis. Publication autorisée, réception en ligne à suivre. Migrations préparées 017–023 à appliquer avant le code ; reprise des lignes courantes sans purge historique. Retour arrière : version de production précédente et procédure ACTUALISATION §7, migrations conservées. Déclencheur GitHub existant maintenu ; aucun basculement pg_cron ni cadence de trente minutes revendiquée. Lecteur financier en pause par défaut, dernier rapport conservé.
+
 ## 24 septembre 2026 : reprise CP2, stockage au fil des jours, cadence et bascule réversible (local, revue requise)
 
 Rien n'est appliqué en production. Réponse aux réserves de la revue Codex du 24/09 sur la version `748c6d0`.

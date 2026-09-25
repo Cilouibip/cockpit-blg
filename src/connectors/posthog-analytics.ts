@@ -3,6 +3,7 @@ import { Temporal } from '@js-temporal/polyfill';
 import { ConnectorError, object, readJson, safeConnectorError } from './http';
 import {readPostHogQuery,PostHogQueryPending,type PostHogQueryContinuation} from './posthog-query';
 import type { PostHogConfig } from './posthog';
+import { EXCLUDED_TEST_SESSION_IDS } from '../lib/traffic-scope';
 
 /** Embedded, aggregate-only use of Query; never EventsQuery or raw exports.
  * https://posthog.com/docs/api/queries
@@ -80,6 +81,7 @@ const host = `coalesce(nullIf(${rawHost}, ''), ${urlHost})`;
 const hostConflict = `(${rawHost} != '' AND ${urlHost} != '' AND ${rawHost} != ${urlHost})`;
 // Identifiable test traffic only. Missing environment is not evidence of a test.
 const testTraffic = `(lower(coalesce(toString(properties.environment), '')) IN ('test', 'testing', 'development', 'dev', 'staging', 'preview', 'local', 'sandbox') OR
+  lower(coalesce(toString(properties.sid), '')) IN (${EXCLUDED_TEST_SESSION_IDS.map(value=>`'${value}'`).join(', ')}) OR
   match(lower(path(${url})), '(^|[-_/])(test|tests|preview|staging|sandbox|debug|e2e)([-_/]|$)') OR
   lower(extractURLParameter(${url}, 'test')) IN ('1', 'true') OR lower(extractURLParameter(${url}, 'blg_test')) IN ('1', 'true') OR
   lower(extractURLParameter(${url}, 'test_mode')) IN ('1', 'true') OR lower(extractURLParameter(${url}, 'debug')) IN ('1', 'true'))`;

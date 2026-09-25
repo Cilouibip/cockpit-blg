@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import { Temporal } from '@js-temporal/polyfill';
 import type { DashboardFilters } from '../lib/ui-contract';
+import { CURRENT_MASTERCLASS_CAMPAIGNS, currentCampaignForAd } from '../lib/current-campaigns';
 import { formatDate, validateDateRange } from './ui-format';
 
 export default function JourneyFilters({ value, ads, onChange }: {
@@ -20,8 +21,14 @@ export default function JourneyFilters({ value, ads, onChange }: {
     { id: 'month', label: 'Ce mois-ci', from: today.with({ day: 1 }).toString(), to: today.toString() },
   ];
   const selected = options.find(option => option.from === value.from && option.to === value.to)?.id ?? 'selected';
-  const uniqueAds = [...new Map(ads.filter(ad => /^meta-ad:\d+$/.test(ad.id)).map(ad => [ad.id, ad])).values()];
-  if (value.campaign && !uniqueAds.some(ad => ad.id === value.campaign)) uniqueAds.push({ id: value.campaign, label: 'Publicité sélectionnée' });
+  const selectedAd = /^meta-ad:(\d+)$/.exec(value.campaign)?.[1] ?? null;
+  const selectedCampaign = /^meta:(\d+)$/.exec(value.campaign)?.[1] ?? (selectedAd ? currentCampaignForAd(selectedAd) : null);
+  const uniqueAds = [...new Map([
+    ...CURRENT_MASTERCLASS_CAMPAIGNS.flatMap(campaign => campaign.ads.map(ad => ({ id: `meta-ad:${ad.id}`, label: ad.label }))),
+    ...ads.filter(ad => /^meta-ad:\d+$/.test(ad.id)),
+  ].map(ad => [ad.id, ad])).values()];
+  if (selectedAd && !uniqueAds.some(ad => ad.id === value.campaign)) uniqueAds.push({ id: value.campaign, label: 'Publicité sélectionnée' });
+  const shownAds = selectedCampaign ? uniqueAds.filter(ad => currentCampaignForAd(ad.id.slice(8)) === selectedCampaign || ad.id === value.campaign) : uniqueAds;
   function choosePeriod(id: string) {
     setError('');
     if (id === 'custom') { setDraft({ from: value.from, to: value.to }); setCustom(true); return; }
@@ -45,10 +52,17 @@ export default function JourneyFilters({ value, ads, onChange }: {
         </select></div>
       </div>
       <div className="a-field a-f-field" data-emphasis="quiet">
+        <label htmlFor="journey-campaign">Campagne</label>
+        <div className="a-field-shell"><select id="journey-campaign" value={selectedCampaign ?? ''} onChange={event => onChange({ ...value, campaign: event.target.value ? `meta:${event.target.value}` : '' })}>
+          <option value="">Toutes les campagnes</option>
+          {CURRENT_MASTERCLASS_CAMPAIGNS.map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.label}</option>)}
+        </select></div>
+      </div>
+      <div className="a-field a-f-field" data-emphasis="quiet">
         <label htmlFor="journey-ad">Publicité</label>
-        <div className="a-field-shell"><select id="journey-ad" value={value.campaign} onChange={event => onChange({ ...value, campaign: event.target.value })}>
+        <div className="a-field-shell"><select id="journey-ad" value={selectedAd ? value.campaign : ''} onChange={event => onChange({ ...value, campaign: event.target.value || (selectedCampaign ? `meta:${selectedCampaign}` : '') })}>
           <option value="">Toutes les publicités</option>
-          {uniqueAds.map(ad => <option key={ad.id} value={ad.id}>{ad.label}</option>)}
+          {shownAds.map(ad => <option key={ad.id} value={ad.id}>{ad.label}</option>)}
         </select></div>
       </div>
     </div>
