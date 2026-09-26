@@ -1,3 +1,7 @@
+## 26 septembre 2026 — complément des exclusions avant mise en service
+
+Cinq sessions de recette supplémentaires ajoutées à la liste fermée : dix sessions exclues au total. Les sessions ordinaires restent conservées ; aucune personne ni plage horaire exclue par déduction. Les agrégats des jours concernés devront être renouvelés après publication, car le filtre ne corrige pas les totaux déjà stockés. Réception visuelle privée réservée au propriétaire.
+
 ## 25 septembre 2026 — lot de publication campagne et actualisation
 
 Lot reçu : exclusion fermée de cinq sessions de recette dans sept lecteurs ; deux campagnes et six annonces sélectionnables ; synthèse campagne de huit cartes, détail en cinq étapes et suivi quotidien. Première origine et définitions existantes conservées, aucune somme implicite des deux campagnes.

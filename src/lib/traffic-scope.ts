@@ -7,7 +7,7 @@ export interface TrafficScope { includeTests: boolean }
 
 export const DEFAULT_TRAFFIC_SCOPE: TrafficScope = {includeTests:false};
 
-/** Sessions de recette iPhone relevées le 25 septembre 2026, sans marqueur
+/** Sessions de recette relevées les 25 et 26 septembre 2026, sans marqueur
  * événementiel. La liste est fermée afin de ne jamais assimiler un navigateur
  * ou une session réelle à de la recette. */
 export const EXCLUDED_TEST_SESSION_IDS = [
@@ -16,6 +16,11 @@ export const EXCLUDED_TEST_SESSION_IDS = [
  'mc-cdf71364-e11a-4b50-b766-4e7e7973a2de',
  'mc-a9f12135-e503-4ac2-9a42-3615ab31067b',
  'mc-94524f30-dc32-470f-8fb9-fd60599f41c9',
+ 'mc-9dbab732-1307-4184-be11-8f40f81a3c08',
+ 'mc-92010f2f-b048-43b6-bd89-5f0f348f735d',
+ 'mc-b2037685-1336-4de5-af6d-219334881c61',
+ 'mc-fbcb861a-bb7b-46b6-96ee-0f12ec849b96',
+ 'mc-a43cf817-a5e0-43b5-b238-938e64605ce1',
 ] as const;
 const excludedTestSessions = new Set<string>(EXCLUDED_TEST_SESSION_IDS);
 
