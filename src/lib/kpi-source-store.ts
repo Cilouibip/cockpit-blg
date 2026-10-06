@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { Database, Row } from './db';
 import { startOfParisDay } from '../domain/dates';
 import { ConnectorError, safeConnectorError } from '../connectors/http';
+import { AppError } from './errors';
 
 export const KPI_PROFILE = 'kpi-funnel-sources-v1';
 export type KpiSource = 'meta' | 'posthog' | 'wix';
@@ -44,6 +45,9 @@ const KPI_STATE_METRICS = '{kpi_daily_row,kpi_daily_manifest}';
 /** Avec des lignes de fenêtre (U8b), la même publication tient aussi leur état courant : une fenêtre identique confirme la même
  * ligne, une valeur modifiée met à jour la même ligne, une fenêtre sortie du périmètre est retirée (is_current = false), jamais effacée. */
 const KPI_STATE_METRICS_WITH_WINDOWS = '{kpi_daily_row,kpi_daily_manifest,kpi_window_row,kpi_window_manifest}';
+// Keep reviewed database fault codes useful for a failed publication. Never
+// persist supplied Error.message or an arbitrary AppError code as source data.
+const KPI_DATABASE_ERROR_CODES = new Set(['database_busy','database_query_interrupted','source_busy','version_conflict','state_changed','not_found','schema_missing','duplicate','invalid_record','database_unavailable','database_missing']);
 export const kpiWindowId = (from: string, to: string, key: string) => `${from}|${to}|${key}`;
 /** Only complete source responses become a publication. Earlier publications and failed attempts stay intact.
  * Les lignes sont préparées (sync_run_id = tentative, is_current = false) puis publiées en une transaction par
@@ -86,7 +90,7 @@ export async function syncKpiSource(db: Database, source: KpiSource, namespace: 
   const published = await db.rpc<{ status: string }>('cockpit_publish_aggregate_state', { p_run: run, p_metric_keys: batch.windows ? KPI_STATE_METRICS_WITH_WINDOWS : KPI_STATE_METRICS, p_read: batch.rows.length + (batch.windows?.length ?? 0) });
   return { status: published?.status === 'empty' ? 'empty' : 'complete', runId: run, counts: { read: batch.rows.length }, observedAt: batch.observedAt };
  } catch (error) {
-  const code = safeConnectorError(error).replace(/[()]/g, '');
+  const code = error instanceof AppError && KPI_DATABASE_ERROR_CODES.has(error.code) ? error.code : safeConnectorError(error).replace(/[()]/g, '');
   await db.rpc('finish_sync', { p_run: run, p_status: 'failed', p_read: 0, p_rejected: 0, p_complete: false, p_error: code }).catch(() => undefined);
   throw error;
  }
