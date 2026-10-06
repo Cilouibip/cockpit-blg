@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildVisualJourneyReport } from '../src/lib/visual-journey-report';
-import { AD_A, AD_B, VISITOR_B, visualJourneyFixture } from './fixtures/visual-journey';
+import { AD_A, AD_B, VISITOR_B, visualJourneyFixture as undatedFixture } from './fixtures/visual-journey';
+
+function visualJourneyFixture() {
+  const input = undatedFixture();
+  input.appointments![0].bookedAt = '2026-09-18T08:21:00Z';
+  return input;
+}
 
 test('le détail des réservants contient exactement les personnes du compteur et leurs dates futures', () => {
   const input = visualJourneyFixture();
@@ -39,17 +45,17 @@ test('le parcours compte des personnes, conserve les retours et les confirmation
 });
 
 test('chaque taux garde sa cohorte et la date prévue du RDV ne devient pas une réservation', () => {
-  const input = visualJourneyFixture();
+  const input = undatedFixture();
   const report = buildVisualJourneyReport(input);
   // Taux navigateur : couverture PostHog, personne écartée ; taux Wix : couverture des inscriptions.
   assert.deepEqual(report.stages[1].fromPrevious, { numerator: 2, denominator: 2, rate: 1, available: true, reason: null, coveredThrough: '2026-09-18T11:01:00Z', excludedAfterCoverage: 0 });
   assert.deepEqual(report.form.rates.registeredFromStarted, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null, coveredThrough: '2026-09-18T10:31:00Z', excludedAfterCoverage: 0 });
   assert.deepEqual(report.stages[3].fromPrevious, { numerator: 1, denominator: 2, rate: 0.5, available: true, reason: null, coveredThrough: '2026-09-18T10:31:00Z', excludedAfterCoverage: 0 });
-  assert.equal(report.booking.booked.count, 1, 'le volume métier lié reste lisible même si le miroir est ancien');
+  assert.equal(report.booking.booked.count, null, 'une identité liée sans date de réservation ne prouve pas la conversion');
   assert.equal(report.stages[4].fromPrevious?.available, false);
   assert.equal(report.booking.rates.bookedFromCalendar.available, false);
-  assert.match(report.stages[4].fromPrevious?.reason ?? '', /date prévue du rendez-vous ne prouve pas/);
-  assert.match(report.limits.join(' '), /date prévue du rendez-vous ne prouve pas quand il a été réservé\. Les taux vers le rendez-vous restent indisponibles/);
+  assert.equal(report.stages[4].fromPrevious?.excludedAfterCoverage, 1);
+  assert.match(report.limits.join(' '), /raccord de réservation incertain/);
   assert.equal(report.status, 'partial');
   // Une fois la réservation datée, le miroir « à actualiser » reste utilisable mais ne couvre aucune activité : taux indisponible, jamais 0 %.
   input.appointments![0].bookedAt = '2026-09-18T08:21:00Z';
@@ -304,12 +310,156 @@ test('égalité inscription→vidéo, sans RDV, annulation et absence de base co
   assert.equal(report.stages[4].fromPrevious?.rate, null);
 });
 
-test('une date RDV absente hors de la base conserve la garde de disponibilité actuelle', () => {
+test('une date RDV absente hors de la base ne bloque pas le taux de la cohorte prouvée', () => {
   const input = bookingIntersectionFixture();
   input.appointments![1].bookedAt = null;
   const report = buildVisualJourneyReport(input);
-  assert.equal(report.booking.booked.count, 2);
-  assert.equal(report.stages[4].fromPrevious?.available, false);
-  assert.equal(report.stages[4].fromPrevious?.rate, null);
-  assert.match(report.stages[4].fromPrevious?.reason ?? '', /date prévue/);
+  assert.equal(report.booking.booked.count, null, 'positif + incertain ne devient pas un total exact');
+  assert.deepEqual(report.booking.people, []);
+  assert.deepEqual(report.stages[4].fromPrevious, coveredAtNoon(1, 1));
+  assert.equal(report.booking.rates.bookedFromCalendar.available, false);
+  assert.equal(report.booking.rates.bookedFromCalendar.numerator, null);
+  assert.equal(report.booking.rates.bookedFromCalendar.denominator, 2);
+  assert.equal(report.status, 'partial');
+});
+
+
+test('une réinscription récente ne transforme pas un ancien rendez-vous en conversion', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [input.browser![0]]; input.registrations = [input.registrations![0]];
+  input.registrations[0].occurredAt = '2026-10-01T04:12:16Z';
+  input.browser[0].videoStartAt = '2026-10-01T04:15:00Z'; input.browser[0].bookingOpenAt = '2026-10-01T04:20:00Z';
+  input.from = '2026-10-01'; input.to = '2026-10-06'; input.generatedAt = '2026-10-06T12:00:00Z';
+  input.freshness.wix = input.freshness.appointments = { observedAt: input.generatedAt, coveredThrough: input.generatedAt, status: 'available', reason: null };
+  const old = { ...input.appointments![0], bookedAt: '2026-04-14T07:10:00+02:00', scheduledAt: '2026-04-16T11:00:00+02:00' };
+  input.appointments = [old];
+  const before = JSON.stringify(input);
+  let report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 0); assert.deepEqual(report.booking.people, []);
+  assert.equal(report.stages[4].fromPrevious?.numerator, 0); assert.equal(report.stages[4].fromPrevious?.denominator, 1);
+  assert.equal(report.booking.rates.bookedFromCalendar.rate, 0);
+  assert.equal(JSON.stringify(input), before, 'le rendez-vous historique est préservé dans les sources');
+  const next = { ...old, id: 'new-booking', bookedAt: '2026-10-05T07:00:00Z', scheduledAt: '2026-10-20T10:00:00Z' };
+  input.appointments = [old, next, next];
+  report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 1); assert.equal(report.booking.people!.length, 1);
+  assert.deepEqual(report.booking.people![0].appointments.map(row => row.id), ['new-booking']);
+  assert.equal(report.stages[4].fromPrevious?.rate, 1); assert.equal(report.booking.rates.bookedFromCalendar.rate, 1);
+});
+
+test('une réservation différée hors période reste rattachée sans fenêtre métier arbitraire', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [input.browser![0]]; input.registrations = [input.registrations![0]];
+  input.appointments = [{ ...input.appointments![0], bookedAt: '2027-01-10T10:00:00Z' }];
+  input.generatedAt = '2027-01-11T12:00:00Z';
+  input.freshness.wix = input.freshness.appointments = { observedAt: input.generatedAt, coveredThrough: input.generatedAt, status: 'available', reason: null };
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 1); assert.equal(report.stages[4].fromPrevious?.rate, 1);
+});
+
+test('une réservation après le calendrier mais avant inscription reste hors de toute conversion', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [input.browser![0]]; input.registrations = [input.registrations![0]];
+  input.registrations[0].occurredAt = '2026-09-18T10:30:00Z';
+  input.appointments = [input.appointments![0]];
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 0); assert.equal(report.booking.rates.bookedFromCalendar.rate, 0);
+});
+
+test('une identité métier non rapprochée ne peut pas prouver la conversion', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [input.browser![0]]; input.registrations = [{ ...input.registrations![0], identityState: 'ambiguous' }];
+  input.appointments = [input.appointments![0]];
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.form.registered.count, 1); assert.equal(report.booking.booked.count, null);
+  assert.deepEqual(report.booking.people, []); assert.equal(report.stages[4].fromPrevious?.numerator, null);
+});
+
+test('une origine inconnue et une navigation absente conservent la réservation prouvée sans attribution fabriquée', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [];
+  input.registrations = [{ ...input.registrations![0], origin: {}, firstTouch: null }];
+  input.appointments = [input.appointments![0]]; input.source = 'unknown';
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, 1); assert.equal(report.booking.people!.length, 1);
+  assert.equal(report.booking.people![0].originLabel, 'Origine non renseignée');
+  assert.equal(report.stages[4].fromPrevious?.denominator, 0); assert.equal(report.stages[4].fromPrevious?.rate, null);
+  input.source = 'paid'; assert.equal(buildVisualJourneyReport(input).booking.booked.count, 0);
+});
+
+test('les inconnues après couverture ne bloquent pas la cohorte couverte', () => {
+  const input = bookingIntersectionFixture();
+  input.browser![1].videoStartAt = '2026-09-18T11:00:00Z'; input.registrations![1].occurredAt = '2026-09-18T10:30:00Z';
+  input.appointments![1].bookedAt = null;
+  input.freshness.appointments = { ...input.freshness.appointments, coveredThrough: '2026-09-18T10:00:00Z' };
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.booked.count, null);
+  assert.equal(report.stages[4].fromPrevious?.rate, 1); assert.equal(report.stages[4].fromPrevious?.denominator, 1);
+  assert.equal(report.stages[4].fromPrevious?.excludedAfterCoverage, 1);
+});
+
+test('une ouverture de calendrier sans inscription rapprochée ne fabrique pas un taux à zéro', () => {
+  const input = bookingIntersectionFixture(); input.registrations = [];
+  const report = buildVisualJourneyReport(input);
+  assert.equal(report.booking.rates.bookedFromCalendar.numerator, null);
+  assert.equal(report.booking.rates.bookedFromCalendar.denominator, 2);
+  assert.equal(report.booking.rates.bookedFromCalendar.rate, null);
+});
+
+
+test('un rendez-vous orphelin hors cohorte ne masque ni conversion prouvée ni non-conversion liée', () => {
+  const input = bookingIntersectionFixture();
+  input.appointments![1].personId = null;
+  for (const date of ['2026-09-18T10:00:00Z', null]) {
+    input.appointments![1].bookedAt = date;
+    const report = buildVisualJourneyReport(input);
+    assert.equal(report.booking.booked.count, 1); assert.equal(report.booking.people!.length, 1);
+    assert.equal(report.booking.rates.bookedFromCalendar.numerator, 1);
+    assert.equal(report.booking.rates.bookedFromCalendar.denominator, 2);
+    assert.equal(report.booking.rates.bookedFromCalendar.rate, 0.5);
+    // La personne B est explicitement liée, mais aucun rendez-vous ne lui est lié.
+    // L'orphelin n'est pas candidat pour B par simple absence de lien.
+    const onlyB = { ...input, browser: [input.browser![1]], registrations: [input.registrations![1]] };
+    const withoutBooking = buildVisualJourneyReport(onlyB);
+    assert.equal(withoutBooking.booking.booked.count, 0);
+    assert.deepEqual(withoutBooking.booking.people, []);
+    assert.equal(withoutBooking.booking.rates.bookedFromCalendar.rate, 0);
+  }
+});
+
+
+test('une sélection liée sans RDV donne zéro même si la source ne contient que des orphelins', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [{ ...input.browser![1], videoStartAt: '2026-09-18T09:05:00Z' }];
+  input.registrations = [input.registrations![1]];
+  const outside = { ...input.appointments![0], personId: null };
+  for (const date of ['2026-04-14T07:00:00Z', '2026-09-18T10:00:00Z', null]) {
+    input.appointments = [{ ...outside, bookedAt: date }];
+    const report = buildVisualJourneyReport(input);
+    assert.equal(report.booking.booked.count, 0);
+    assert.deepEqual(report.booking.people, []);
+    assert.equal(report.stages[4].fromPrevious?.numerator, 0);
+    assert.equal(report.stages[4].fromPrevious?.denominator, 1);
+    assert.equal(report.stages[4].fromPrevious?.rate, 0);
+    assert.equal(report.booking.rates.bookedFromCalendar.numerator, 0);
+    assert.equal(report.booking.rates.bookedFromCalendar.denominator, 1);
+    assert.equal(report.booking.rates.bookedFromCalendar.rate, 0);
+  }
+});
+
+test('une identité non raccordée garde son incertitude propre sans dépendre des RDV hors personne', () => {
+  const input = bookingIntersectionFixture();
+  input.browser = [input.browser![0]];
+  input.registrations = [{ ...input.registrations![0], identityState: 'unresolved', personId: null }];
+  const outside = { ...input.appointments![0], personId: 'outside-person', bookedAt: '2026-04-14T07:00:00Z' };
+  for (const appointments of [[], [outside], [{ ...outside, personId: null }]]) {
+    input.appointments = appointments;
+    const report = buildVisualJourneyReport(input);
+    assert.equal(report.booking.booked.count, null, 'identité métier de cet inscrit non prouvée, indépendamment des RDV extérieurs');
+    assert.match(report.booking.booked.reason!, /raccord d’identité/);
+    assert.equal(report.stages[4].fromPrevious?.numerator, null);
+    assert.equal(report.stages[4].fromPrevious?.denominator, 1);
+    assert.equal(report.booking.rates.bookedFromCalendar.numerator, null);
+    assert.equal(report.booking.rates.bookedFromCalendar.denominator, 1);
+  }
 });

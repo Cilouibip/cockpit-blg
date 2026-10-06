@@ -71,7 +71,7 @@ test('le lecteur joint visitor_id à Wix, conserve le RDV lié et reste strictem
     host: 'https://eu.posthog.com', projectId: '123', personalApiKey: 'synthetic', fetcher: posthogFetch,
     wixSiteId: SITE, syncEnv, from: '2026-09-18', to: '2026-09-18', source: 'all', campaign: 'all', includeTests: false, now: () => NOW,
   });
-  assert.deepEqual(report.stages.map(stage => stage.count), [1, 1, 1, 1, 1]);
+  assert.deepEqual(report.stages.map(stage => stage.count), [1, 1, 1, 1, null]);
   assert.equal(report.stages[3].fromPrevious?.rate, 1, 'le distinct_id différent ne casse pas le lien blg_vid explicite');
   assert.equal(report.stages[4].fromPrevious?.available, false, 'scheduled_at ne remplace pas booked_at');
   assert.equal(report.page.ctaPlacements[0].id, 'hero');
@@ -89,7 +89,7 @@ test('une inscription CONFIRMED sans navigateur subsiste quand PostHog échoue',
   assert.equal(report.form.registered.count, 1);
   assert.equal(report.page.visitors.count, null);
   assert.equal(report.freshness.posthog.status, 'missing');
-  assert.equal(report.booking.booked.count, 1, 'le miroir ancien ne masque pas son volume relié');
+  assert.equal(report.booking.booked.count, null, 'le miroir ne prouve pas la date de conversion');
 });
 
 test('le site Wix est obligatoire pour ne jamais lire un autre espace', async () => {
@@ -138,7 +138,7 @@ test('la fraîcheur suit le cycle publié et sa borne, jamais la fin du long sca
   assert.equal(retained.observedAt,'2026-09-18T11:50:00.000Z');
 });
 
-test('une réservation datée au jour compte sans inventer une heure après la vidéo ; les annulations métier sont exclues',async()=>{
+test('une réservation datée au même jour reste incertaine sans inventer une heure ; les annulations métier sont exclues',async()=>{
   const base=dbStub().db;let attendance='scheduled';
   const db:Database={...base,async select(table,options){
     if(table==='prospects')return [{id:'prospect',person_id:'person',business:{scheduledDay:'2026-09-20',attendance,bookedDay:'2026-09-18',dates:{booked:'2026-09-18'}}}];
@@ -146,7 +146,7 @@ test('une réservation datée au jour compte sans inventer une heure après la v
     return base.select(table,options);
   }};
   const report=await readVisualJourneyReport(db,{...freshConfig,host:'https://eu.posthog.com',projectId:'123',personalApiKey:'synthetic',fetcher:posthogFetch});
-  assert.equal(report.booking.booked.count,1);
+  assert.equal(report.booking.booked.count,null);
   assert.equal(report.stages[4].fromPrevious?.rate,null);
   attendance='cancelled';
   assert.equal((await readVisualJourneyReport(db,freshConfig)).booking.booked.count,0);
@@ -205,7 +205,7 @@ test('un calcul long garde Wix/RDV visibles et reprend les deux requêtes sans n
  };
  const config={host:'https://eu.posthog.com',projectId:'123',personalApiKey:'synthetic',wixSiteId:SITE,syncEnv,from:'2026-09-18',to:'2026-09-18',source:'all' as const,campaign:'all',includeTests:false,now:()=>NOW,fetcher,sleep:async()=>{},onBrowserContinuation:(state:import('../src/lib/visual-journey-resume').VisualJourneyContinuation)=>{resume=state;}};
  const pending=await readVisualJourneyReport(db,config);
- assert.equal(pending.freshness.posthog.status,'running');assert.equal(pending.form.registered.count,1);assert.equal(pending.booking.booked.count,1);assert.equal(pending.page.visitors.count,null);assert.equal(posts,2);assert.ok(resume?.identity);assert.ok(resume?.overview);
+ assert.equal(pending.freshness.posthog.status,'running');assert.equal(pending.form.registered.count,1);assert.equal(pending.booking.booked.count,null);assert.equal(pending.page.visitors.count,null);assert.equal(posts,2);assert.ok(resume?.identity);assert.ok(resume?.overview);
  ready=true;const done=await readVisualJourneyReport(db,{...config,resumeBrowser:resume});
  assert.equal(posts,2);assert.equal(done.page.visitors.count,1);assert.equal(done.video.started.count,1);assert.equal(done.freshness.posthog.status,'available');
 });
@@ -306,4 +306,24 @@ test('une requête servie par le cache pendant que l’autre calcule est resoumi
   assert.ok(!requests.includes('GET inconnu'));
   assert.equal(requests.filter(request => request === 'POST identity').length, 1, 'le calcul coûteux n’est jamais relancé');
   assert.equal(requests.filter(request => request === 'POST overview').length, 2);
+});
+
+test('le lecteur conserve le rendez-vous historique sans le raccorder à la réinscription de la période', async () => {
+  const base = dbStub().db;
+  let booking = '2026-04-14T07:10:00+02:00';
+  const db: Database = { ...base, async select(table, options) {
+    if (table === 'appointments') return [{ id: 'current-slot', prospect_id: 'prospect', person_id: 'person', status: 'unknown', identity_basis: 'notion_current_slot', scheduled_day: '2026-09-20', observed_at: NOW }];
+    if (table === 'prospects') return [{ id: 'prospect', person_id: 'person', business: { scheduledDay: '2026-09-20', attendance: 'scheduled', dates: { booked: booking } } }];
+    if (table === 'sync_runs') return [{ ...freshRun, source: options?.eq?.source ?? 'notion', stream_key: options?.eq?.stream_key ?? 'prospects_business' }];
+    return base.select(table, options);
+  } };
+  const config = { ...freshConfig, host: 'https://eu.posthog.com', projectId: '123', personalApiKey: 'synthetic', fetcher: posthogFetch };
+  const old = await readVisualJourneyReport(db, config);
+  assert.equal(old.coverage.appointments, 1, 'le rendez-vous demeure dans la couverture source');
+  assert.equal(old.booking.booked.count, 0); assert.deepEqual(old.booking.people, []);
+  assert.equal(old.stages[4].fromPrevious?.rate, 0);
+  booking = '2026-09-18T08:21:00Z';
+  const current = await readVisualJourneyReport(db, config);
+  assert.equal(current.booking.booked.count, 1); assert.equal(current.booking.people!.length, 1);
+  assert.equal(current.stages[4].fromPrevious?.rate, 1); assert.equal(current.booking.rates.bookedFromCalendar.rate, 1);
 });

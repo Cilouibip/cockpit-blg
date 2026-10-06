@@ -1,6 +1,7 @@
 import {ConnectorError,object,readJson,text} from './http';
 import {newBatch} from './types';
 import type {NotionConfig} from './notion';
+import {readNotionProperty} from './notion-property';
 export interface NotionInventoryRow {kind:'inventory';source:'notion';accountId:string;externalId:string;sourceUpdatedAt:string;observedAt:string;archived:boolean;clientIds:string[];attendanceGroup:string|null}
 /** Hourly membership + dependency projection. No name, email, notes or answers. */
 export async function readNotionInventoryPage(config:NotionConfig){
@@ -12,7 +13,7 @@ export async function readNotionInventoryPage(config:NotionConfig){
   const payload=object(await readJson(url,{method:'POST',headers:{Authorization:`Bearer ${config.token}`,'Notion-Version':'2025-09-03','Content-Type':'application/json'},body:JSON.stringify({page_size:100,...(config.cursor?{start_cursor:config.cursor}:{}),filter:{and:[{timestamp:'created_time',created_time:{on_or_after:config.from}},{timestamp:'created_time',created_time:{before:config.to}}]},sorts:[{timestamp:'created_time',direction:'ascending'}]})},{fetcher:config.fetcher,attempts:1,timeoutMs:15000}));
   if(!Array.isArray(payload.results)||payload.results.length>100||typeof payload.has_more!=='boolean')throw new ConnectorError('INVALID_SOURCE_PAGE');
   for(const raw of payload.results){
-   const row=object(raw),props=object(row.properties),get=(key:'clients'|'attendanceGroup')=>object(props[config.fields[key]!]??Object.values(props).find(p=>object(p).id===config.fields[key]));
+   const row=object(raw),props=object(row.properties),get=(key:'clients'|'attendanceGroup')=>object(readNotionProperty(props,config.fields[key]));
    const relation=get('clients'),formula=object(get('attendanceGroup').formula);
    if(relation.has_more===true||!Array.isArray(relation.relation))throw new ConnectorError('INCOMPLETE_SOURCE_RELATION');
    const clientIds=relation.relation.map(p=>text(object(p).id));

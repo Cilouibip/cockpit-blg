@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BLG_NOTION_FIELDS,syncNotion} from '../src/connectors/notion';
+import {BLG_NOTION_FIELDS,BLG_NOTION_PROPERTY_IDS,syncNotion} from '../src/connectors/notion';
 import {readNotionBusinessSchema} from '../src/connectors/notion-schema';
 import {readNotionInventoryPage} from '../src/connectors/notion-inventory';
 const id='22222222-2222-4222-8222-222222222222';
 const formula='if(prop("Etat")=="Noshow",style("Noshow","b","red"),if(prop("Etat")=="Ancien client"ORprop("Etat")=="RDV Terminé"ORprop("Etat")=="Closé"ORprop("Etat")=="Perdu"ORprop("Etat")=="À relancer"ORprop("Etat")=="Plus de réponses"ORprop("Etat")=="Plus tard",style("Show up","b","green"),""))';
 const types:Record<string,string>={name:'title',status:'select',responsible:'select',closer:'select',appointmentAt:'date',nextFollowUpAt:'date',email:'email',emailBis:'email',clients:'relation',createdAt:'created_time',acquisitionReal:'date',acquisitionLegacy:'date',acquisitionWix:'date',bookedAt:'date',closedAt:'date',attendanceGroup:'formula',channels:'multi_select',tunnels:'multi_select'};
-const schema=(expression=formula)=>({id,properties:Object.fromEntries(Object.entries(BLG_NOTION_FIELDS).map(([k,name])=>[name,{id:k,type:types[k],...(k==='attendanceGroup'?{formula:{expression}}:{})}]))});
+const schema=(expression=formula)=>({id,properties:Object.fromEntries(Object.entries(BLG_NOTION_FIELDS).map(([k,name])=>[name,{id:BLG_NOTION_PROPERTY_IDS[k as keyof typeof BLG_NOTION_PROPERTY_IDS],type:types[k],...(k==='attendanceGroup'?{formula:{expression}}:{})}]))});
 test('schema projection uses only reviewed property IDs and unknown formula dependencies disable deltas',async()=>{
- const good=await readNotionBusinessSchema({dataSourceId:id,token:'synthetic',fetcher:async()=>Response.json(schema())});assert.equal(good.proof.deltaSafe,true);assert.equal(good.fields.name,'name');
+ const good=await readNotionBusinessSchema({dataSourceId:id,token:'synthetic',fetcher:async()=>Response.json(schema())});assert.equal(good.proof.deltaSafe,true);assert.equal(good.fields.name,'title');
  const drift=await readNotionBusinessSchema({dataSourceId:id,token:'synthetic',fetcher:async()=>Response.json(schema('now()'))});assert.equal(drift.proof.deltaSafe,false);assert.notEqual(drift.proof.digest,good.proof.digest);
  await assert.rejects(readNotionBusinessSchema({dataSourceId:id,fetcher:async()=>Response.json({...schema(),id:'other'})}),{message:'SOURCE_IDENTITY_MISMATCH'});
 });

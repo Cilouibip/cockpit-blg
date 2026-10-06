@@ -134,16 +134,22 @@ test('U6 (d) à actualiser, en cours ou en échec avec couverture publiée : uti
   for (const rate of bookingRates(buildVisualJourneyReport(noMirror))) assert.equal(rate.reason, 'Miroir illisible.');
 });
 
-test('U6 (e) une réservation sans date de réservation garde les taux RDV indisponibles, même hors couverture', () => {
+test('U6 (e) une réservation sans date bloque seulement la cohorte couverte qui la contient', () => {
   for (const index of [0, 2]) {
     const input = threePeople();
     input.appointments!.find(row => row.personId === `person-${index}`)!.bookedAt = null;
     const report = buildVisualJourneyReport(input);
     for (const rate of bookingRates(report)) {
-      assert.equal(rate.available, false); assert.equal(rate.rate, null);
-      assert.equal(rate.reason, 'La date prévue du rendez-vous ne prouve pas quand il a été réservé.');
+      if (index === 0) {
+        assert.equal(rate.available, false); assert.equal(rate.rate, null);
+        assert.equal(rate.numerator, null); assert.equal(rate.denominator, 1);
+        assert.equal(rate.coveredThrough, at('10:00')); assert.equal(rate.excludedAfterCoverage, 1);
+      } else {
+        assert.deepEqual(rate, optionA(1, 1, at('10:00'), 1), 'personne incertaine après couverture : hors des deux termes');
+      }
     }
-    assert.equal(report.booking.booked.count, 2, 'le volume de réservants reste lisible');
+    assert.equal(report.booking.booked.count, null, 'une réservation prouvée + une incertaine ne devient pas un total exact');
+    assert.deepEqual(report.booking.people, []);
     assert.equal(report.stages[2].fromPrevious?.available, true, 'les taux d’inscription ne dépendent pas de la date de réservation');
   }
 });
