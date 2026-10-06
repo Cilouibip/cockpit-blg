@@ -30,18 +30,26 @@ jobs:
         if: ${{ env.CRON_SECRET != '' }}
         run: |
           deadline=$((SECONDS + 720))
+          response_file="$(mktemp)"
+          trap 'rm -f -- "$response_file"' EXIT
           # Drain healthy sources after a failed unit. Persistent errors still fail
           # this run; one summary replaces repeated per-unit failure annotations.
           while (( SECONDS < deadline )); do
-            if ! response="$(curl --silent --show-error --fail-with-body \
+            # A regular output file is reset by curl before a retry. Stdout
+            # cannot be rewound and would concatenate failed and final JSON.
+            if ! curl --silent --show-error --fail-with-body \
               --max-time 90 --retry 2 --retry-delay 2 --retry-max-time 100 \
+              --output "$response_file" \
               --header "Authorization: Bearer $CRON_SECRET" \
-              https://cockpit-blg.vercel.app/api/jobs/tick)"; then
+              https://cockpit-blg.vercel.app/api/jobs/tick; then
               echo "Lecture du tick interrompue ; les checkpoints sont conservés." >&2
               exit 1
             fi
-            status="$(printf '%s' "$response" | jq -er '.status')"
-            printf '%s' "$response" | jq -c '{status,units,unitResults,streams,measurements,schedulerMeasurements}'
+            if ! status="$(jq -ers 'if length == 1 and (.[0].status | IN("complete","partial","waiting","failed")) then .[0].status else error("invalid tick response") end' "$response_file" 2>/dev/null)"; then
+              echo "Réponse d’actualisation invalide." >&2
+              exit 1
+            fi
+            jq -c '{status,units,unitResults,streams,measurements,schedulerMeasurements}' "$response_file"
             case "$status" in
               complete) exit 0 ;;
               partial) sleep 1 ;;
