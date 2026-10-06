@@ -124,7 +124,7 @@ export function chooseSyncJob(runs:Row[],now:number,enabled:SyncJob[],cadences:R
  return candidates.sort((a,b)=>Number(b.starving)-Number(a.starving)||a.cadence-b.cadence||a.touched-b.touched)[0]?.id??null;
 }
 const sourceTimeoutMs:Record<SyncJob,number>={notion:20_000,meta:25_000,wix:25_000,receipts:25_000,meta_ads:30_000,meta_catalog:30_000,quiz:30_000,masterclass:30_000,forms:25_000,quiz_entries:25_000,client_history:25_000,commerce:25_000,kpi_meta:30_000,kpi_posthog:30_000,kpi_email:30_000};
-type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'remainingWorkMs'|'remainingTotalMs'>>;
+type Budget=Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceFetch'|'canStart'|'dispose'>&Partial<Pick<ReturnType<typeof createSyncExecutionBudget>,'sourceSignal'|'remainingWorkMs'|'remainingTotalMs'>>;
 type TickResult={status:string;safeError?:string};
 export type TickSummary={status:string;job:SyncJob|null;jobs:SyncJob[];units:number;unitResults:{job:SyncJob;status:string}[];reason?:string;lock?:TickLockReport;cadence?:{pilotMinutes:30|60;pilotJobs:SyncJob[];otherMinutes:60;requestedMinutes?:30|60;degradedReason?:string};cleanup?:StagedCleanupReport;streams?:StreamState[];schedulerMeasurements?:{dbReads:number;dbMs:number;elapsedMs:number;rowsRead:number};measurements?:{job:SyncJob;elapsedMs:number;sourceRequests:number;sourceMs:number;dbReads:number;dbWrites:number;dbMs:number;rowsSubmitted:number}[]};
 /** Nettoyage borné de la zone de préparation (migration 019, `cockpit_cleanup_staged`) : lignes jamais publiées de tentatives
@@ -181,7 +181,7 @@ export function createProcessTickLock(staleMs=120_000,clock:()=>number=Date.now)
  }};
 }
 const processTickLock=createProcessTickLock();
-type TickOptions={lock?:TickLock;sharedLease?:SharedTickLease|null;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
+type TickOptions={lock?:TickLock;sharedLease?:SharedTickLease|null;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;signal?:AbortSignal;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité planifiable ; null = unité non configurée ou suspendue (elle n'est pas planifiée, jamais un zéro).
  * Le lecteur financier Notion reste hors planning tant que BLG_COMMERCE_READER n'est pas `active`. */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
@@ -215,7 +215,25 @@ export function configuredJobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace
   case 'commerce':return scope(commerce?.parcours.dataSourceId,commerce?notionCommerceProfile(commerce):null,!!commerce?.schedule&&!!env.NOTION_TOKEN);
  }
 }
-async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;budget?:import('./sync-posthog-reports').PostHogSyncBudget}):Promise<TickResult>{
+/** Exact scheduler scope reused by the independent, read-only monitor. */
+export function syncJobRunFilter(job:SyncJob,scope:{namespace:string;profile:string}):Record<string,string>{
+ const definition=definitions.find(d=>d.id===job)!;
+ return {source:definition.source,source_namespace:scope.namespace,stream_key:definition.stream,query_profile_key:scope.profile};
+}
+/** Same recent-attempt/publication selection for the tick and monitor. No work is executed here. */
+export async function loadSyncJobRuns(db:Database,scopes:Map<SyncJob,{namespace:string;profile:string}>,enabled:readonly SyncJob[],select:(options:Parameters<Database['select']>[1])=>Promise<Row[]>=options=>db.select('sync_runs',options)):Promise<Row[]>{
+ const groups=await Promise.all(definitions.filter(d=>enabled.includes(d.id)).map(async d=>{
+  const scope=scopes.get(d.id)!,eq=syncJobRunFilter(d.id,scope);
+  const [recent,published,work]=await Promise.all([
+   select({eq,order:'started_at',descending:true,limit:5}),
+   select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1}),
+   d.workStream?select({eq:{...eq,stream_key:d.workStream},columns:['id','source','stream_key','query_profile_key','started_at','finished_at','status','lease_until','error_code'],order:'started_at',descending:true,limit:1}):Promise.resolve([]),
+  ]);
+  return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id))),...work];
+ }));
+ return groups.flat();
+}
+async function executeSyncJob(job:SyncJob,from:string,to:string,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;signal?:AbortSignal;budget?:import('./sync-posthog-reports').PostHogSyncBudget}):Promise<TickResult>{
  const {db,env}=options;
  switch(job){
   case 'kpi_meta':return synchronizeKpi('meta',options);
@@ -291,18 +309,12 @@ async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOption
  const schedulerMeasurements={dbReads:0,dbMs:0,elapsedMs:0,rowsRead:0};
  const loadRuns=async()=>{
   const started=performance.now();
-  const groups=await Promise.all(definitions.filter(d=>enabled.includes(d.id)).map(async d=>{
-   const scope=scopes.get(d.id)!,eq={source:d.source,source_namespace:scope.namespace,stream_key:d.stream,query_profile_key:scope.profile};
-   const select=async(options:Parameters<Database['select']>[1])=>{const at=performance.now();schedulerMeasurements.dbReads++;try{const rows=await db.select('sync_runs',options);schedulerMeasurements.rowsRead+=rows.length;return rows;}finally{schedulerMeasurements.dbMs+=performance.now()-at;}};
-   // A healthy publication remains findable after any number of failed attempts.
-   const [recent,published,work]=await Promise.all([
-    select({eq,order:'started_at',descending:true,limit:5}),
-    select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1}),
-    d.workStream?select({eq:{...eq,stream_key:d.workStream},columns:['id','source','stream_key','query_profile_key','started_at','finished_at','status','lease_until','error_code'],order:'started_at',descending:true,limit:1}):Promise.resolve([]),
-   ]);
-   return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id))),...work];
-  }));
-  schedulerMeasurements.elapsedMs+=performance.now()-started;return groups.flat();
+  const rows=await loadSyncJobRuns(db,scopes,enabled,async(options)=>{
+   const at=performance.now();schedulerMeasurements.dbReads++;
+   try{const rows=await db.select('sync_runs',options);schedulerMeasurements.rowsRead+=rows.length;return rows;}
+   finally{schedulerMeasurements.dbMs+=performance.now()-at;}
+  });
+  schedulerMeasurements.elapsedMs+=performance.now()-started;return rows;
  };
  const measurements:NonNullable<TickSummary['measurements']>=[];
  const budget=options.budget??createSyncExecutionBudget(),now=options.now??Date.now,jobs:SyncJob[]=[],results:TickResult[]=[];const chunks=new Map<SyncJob,number>();let budgetStopped=false;const excluded=new Set<SyncJob>();
@@ -319,7 +331,7 @@ async function tickWithLock(db:Database,env:NodeJS.ProcessEnv,options:TickOption
    const timed=async<T>(fn:()=>Promise<T>)=>{const at=performance.now();try{return await fn();}finally{measure.dbMs+=performance.now()-at;}};
    const measuredDb:Database={...db,select:(...args)=>{measure.dbReads++;return timed(()=>db.select(...args));},upsert:(...args)=>{measure.dbWrites++;measure.rowsSubmitted+=args[1].length;return timed(()=>db.upsert(...args));},rpc:<T>(name:string,args:Row,options?:Parameters<Database['rpc']>[2])=>{measure.dbWrites++;if(Array.isArray(args.p_records))measure.rowsSubmitted+=args.p_records.length;return timed(()=>db.rpc<T>(name,args,options));}};
    const fetcher:typeof fetch=async(...args)=>{const at=performance.now();measure.sourceRequests++;try{return await budget.sourceFetch(...args);}finally{measure.sourceMs+=performance.now()-at;}};
-   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher,...(budget.remainingWorkMs&&budget.remainingTotalMs?{budget:{remainingWorkMs:budget.remainingWorkMs,remainingTotalMs:budget.remainingTotalMs}}:{})});}
+   try {result=await (options.execute??((selected,ctx)=>executeSyncJob(selected,from,to,ctx)))(job,{db:measuredDb,env,fetcher,...(budget.sourceSignal?{signal:budget.sourceSignal}:{}),...(budget.remainingWorkMs&&budget.remainingTotalMs?{budget:{remainingWorkMs:budget.remainingWorkMs,remainingTotalMs:budget.remainingTotalMs}}:{})});}
    // Flux déjà réclamé ailleurs (begin_sync_stream : 55P03 traduit en 409 source_busy) : rien n'a été écrit, le détenteur termine.
    catch(error) {result=error instanceof AppError&&error.status===409&&error.code==='source_busy'?{status:'waiting'}:{status:'failed',safeError:safeCode(error instanceof AppError||error instanceof ConnectorError?error.code:undefined)};excluded.add(job);}
    invalidateSourceSnapshots(db);

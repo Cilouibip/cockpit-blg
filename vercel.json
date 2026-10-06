@@ -1,5 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "regions": ["lhr1"]
+  "regions": ["lhr1"],
+  "env": {
+    "BLG_REFRESH_CADENCE_MINUTES": "30"
+  }
 }

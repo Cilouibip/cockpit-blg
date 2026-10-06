@@ -32,6 +32,9 @@ export function createSyncExecutionBudget(options:Options={}) {
     return fetcher(input,{...init,signal:AbortSignal.any(signals)});
   };
   return {
+    // Expose the source deadline to readers so retries/backoff stop with fetches.
+    // The write signal remains separate to preserve the cleanup margin.
+    sourceSignal,
     sourceFetch:transport('source'),
     writeFetch:transport('write'),
     remainingWorkMs:()=>remaining(workDeadline),

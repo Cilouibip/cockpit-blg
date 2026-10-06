@@ -12,7 +12,7 @@ export async function synchronize(source:'meta'|'notion',from?:string,to?:string
   const today=Temporal.Now.plainDateISO('Europe/Paris');
   return syncMetaAccountPeriod(from??today.subtract({days:35}).toString(),to??today.add({days:1}).toString(),options);
 }
-export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:ReturnType<typeof database>;env?:NodeJS.ProcessEnv;fetcher?:typeof fetch}={}){
+export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:ReturnType<typeof database>;env?:NodeJS.ProcessEnv;fetcher?:typeof fetch;signal?:AbortSignal}={}){
   const source='meta' as const;
   const env=options.env??process.env,db=options.db??database();
   if(getConfig(env).mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
@@ -27,7 +27,7 @@ export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:Re
   const run=await db.rpc<string>('begin_sync_stream',{p_source:source,p_namespace:namespace,p_from:start,p_to:end,p_profile:`${env.META_API_VERSION||'v23.0'}-ad-day-none`,p_stream:'ad_daily',p_coverage_kind:'aggregate_period',p_date_from:fromDay,p_date_to:toDay});
   const commit=async(page:{records:unknown[];checkpoint:{cursor?:string}})=>{await db.rpc('import_meta_page',{p_run:run,p_records:page.records,p_cursor:page.checkpoint.cursor||null});};
   // Retry re-reads the bounded partition from the start. Prior pages cannot be lost under a new published run.
-  const result=await syncMeta({accessToken:env.META_ACCESS_TOKEN,accountId:namespace,apiVersion:env.META_API_VERSION||'v23.0',from:fromDay,to:toDay,maxPages:20,commitPage:commit,fetcher:options.fetcher});
+  const result=await syncMeta({accessToken:env.META_ACCESS_TOKEN,accountId:namespace,apiVersion:env.META_API_VERSION||'v23.0',from:fromDay,to:toDay,maxPages:20,commitPage:commit,fetcher:options.fetcher,signal:options.signal});
   const status=result.status==='not_configured'?'failed':result.status;
   // Lecture complète : publication atomique dans l'état courant (migration 018) ; un objet inchangé n'ajoute aucune ligne,
   // un objet absent de la fenêtre est retiré sans être effacé. Lecture incomplète : clôture comme avant, rien n'est publié.
