@@ -71,7 +71,10 @@ export async function synchronizeNotionChunk(options:{db?:Database;env?:Record<s
   await db.rpc('cockpit_release_notion',{p_run:claim.runId,p_lease:lease,p_error:null});
   return {status:'partial',counts:{read:(claim.rowsRead??0)+read,accepted:read,rejected:0,pages},coverage:{complete:false,from:claim.from,to:claim.to,reason:'Lecture Notion en cours ; prochaine exécution au checkpoint enregistré. La dernière publication reste affichée.'},runId:claim.runId};
  }catch(error){
-  const code=error instanceof AppError&&/^[A-Za-z_][A-Za-z0-9_ ()-]{0,99}$/.test(error.code)?error.code:'NOTION_PAGE_RETRY';
+  // Connector errors may include a bounded HTTP suffix. The persisted SQL code
+  // accepts no parentheses; preserve status while releasing the retry checkpoint.
+  const candidate=error instanceof AppError?error.code.replace(/ \(HTTP (\d{3})\)$/,'_HTTP_$1'):'NOTION_PAGE_RETRY';
+  const code=/^[A-Za-z0-9_ -]{1,100}$/.test(candidate)?candidate:'NOTION_PAGE_RETRY';
   await db.rpc('cockpit_release_notion',{p_run:claim.runId,p_lease:lease,p_error:code}).catch(()=>undefined);
   throw error;
  }

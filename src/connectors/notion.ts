@@ -2,6 +2,8 @@ import type { AppointmentStatus, Evidence } from '../domain/models';
 import { ConnectorError, object, readJson, safeConnectorError, text } from './http';
 import { newBatch, type SyncOptions } from './types';
 import { NOTION_BUSINESS_FIELDS, normalizeNotionBusiness, type BusinessField, type NotionBusiness } from './notion-business';
+import { notionPropertyIdentity, readNotionProperty as field } from './notion-property';
+export { notionPropertyIdentity } from './notion-property';
 
 export type CommercialField = 'name' | 'status' | 'responsible' | 'closer' | 'appointmentAt' | 'nextFollowUpAt' | BusinessField;
 /** Schema-only GET verified 2026-09-07. No prospect rows or personal fields were needed. */
@@ -9,6 +11,22 @@ export const BLG_NOTION_FIELDS: Record<CommercialField, string> = {
   name: 'Nom complet', status: 'Etat', responsible: 'Animateur RDV', closer: 'Closer',
   appointmentAt: 'Date du RDV', nextFollowUpAt: 'À relancer le',
   ...NOTION_BUSINESS_FIELDS,
+};
+/** Reviewed projection identities. Labels may change; replacing a property requires a new review.
+ * Schema metadata only, verified against the private 2026-10-06 snapshot. */
+export const BLG_NOTION_PROPERTY_IDS: Record<CommercialField, string> = {
+  name: 'title', status: '%3AMHj', responsible: 'KgAP', closer: 'zH%3BN',
+  appointmentAt: 'K%40iM', nextFollowUpAt: 'pr%7By', email: '%3EGln', emailBis: 'cIWM',
+  clients: '%3Bie%3B', createdAt: 'h%5CZX', acquisitionReal: '%3Al%7Ce',
+  acquisitionLegacy: 'mbdD', acquisitionWix: '%7C%3Fqc', bookedAt: 'rbK%5E',
+  closedAt: 'VagQ', attendanceGroup: 'zwyN', channels: '%60uFk', tunnels: 'A%7Cy%7B',
+};
+export const BLG_NOTION_PROPERTY_TYPES: Record<CommercialField, readonly string[]> = {
+  name: ['title'], status: ['select', 'status'], responsible: ['select', 'people', 'relation'],
+  closer: ['select', 'people', 'relation'], appointmentAt: ['date'], nextFollowUpAt: ['date'],
+  email: ['email'], emailBis: ['email'], clients: ['relation'], createdAt: ['created_time'],
+  acquisitionReal: ['date'], acquisitionLegacy: ['date'], acquisitionWix: ['date'], bookedAt: ['date'],
+  closedAt: ['date'], attendanceGroup: ['formula'], channels: ['multi_select'], tunnels: ['multi_select'],
 };
 export interface NotionProspect extends Evidence {
   source: 'notion'; personId: null; name: string | null; status: string | null; responsible: string[]; closer: string[];
@@ -28,12 +46,6 @@ function richText(value: unknown): string | null {
   if (!Array.isArray(value)) return null;
   const rendered = value.map(item => text(object(item).plain_text) ?? '').join('').slice(0, 300);
   return rendered || null;
-}
-function field(properties: Record<string, unknown>, name: string | undefined): Record<string, unknown> | null {
-  if (!name) return null;
-  const byName = properties[name];
-  if (byName) return object(byName);
-  return Object.values(properties).map(object).find(property => property.id === name) ?? null;
 }
 function selected(property: Record<string, unknown> | null): string | null {
   if (!property) return null;
@@ -82,6 +94,14 @@ export async function syncNotion(config: NotionConfig) {
         try {
           const pageRow = object(raw), id = text(pageRow.id), updatedAt = text(pageRow.last_edited_time), properties = object(pageRow.properties);
           if (!id || !/^[a-fA-F0-9-]{32,36}$/.test(id) || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) throw new ConnectorError('INVALID_ROW');
+          // Strict metadata contract for the reviewed ID projection. Legacy name mappings
+          // remain usable by standalone adapters; the production schema reader supplies IDs.
+          for (const [key, mapped] of Object.entries(config.fields) as [CommercialField, string][]) {
+            if (notionPropertyIdentity(mapped) !== notionPropertyIdentity(BLG_NOTION_PROPERTY_IDS[key])) continue;
+            const property = field(properties, mapped);
+            if (!property || typeof property.id !== 'string' || notionPropertyIdentity(property.id) !== notionPropertyIdentity(mapped)) throw new ConnectorError('SOURCE_PROPERTY_MISSING');
+            if (typeof property.type !== 'string' || !BLG_NOTION_PROPERTY_TYPES[key].includes(property.type)) throw new ConnectorError('SOURCE_PROPERTY_TYPE_CHANGED');
+          }
           if(Object.values(config.fields).some(name=>field(properties,name)?.has_more===true))throw new ConnectorError('INCOMPLETE_SOURCE_RELATION');
           const nameProperty = field(properties, config.fields.name), sourceStatus = selected(field(properties, config.fields.status));
           const status = sourceStatus ? config.statusMapping?.[sourceStatus] : undefined;
@@ -93,7 +113,10 @@ export async function syncNotion(config: NotionConfig) {
             notionUrl: `https://www.notion.so/${id.replace(/-/g, '')}`, mappingVersion: config.mappingVersion,
             business:normalizeNotionBusiness(properties,{fields:config.fields,identitySecret:config.identitySecret,createdAt:text(pageRow.created_time),appointmentAt:date(field(properties,config.fields.appointmentAt)),status:sourceStatus,timezone:config.timezone}) };
           records.push(record);
-        } catch { batch.counts.rejected++; }
+        } catch (error) {
+          batch.counts.rejected++;
+          if (error instanceof ConnectorError && error.code.startsWith('SOURCE_PROPERTY_')) batch.safeError = safeConnectorError(error);
+        }
       }
       const next = payload.has_more ? text(payload.next_cursor) : null;
       if (payload.has_more && (!next || next.length > 4096)) throw new ConnectorError('INVALID_PAGINATION');

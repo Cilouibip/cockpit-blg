@@ -161,9 +161,8 @@ test('une date prévue historique sans heure conserve son tri sans devenir une p
     { ...appointment, id: 'previous-day', bookedAt: null, scheduledAt: '2026-09-20' },
   ];
   const report = buildVisualJourneyReport(input);
-  assert.deepEqual(report.booking.people![0].appointments.map(row => row.id), ['undated', 'previous-day', 'day-only', 'timed']);
-  assert.equal(report.booking.people![0].appointments.find(row => row.id === 'day-only')!.scheduledAt, '2026-09-21');
-  assert.equal(report.booking.booked.count, 1);
+  assert.deepEqual(report.booking.people, []);
+  assert.equal(report.booking.booked.count, null);
   assert.equal(report.stages[4].fromPrevious?.rate, null);
   assert.equal(report.booking.rates.bookedFromCalendar.rate, null);
 });
@@ -178,5 +177,22 @@ test('le tri mêlant date seule et instants équivalents avec décalage reste st
   for (const order of [[0,1,2], [0,2,1], [1,0,2], [1,2,0], [2,0,1], [2,1,0]]) {
     input.appointments = order.map(index => rows[index]);
     assert.deepEqual(buildVisualJourneyReport(input).booking.people![0].appointments.map(row => row.id), ['before', 'day', 'after']);
+  }
+});
+
+
+test('date de réservation seule : jour Paris antérieur, identique ou ultérieur sans heure inventée', () => {
+  const input = singlePerson();
+  input.registrations![0].occurredAt = '2026-09-17T22:30:00Z'; // 18 septembre à 00:30 Paris.
+  input.browser![0].videoStartAt = '2026-09-17T22:31:00Z';
+  input.browser![0].bookingOpenAt = '2026-09-17T22:32:00Z';
+  input.appointments![0].bookedAt = null;
+  for (const [day, count, numerator] of [['2026-09-17', 0, 0], ['2026-09-18', null, null], ['2026-09-19', 1, 1]] as const) {
+    input.appointments![0].bookedDay = day;
+    const report = buildVisualJourneyReport(input);
+    assert.equal(report.booking.booked.count, count, day);
+    assert.equal(report.stages[4].fromPrevious?.numerator, numerator, day);
+    assert.equal(report.booking.rates.bookedFromCalendar.numerator, numerator, day);
+    if (count === 1) assert.equal(report.booking.people![0].appointments[0].bookedAt, day);
   }
 });

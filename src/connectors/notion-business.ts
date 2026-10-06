@@ -1,5 +1,6 @@
 import { emailIdentity } from '../domain/identity';
 import { Temporal } from '@js-temporal/polyfill';
+import { readNotionProperty } from './notion-property';
 
 export const NOTION_BUSINESS_VERSION = 'notion-acquisition-known-v1';
 export const NOTION_BUSINESS_FIELDS = {
@@ -26,7 +27,7 @@ export function sourceBusinessDay(value:string|null,timezone='Europe/Paris'):str
 /** Fixed allowlist. No answers, health properties, free-form CRM bodies or raw contact details leave this adapter. */
 export function normalizeNotionBusiness(properties:Property, options:{fields?:Partial<Record<BusinessField,string>>;identitySecret?:string;createdAt?:string|null;appointmentAt?:string|null;status?:string|null;timezone?:string;version?:string}):NotionBusiness {
  const fields=options.fields??NOTION_BUSINESS_FIELDS;
- const field=(key:BusinessField)=>{const name=fields[key]??'';return obj(properties[name]??Object.values(properties).find(v=>obj(v).id===name));};
+ const field=(key:BusinessField)=>obj(readNotionProperty(properties,fields[key]));
  const date=(key:BusinessField)=>{const v=obj(field(key).date).start;return typeof v==='string'?v:null;};
  const created=field('createdAt').created_time;
  const createdAt=typeof created==='string'?created:options.createdAt??null;

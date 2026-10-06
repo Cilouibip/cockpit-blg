@@ -99,6 +99,7 @@ test('partial data keeps good values and groups the missing explanation', () => 
 
 test('après abandon, l’écran dit « Lecture des visites non terminée » et garde inscriptions et rendez-vous', () => {
   const pendingText = 'La lecture des visites et de la vidéo est en cours.', input = visualJourneyFixture();
+  input.appointments![0].bookedAt = '2026-09-18T08:21:00Z'; // Conversion source explicite, indépendante de la lecture navigateur.
   const pending = { ...buildVisualJourneyReport({ ...input, browser: null, browserError: pendingText, freshness: {
     posthog: { observedAt: null, coveredThrough: null, status: 'running', reason: pendingText },
     wix: input.freshness.wix,

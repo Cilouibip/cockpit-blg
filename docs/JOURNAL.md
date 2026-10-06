@@ -452,3 +452,8 @@ Validation du complément : reproduction avant/après identique (échec puis att
 Mission Sol : intégrer le relevé daté produit depuis le classeur commun, sans donnée privée versionnée ni changement du Parcours. Ajout d'un lecteur serveur borné et validé, d'une route authentifiée et d'un tableau responsive dans Résultats. La vue conserve `null` comme « Non mesuré », distingue les périmètres Meta/Wix/commercial et n'affiche aucun CAC ou ROAS transversal sans cohorte prouvée.
 
 Contrôles : 11 tests ciblés, TypeScript et build réussis ; recette visuelle locale 1440/390 px sur la vraie route KPI, avec le reste du tableau de bord simulé pour isoler ce panneau. Limite : relevé fixe à charger explicitement côté serveur ; aucune configuration d'hébergement, publication ou actualisation automatique.
+
+
+## 6 octobre 2026 — exécution coordonnée de la fiabilité masterclass
+
+Deux auteurs sur fichiers disjoints (contrat Notion, chronologie Parcours), coordinateur intégrateur et relecteur indépendant. La réception refuse notamment la perte silencieuse de dates sous identifiants équivalents et la contamination d’une cohorte par des rendez-vous orphelins globaux. Contre-tests ajoutés, reprise après erreur temporaire vérifiée sur PostgreSQL isolé avant intégration. Les six rubriques objectifs/succès/échec/tests/roadmap/interdits sont conservées dans les missions et la réception. Code local, publication et preuve durable restent des états séparés.
