@@ -1,7 +1,8 @@
 import { previousCalendarDay } from '../domain/dates';
 import { moneyFromDecimal } from '../domain/metrics';
 import type { Evidence } from '../domain/models';
-import { ConnectorError, integer, object, readJson, safeConnectorError, text } from './http';
+import { ConnectorError, integer, object, safeConnectorError, text } from './http';
+import { readMetaJson } from './meta-http';
 import { newBatch, type SyncOptions } from './types';
 
 export interface MetaAdDay extends Evidence {
@@ -10,7 +11,7 @@ export interface MetaAdDay extends Evidence {
   reportedConversions: { action: string; count: number; window: string; reportingTime: 'impression'; method: 'meta_reported' }[];
 }
 export interface MetaConfig extends SyncOptions<MetaAdDay> {
-  accessToken?: string; accountId?: string; apiVersion?: string; currencyExponent?: number;
+  accessToken?: string; accountId?: string; apiVersion?: string; currencyExponent?: number; signal?: AbortSignal;
   /** Explicit Meta reporting windows; without this choice, conversion actions are not requested. */
   reportingWindows?: ('1d_click' | '7d_click' | '1d_view')[];
 }
@@ -31,7 +32,7 @@ export async function syncMeta(config: MetaConfig) {
     const headers = { Authorization: `Bearer ${config.accessToken}` };
     const accountUrl = new URL(`https://graph.facebook.com/${version}/act_${accountId}`);
     accountUrl.searchParams.set('fields', 'account_id,currency,timezone_name');
-    const account = object(await readJson(accountUrl, { method: 'GET', headers }, config));
+    const account = object(await readMetaJson(accountUrl, { method: 'GET', headers, signal: config.signal }, config));
     if (account.account_id !== accountId || typeof account.currency !== 'string' || !/^[A-Z]{3}$/.test(account.currency) || typeof account.timezone_name !== 'string') throw new ConnectorError('ACCOUNT_IDENTITY_MISMATCH');
     const currency = account.currency, timezone = account.timezone_name;
     const exponent = config.currencyExponent ?? (currency === 'EUR' ? 2 : undefined);
@@ -44,7 +45,7 @@ export async function syncMeta(config: MetaConfig) {
       url.searchParams.set('time_range', JSON.stringify({ since: config.from, until })); url.searchParams.set('limit', '100');
       if (windows.length) { url.searchParams.set('action_attribution_windows', JSON.stringify(windows)); url.searchParams.set('action_report_time', 'impression'); }
       if (cursor) { if (cursors.has(cursor)) throw new ConnectorError('PAGINATION_LOOP'); cursors.add(cursor); url.searchParams.set('after', cursor); }
-      const payload = object(await readJson(url, { method: 'GET', headers }, { ...config, timeoutMs: 60_000 }));
+      const payload = object(await readMetaJson(url, { method: 'GET', headers, signal: config.signal }, { ...config, timeoutMs: 60_000 }));
       if (!Array.isArray(payload.data)) throw new ConnectorError('INVALID_RESPONSE');
       const records: MetaAdDay[] = [];
       for (const raw of payload.data) {

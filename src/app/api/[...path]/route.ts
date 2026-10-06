@@ -19,6 +19,7 @@ import { synchronizeWix } from '@/lib/sync-wix';
 import { postHogPeriod,postHogMasterclassPeriod,postHogScopeFromFilters } from '@/lib/posthog-dashboard';
 import { synchronizeWixTransactionCounts } from '@/lib/wix-transaction-counts';
 import { commerceControlPass, tickSyncJobs } from '@/lib/sync-jobs';
+import { readSyncHealth } from '@/lib/sync-health';
 import { synchronizeLeadEntries } from '@/lib/sync-lead-entries';
 import { postHogReportRequest,requestPostHogReport } from '@/lib/posthog-report-request';
 import { invalidateSourceWindow } from '@/lib/source-snapshots';
@@ -58,6 +59,7 @@ async function handle(request:Request){
   if(route.startsWith('jobs/')&&method==='GET'){
    const supplied=request.headers.get('authorization')||'',expected='Bearer '+config.cronSecret;
    if(config.cronSecret.length<32||supplied.length!==expected.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))throw new AppError('Accès refusé.',401,'unauthorized');
+   if(route==='jobs/health'){const result=await readSyncHealth();return json(result,result.status==='healthy'?200:503);}
    if(route==='jobs/tick'){const result=await tickSyncJobs();return json(result,200);} // Business status is consumed by the drain loop; API failures still use the error handler.
    // Passage de contrôle réservé au bearer : seule voie qui lit les ventes Notion pendant la pause.
    if(route==='jobs/commerce'){await rateLimit(config,'jobs','commerce',2,60);const result=await commerceControlPass();return json(result,syncHttpStatus(result.status));}
