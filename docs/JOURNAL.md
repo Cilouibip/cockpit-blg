@@ -462,3 +462,8 @@ Deux auteurs sur fichiers disjoints (contrat Notion, chronologie Parcours), coor
 ## 2026-10-08 — Storage and Meta recovery
 
 Added content sharing without dropping checkpoint rows or changing their identities. Owner-controlled write modes protect conversion and rollback, including checkpoints created after cutover. Meta pages persist with leases and atomic acknowledgements; partial windows stay unpublished. Independent regression cases cover partition page capacity, account metadata changes, and crashed legacy workers. Validated on synthetic PostgreSQL 17: 12 checkpoint/rollout tests, 12 Meta tests, 8 legacy tests and 33 focused unit tests. No production gain or durable source cadence is claimed.
+
+
+### Complete-schema regression check
+
+The global PostgreSQL fixture now expects the two checkpoint storage tables added by 026 (27 protected tables in total), and explicitly verifies that anonymous and authenticated clients cannot read either new table. The prior CI failure was the stale table count; 133 other database checks passed.
