@@ -365,3 +365,8 @@ Preuves : tests `ad-funnel` (11), typecheck, build, tests SQL et tests de pages 
 Renommages Notion résolus par identifiants stables, formule comparée par ses dépendances sans supprimer les espaces significatifs des chaînes; formule inconnue garde le repli complet. Projection métier et inventaire partagent la normalisation des identifiants. Les erreurs de reprise sont compatibles avec le stockage de leur code. Le Parcours exige une réservation après l’inscription retenue et ne laisse pas les rendez-vous orphelins hors cohorte bloquer les personnes liées. Date seule le même jour ou identité incertaine restent non prouvées.
 
 Réception indépendante : plusieurs défauts ont été reproduits malgré des tests initiaux réussis, puis remis en correction; la validation finale doit porter sur le diff final. Plan de réception : docs/MASTERCLASS-RECEPTION.md. Aucune preuve de cadence ou sept jours autonomes n’est déduite des tests. Mise en service et rapprochement réel non reçus à cet instant.
+
+
+## 2026-10-08 — Resumable Meta and shared checkpoint storage
+
+Prepared migrations 026 and 028 add exact immutable checkpoint parts, compatible reconstruction, guarded conversion/rollback, and durable Meta page progress. Install both migrations before deploying the new adapters. Production rollout is pending the migration channel; no historical conversion has been applied. Preserve commerce pause and all existing business definitions.

@@ -12,6 +12,10 @@ export interface MetaAdDay extends Evidence {
 }
 export interface MetaConfig extends SyncOptions<MetaAdDay> {
   accessToken?: string; accountId?: string; apiVersion?: string; currencyExponent?: number; signal?: AbortSignal;
+  /** Resumable staging must never save a page with discarded invalid rows. */
+  requireValidPages?: boolean;
+  /** Freeze account metadata across resumable pages, including empty pages. */
+  onAccount?: (account: { accountId: string; currency: string; timezone: string }) => void;
   /** Explicit Meta reporting windows; without this choice, conversion actions are not requested. */
   reportingWindows?: ('1d_click' | '7d_click' | '1d_view')[];
 }
@@ -37,6 +41,7 @@ export async function syncMeta(config: MetaConfig) {
     const currency = account.currency, timezone = account.timezone_name;
     const exponent = config.currencyExponent ?? (currency === 'EUR' ? 2 : undefined);
     if (exponent === undefined) throw new ConnectorError('CURRENCY_EXPONENT_REQUIRED');
+    config.onAccount?.({ accountId, currency, timezone });
     const windows = config.reportingWindows ?? [];
     const fields = 'account_id,ad_id,ad_name,adset_id,campaign_id,campaign_name,date_start,date_stop,spend,impressions,outbound_clicks' + (windows.length ? ',actions' : '');
     for (let page = 0; page < Math.min(config.maxPages ?? 20, 100); page++) {
@@ -76,6 +81,7 @@ export async function syncMeta(config: MetaConfig) {
       const next = hasMore && paging.cursors ? text(object(paging.cursors).after) : null;
       if (hasMore && (!next || next.length > 4096)) throw new ConnectorError('INVALID_PAGINATION');
       const checkpoint = next ? { cursor: next } : batch.counts.rejected === 0 ? { completedThrough: config.to } : {};
+      if (config.requireValidPages && batch.counts.rejected > 0) throw new ConnectorError('INVALID_META_ROW');
       await config.commitPage?.({ records, checkpoint, terminal: !hasMore });
       records.forEach(record => seen.set(record.externalId, record));
       batch.checkpoint = checkpoint; batch.counts.pages++; batch.counts.accepted = seen.size;

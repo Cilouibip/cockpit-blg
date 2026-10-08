@@ -147,6 +147,8 @@ test('non-accumulation ad_daily : identique, modifié, nouveau, disparu, rejeu, 
 
 test('synchronizeMetaAds de bout en bout (double de l’API Meta) : deux passages identiques, aucune ligne de plus', async () => {
   const db = postgresDatabase(target.href), env = { NODE_ENV: 'test', COCKPIT_MODE: 'live', META_AD_ACCOUNT_ID: '333', META_ACCESS_TOKEN: 'synthetic' } as NodeJS.ProcessEnv;
+  // This fixture deliberately covers the018 writer;028 has its own real recipe.
+  db.metaAdsPersistentPages = false;
   const fetcher: typeof fetch = async input => {
     const url = new URL(String(input));
     if (url.hostname !== 'graph.facebook.com') assert.fail('requête externe inattendue');

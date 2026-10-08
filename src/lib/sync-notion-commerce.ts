@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { ConnectorError, safeConnectorError } from '../connectors/http';
 import { AppError } from './errors';
 import type { Database, Row } from './db';
+import { checkpointContentRows, stageCheckpointContent } from './checkpoint-content-store';
 import { retainConfirmedArchivedClients, reportFromCheckpoint } from './notion-commerce-archive';
 import { publishNotionCommerceReport } from './notion-commerce-storage';
 import { notionCommerceProfile, readNotionCommerceSnapshot, type CommerceReadCheckpoint, type NotionCommerceConfig } from '../connectors/notion-commerce';
@@ -58,7 +59,8 @@ export function checkpointParts(serialized: string, maxBytes = MAX_PART_BYTES): 
 async function rowsForRun(db: Database, runId: string, metric: string): Promise<Row[]> {
   const rows: Row[] = [];
   for (let from = 0; from < MAX_PARTS; from += 1000) {
-    const page = await db.select('source_aggregates', { eq: { sync_run_id: runId, metric_key: metric }, order: 'dimensions_key', from, limit: 1000 });
+    const page = metric === CHECKPOINT ? await checkpointContentRows(db, runId, from)
+      : await db.select('source_aggregates', { eq: { sync_run_id: runId, metric_key: metric }, order: 'dimensions_key', from, limit: 1000 });
     rows.push(...page);
     if (page.length < 1000) return rows;
   }
@@ -140,6 +142,12 @@ function deadlineFetcher(fetcher: typeof fetch, timeoutMs: number): typeof fetch
 
 async function stageCheckpoint(db: Database, runId: string, config: NotionCommerceConfig, checkpoint: CommerceReadCheckpoint) {
   const serialized = JSON.stringify(checkpoint), parts = checkpointParts(serialized), hash = sha256(serialized), profile = notionCommerceProfile(config);
+  if (db.checkpointContentStorage) {
+    await stageCheckpointContent(db, { runId, profile, startedAt: checkpoint.startedAt, serialized, parts });
+    const verified = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
+    if (!verified || sha256(JSON.stringify(verified)) !== hash) throw new Error('CHECKPOINT_STAGE_INVALID');
+    return;
+  }
   const base = { source: 'notion', source_namespace: config.parcours.dataSourceId, metric_key: CHECKPOINT, period_from: '1970-01-01T00:00:00Z', period_to: checkpoint.startedAt, report_profile_key: profile, sync_run_id: runId, timezone: 'Europe/Paris', coverage_state: 'partial', unit: 'count', currency: null, currency_exponent: null, tax_basis: 'unknown', definition_version: profile, source_locator: 'notion:commerce-reader-checkpoint' };
   const rows = parts.map((part, index) => ({ ...base, dimensions_key: `checkpoint:${String(index).padStart(6, '0')}`, value: 1, dimensions: { index, total: parts.length, hash, part } }));
   for (let index = 0; index < rows.length; index += 100) await db.upsert('source_aggregates', rows.slice(index, index + 100), 'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');

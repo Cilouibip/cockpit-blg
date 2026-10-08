@@ -6,13 +6,14 @@ import { startOfParisDay } from '../domain/dates';
 import { Temporal } from '@js-temporal/polyfill';
 import { synchronizeNotionChunk } from './sync-notion-business';
 import { syncMetaAccountPeriod } from './sync-meta-account';
+import { synchronizeMetaAdsResumable } from './sync-meta-ads-resume';
 export async function synchronize(source:'meta'|'notion',from?:string,to?:string,options:{db?:ReturnType<typeof database>;env?:NodeJS.ProcessEnv;fetcher?:typeof fetch}={}){
   const config=getConfig();if(config.mode==='demo')throw new AppError('Les synchronisations réelles sont désactivées en mode test.',409,'demo_mode');
   if(source==='notion')return synchronizeNotionChunk(options);
   const today=Temporal.Now.plainDateISO('Europe/Paris');
   return syncMetaAccountPeriod(from??today.subtract({days:35}).toString(),to??today.add({days:1}).toString(),options);
 }
-export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:ReturnType<typeof database>;env?:NodeJS.ProcessEnv;fetcher?:typeof fetch;signal?:AbortSignal}={}){
+export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:ReturnType<typeof database>;env?:NodeJS.ProcessEnv;fetcher?:typeof fetch;signal?:AbortSignal;budget?:{remainingWorkMs:()=>number;remainingTotalMs:()=>number}}={}){
   const source='meta' as const;
   const env=options.env??process.env,db=options.db??database();
   if(getConfig(env).mode==='demo')throw new AppError('Données de démonstration.',409,'demo_mode');
@@ -22,6 +23,9 @@ export async function synchronizeMetaAds(from?:string,to?:string,options:{db?:Re
   if(Temporal.PlainDate.from(fromDay).until(Temporal.PlainDate.from(toDay)).days>93||fromDay>=toDay)throw new AppError('Choisis une période de 1 à 93 jours.',400,'invalid_period');
   const namespace=(env.META_AD_ACCOUNT_ID||'').replace(/^act_/,'');
   if(!namespace)throw new AppError('Les paramètres de cette source sont absents.',503,'source_missing');
+  // Real adapters opt into migration028; legacy/custom doubles keep the prior
+  // contract. A missing RPC fails safely, never falls back into a second writer.
+  if('metaAdsPersistentPages' in db && db.metaAdsPersistentPages===true)return synchronizeMetaAdsResumable(fromDay,toDay,from===undefined&&to===undefined,{...options,db,env});
   const start=startOfParisDay(fromDay);
   const end=startOfParisDay(toDay);
   const run=await db.rpc<string>('begin_sync_stream',{p_source:source,p_namespace:namespace,p_from:start,p_to:end,p_profile:`${env.META_API_VERSION||'v23.0'}-ad-day-none`,p_stream:'ad_daily',p_coverage_kind:'aggregate_period',p_date_from:fromDay,p_date_to:toDay});
