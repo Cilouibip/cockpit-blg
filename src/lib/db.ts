@@ -8,6 +8,10 @@ export type TableName = typeof TABLES[number];
 export type Row = Record<string, unknown>;
 export type SelectOptions = { order?:string; descending?:boolean; from?:number; limit?:number; eq?:Record<string,string>; in?:Record<string,string[]>; gte?:Record<string,string>; lt?:Record<string,string>; columns?:string[]; timeoutMs?:number; signal?:AbortSignal; };
 export interface Database {
+  /** Real adapters require migration 026 for compact checkpoint writes. */
+  checkpointContentStorage?: boolean;
+  /** Persistent Meta pagination requires migration 028 before activation. */
+  metaAdsPersistentPages?: boolean;
   select(table:TableName,options?:SelectOptions):Promise<Row[]>;
   upsert(table:TableName,rows:Row[],conflict?:string):Promise<void>;
   rpc<T=unknown>(name:string,args:Row,options?:{timeoutMs?:number;signal?:AbortSignal}):Promise<T>;
@@ -15,7 +19,7 @@ export interface Database {
 }
 const validIdentifier=(s:string)=>/^[a-z_][a-z0-9_]*$/.test(s);
 function checkIdentifier(s:string) { if(!validIdentifier(s)) throw new AppError('Champ interne invalide.',500); return '"'+s+'"'; }
-const allowedRPC = new Set(['cockpit_claim_tick','cockpit_release_tick','cockpit_cleanup_staged','cockpit_publish_aggregate_state','cockpit_publish_meta_daily','cockpit_claim_posthog','cockpit_save_posthog_query','cockpit_release_posthog','cockpit_publish_posthog','import_meta_creative_metadata','cockpit_claim_lead_entries','cockpit_stage_lead_entries','cockpit_release_lead_entries','cockpit_publish_lead_entries','cockpit_lead_entry_rollup','cockpit_lead_entry_rollup_v2','cockpit_source_window','begin_sync_stream','cockpit_claim_notion','cockpit_stage_notion','cockpit_release_notion','cockpit_publish_notion','cockpit_business_rollup','save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution','cockpit_dashboard_rollup','cockpit_dashboard_lists','cockpit_prospects_page','cockpit_attribution_snapshot','cockpit_attribution_detail','cockpit_connection_status']);
+const allowedRPC = new Set(['cockpit_claim_meta_ads','cockpit_stage_meta_ads','cockpit_release_meta_ads','cockpit_publish_meta_ads','cockpit_checkpoint_rows','cockpit_stage_checkpoint_parts','cockpit_checkpoint_backfill','cockpit_claim_tick','cockpit_release_tick','cockpit_cleanup_staged','cockpit_publish_aggregate_state','cockpit_publish_meta_daily','cockpit_claim_posthog','cockpit_save_posthog_query','cockpit_release_posthog','cockpit_publish_posthog','import_meta_creative_metadata','cockpit_claim_lead_entries','cockpit_stage_lead_entries','cockpit_release_lead_entries','cockpit_publish_lead_entries','cockpit_lead_entry_rollup','cockpit_lead_entry_rollup_v2','cockpit_source_window','begin_sync_stream','cockpit_claim_notion','cockpit_stage_notion','cockpit_release_notion','cockpit_publish_notion','cockpit_business_rollup','save_tracked_link','archive_tracked_link','consume_rate_limit','ingest_browser_event','register_lead','import_notion_page','import_meta_page','begin_sync','finish_sync','publish_attribution','cockpit_dashboard_rollup','cockpit_dashboard_lists','cockpit_prospects_page','cockpit_attribution_snapshot','cockpit_attribution_detail','cockpit_connection_status']);
 function dbError(code:unknown):never {
   if(code==='PGRST003') throw new AppError('Le chargement des données est momentanément saturé. Réessaie.',503,'database_busy');
   if(code==='57014') throw new AppError('Le chargement des données a été interrompu. Réessaie.',503,'database_query_interrupted');
@@ -47,6 +51,8 @@ export function postgresDatabase(url:string):Database {
     });}catch(e){return dbError((e as {code?:string}).code);}
   }
   return {
+    checkpointContentStorage: true,
+    metaAdsPersistentPages: true,
     async select(table,options={}) {
       const params:unknown[]=[];
       const where=Object.entries(options.eq||{}).map(([key,value])=>{params.push(value);return `${checkIdentifier(key)}=$${params.length}`;});
@@ -96,6 +102,8 @@ export function supabaseDatabase(config:Config,fetcher:typeof fetch=fetch):Datab
     finally{clearTimeout(timer);}
   }
   return {
+    checkpointContentStorage: true,
+    metaAdsPersistentPages: true,
     async select(table,o={}){const params=new URLSearchParams({select:o.columns?.length?o.columns.map(checkIdentifier).map(c=>c.replace(/"/g,'')).join(','):'*',order:(o.order||'id').split(',').map(k=>{checkIdentifier(k);return k+(o.descending?'.desc':'.asc');}).join(','),limit:String(Math.min(o.limit||1000,1000)),offset:String(o.from||0)});for(const [k,v] of Object.entries(o.eq||{})){checkIdentifier(k);params.append(k,'eq.'+v);}for(const [k,values] of Object.entries(o.in||{})){checkIdentifier(k);if(!values.length)return [];if(values.some(v=>/[,()"]/.test(v)))throw new AppError('Valeur de filtre invalide.',500);params.append(k,'in.('+values.join(',')+')');}for(const [k,v] of Object.entries(o.gte||{})){checkIdentifier(k);params.append(k,'gte.'+v);}for(const [k,v] of Object.entries(o.lt||{})){checkIdentifier(k);params.append(k,'lt.'+v);}return call(table+'?'+params,'GET',undefined,{},{timeoutMs:o.timeoutMs,signal:o.signal});},
     async upsert(table,rows,conflict='id'){if(rows.length)await call(table+'?on_conflict='+encodeURIComponent(conflict),'POST',rows,{Prefer:'resolution=merge-duplicates,return=minimal'});},
     async rpc<T>(name:string,args:Row,options?:{timeoutMs?:number;signal?:AbortSignal}){if(!allowedRPC.has(name))throw new AppError('Opération interne inconnue.',500);return call('rpc/'+name,'POST',args,{},options) as Promise<T>;},

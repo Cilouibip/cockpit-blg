@@ -457,3 +457,8 @@ Contrôles : 11 tests ciblés, TypeScript et build réussis ; recette visuelle l
 ## 6 octobre 2026 — exécution coordonnée de la fiabilité masterclass
 
 Deux auteurs sur fichiers disjoints (contrat Notion, chronologie Parcours), coordinateur intégrateur et relecteur indépendant. La réception refuse notamment la perte silencieuse de dates sous identifiants équivalents et la contamination d’une cohorte par des rendez-vous orphelins globaux. Contre-tests ajoutés, reprise après erreur temporaire vérifiée sur PostgreSQL isolé avant intégration. Les six rubriques objectifs/succès/échec/tests/roadmap/interdits sont conservées dans les missions et la réception. Code local, publication et preuve durable restent des états séparés.
+
+
+## 2026-10-08 — Storage and Meta recovery
+
+Added content sharing without dropping checkpoint rows or changing their identities. Owner-controlled write modes protect conversion and rollback, including checkpoints created after cutover. Meta pages persist with leases and atomic acknowledgements; partial windows stay unpublished. Independent regression cases cover partition page capacity, account metadata changes, and crashed legacy workers. Validated on synthetic PostgreSQL 17: 12 checkpoint/rollout tests, 12 Meta tests, 8 legacy tests and 33 focused unit tests. No production gain or durable source cadence is claimed.
