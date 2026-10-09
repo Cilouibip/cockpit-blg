@@ -370,3 +370,12 @@ Réception indépendante : plusieurs défauts ont été reproduits malgré des t
 ## 2026-10-08 — Resumable Meta and shared checkpoint storage
 
 Prepared migrations 026 and 028 add exact immutable checkpoint parts, compatible reconstruction, guarded conversion/rollback, and durable Meta page progress. Install both migrations before deploying the new adapters. Production rollout is pending the migration channel; no historical conversion has been applied. Preserve commerce pause and all existing business definitions.
+
+
+## 2026-10-09 — Retry email et réduction des réécritures
+
+Le lecteur email réessaie une fois les erreurs réseau/429/5xx, conserve les pages déjà reçues pendant cet essai et respecte la limite de 20 requêtes de données et le signal d’abandon. Une interruption de l’invocation nécessite toujours une nouvelle lecture.
+
+Migration 025 : les agrégats identiques, y compris réapparus, sont confirmés sans réassigner leur contenu. IDs, provenance, manifeste et lecteurs conservés. La préparation complète reste écrite. Les gains de volume mesurés concernent les gros contenus synthétiques stockés hors ligne; aucun gain n’a été mesuré pour les petits contenus.
+
+Le SQL opérationnel installe un déclencheur privé et son journal technique limité à 14 jours. Envoi chaque minute pendant les reprises, puis vérification toutes les 5 minutes après une fin complète; tâche cron à activer séparément. Le workflow GitHub reste disponible manuellement et conserve ses départs programmés tant que la variable COCKPIT_SUPABASE_CRON_ACTIVE n’est pas true. Basculer cette variable seulement après réception du cron Supabase. Installation distante et observation durable restent séparées des tests locaux.

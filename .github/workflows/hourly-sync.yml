@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   tick:
+    if: github.event_name == 'workflow_dispatch' || vars.COCKPIT_SUPABASE_CRON_ACTIVE != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
