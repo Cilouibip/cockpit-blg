@@ -48,7 +48,21 @@ BEGIN
         (payload#>>'{lock,kind}') IS DISTINCT FROM 'shared'
         OR coalesce(payload#>>'{cadence,pilotMinutes}','') NOT IN ('30','60')
         OR jsonb_typeof(payload->'unitResults') IS DISTINCT FROM 'array'
-        OR EXISTS(SELECT FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload->'unitResults')='array' THEN payload->'unitResults' ELSE '[]'::jsonb END) u WHERE coalesce(u->>'status','') NOT IN ('complete','empty'))
+        -- A paginated job can be partial, then complete in the same tick.
+        -- Preserve all units in the journal, but evaluate its final unit.
+        OR EXISTS(
+          SELECT FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload->'unitResults')='array' THEN payload->'unitResults' ELSE '[]'::jsonb END) u
+          WHERE coalesce(u->>'job','')=''
+            OR coalesce(u->>'status','') NOT IN ('complete','empty','partial','pending','waiting')
+        )
+        OR EXISTS(
+          SELECT FROM (
+            SELECT DISTINCT ON (u.value->>'job') u.value
+            FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload->'unitResults')='array' THEN payload->'unitResults' ELSE '[]'::jsonb END) WITH ORDINALITY u(value, position)
+            ORDER BY u.value->>'job',u.position DESC
+          ) final_unit
+          WHERE coalesce(final_unit.value->>'status','') NOT IN ('complete','empty')
+        )
       ) THEN 'INVALID_RESPONSE'
       ELSE NULL END;
     SELECT coalesce(jsonb_agg(jsonb_build_object('job',u->>'job','status',u->>'status')),'[]'::jsonb) INTO safe_units

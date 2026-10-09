@@ -379,3 +379,10 @@ Le lecteur email réessaie une fois les erreurs réseau/429/5xx, conserve les pa
 Migration 025 : les agrégats identiques, y compris réapparus, sont confirmés sans réassigner leur contenu. IDs, provenance, manifeste et lecteurs conservés. La préparation complète reste écrite. Les gains de volume mesurés concernent les gros contenus synthétiques stockés hors ligne; aucun gain n’a été mesuré pour les petits contenus.
 
 Le SQL opérationnel installe un déclencheur privé et son journal technique limité à 14 jours. Envoi chaque minute pendant les reprises, puis vérification toutes les 5 minutes après une fin complète; tâche cron à activer séparément. Le workflow GitHub reste disponible manuellement et conserve ses départs programmés tant que la variable COCKPIT_SUPABASE_CRON_ACTIVE n’est pas true. Basculer cette variable seulement après réception du cron Supabase. Installation distante et observation durable restent séparées des tests locaux.
+
+
+### 9 octobre 2026 — Journal des lectures paginées
+
+Une réponse complète peut contenir plusieurs unités pour le même flux, dont des étapes intermédiaires partielles. Le journal SQL conservait ces étapes mais classait à tort cette réponse comme invalide, provoquant un passage supplémentaire. Le contrôle utilise désormais la dernière unité de chaque flux ; une erreur réelle, une unité mal formée ou une dernière étape incomplète reste refusée. Les données métier et la cadence ne changent pas.
+
+Validation : anomalie reproduite avant correction ; onze tests PostgreSQL isolés réussis après correction, avec flux entrelacés et contre-exemples. La fonction corrigée reste à installer manuellement : MCP apply_migration renvoie Invalid or expired requestState. Le cron installé fonctionne ; deux passages automatiques complets ont été reçus. La tenue dans la durée reste à observer.
