@@ -43,7 +43,7 @@ test('une période hors couverture ou chevauchant un vieux relevé reste absente
  assert.equal(currentOverlap!.available,true);assert.equal(currentOverlap!.counts!.firstClientsDeclared,1);assert.equal(currentOverlap!.provisional,true);
 });
 
-for(const altered of ['overview','paid-summary','details'] as const)test(`une publication altérée pendant le stockage reste invisible (${altered})`,async()=>{
+for(const altered of ['overview','paid-summary','details','contracts'] as const)test(`une publication altérée pendant le stockage reste invisible (${altered})`,async()=>{
  const memory=storage(),first=buildNotionCommerceReport(snapshot());
  const previous=await publishNotionCommerceReport(memory.db,commerceConfig,first);
  const db={...memory.db,upsert:async(...args:Parameters<Database['upsert']>)=>{
@@ -53,6 +53,7 @@ for(const altered of ['overview','paid-summary','details'] as const)test(`une pu
    if(row.metric_key==='notion_commerce_overview'&&altered==='overview')dimensions.reportFingerprint='corrupted';
    if(row.metric_key==='notion_commerce_overview'&&altered==='paid-summary')(dimensions.paidSalesSummary as Row).confirmedInitialSales=99;
    if(row.metric_key==='notion_commerce_paid_sales'&&altered==='details')dimensions.details=[];
+   if(row.metric_key==='notion_commerce_contracts'&&altered==='contracts')dimensions.contracts=[];
   }
  }};
  await assert.rejects(()=>publishNotionCommerceReport(db,commerceConfig,buildNotionCommerceReport(snapshot({observedAt:'2024-03-02T12:00:00Z'}))),/COMMERCE_STAGED_REPORT_MISMATCH/);
@@ -120,4 +121,16 @@ test('publication avec conflit isolé conserve les originaux, le total vérifié
  const overview=memory.rows.find(row=>row.metric_key==='notion_commerce_overview')!.dimensions as Row;
  (overview.paidSalesSummary as Row).confirmedByOffer={blg90:999,defi:0,club:0,other:0,unknown:0};
  const corrupted=await readNotionCommerceReport(memory.db,filters,commerceEnv);assert.equal(corrupted!.available,false);assert.equal(corrupted!.paidSales,null);
+});
+
+
+test('Contract amounts round-trip through two independent immutable publications and period selection',async()=>{
+ const memory=storage();
+ const first=await publishNotionCommerceReport(memory.db,commerceConfig,buildNotionCommerceReport(snapshot()));
+ const read=await readNotionCommerceReport(memory.db,filters,commerceEnv);
+ assert.equal(read!.contracts!.length,1);assert.equal(read!.contracts![0].totalMinor,30000);
+ const second=await publishNotionCommerceReport(memory.db,commerceConfig,buildNotionCommerceReport(snapshot({startedAt:'2024-03-02T11:00:00Z',observedAt:'2024-03-02T12:00:00Z',schedules:[{...snapshot().schedules[0],totalMinor:45000}]})));
+ assert.notEqual(second.runId,first.runId);
+ const updated=await readNotionCommerceReport(memory.db,filters,commerceEnv);
+ assert.equal(updated!.contracts![0].totalMinor,45000);assert.equal(updated!.runId,second.runId);
 });

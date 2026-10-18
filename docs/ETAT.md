@@ -409,3 +409,7 @@ Validation : anomalie reproduite avant correction ; onze tests PostgreSQL isolé
 La réception a retrouvé des interruptions de lecture malgré029, sur plusieurs rapports simultanés. Une mesure isolée bornée du rapport commercial réussit sous le délaiSQL. Le candidat conserve une file de quatre lectures par requête et ajoute une seule place commune pour les rapports commerciaux, les inscriptions et les fenêtres de sources. Les rapports en attente n’occupent aucune place de lecture légère. La période courante et sa comparaison partagent ces bornes, sans changement des requêtesSQL, des paramètres, des résultats ou du cache de sources.
 
 Tests ciblés : ordre des rapports, circulation des lectures légères, libération après erreur, transmission des options et comparaison. Réception réelle requise sur plusieurs publications, avec et sans comparaison, sous le délai client existant. Aucun nouveauSQL ou changement de source.
+
+## 2026-10-18 : finition financière
+
+Candidat revu : CA contracté à la date de signature depuis Total vente, BLG Club encaissé sur une carte séparée, nouveaux clients à la date du premier paiement. Les contrats dont les liens ou montants sont ambigus restent à compléter. Cette finition ne reprend pas les travaux emails/prospects. Publication et deux cycles automatiques financiers restent à recevoir.

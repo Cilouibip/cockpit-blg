@@ -67,10 +67,11 @@ function Change({ metric, compare }: { metric: Metric; compare: boolean }) {
   const text = metric.previous === 0 ? `De 0 à ${formatNumber(metric.value, metric.unit)}` : `${change > 0 ? '+' : ''}${formatNumber(change / Math.abs(metric.previous) * 100, 'percent')}`;
   return <span className="a-d-change" data-direction={direction}><span aria-hidden="true">{direction === 'up' ? '↗' : direction === 'down' ? '↘' : ''}</span>{text}</span>;
 }
+function SeparateAmounts({metric}:{metric:Metric}) { return metric.separateAmounts?.length ? <dl className="results-finance-separate">{metric.separateAmounts.map(row=><div key={row.label}><dt>{row.label}</dt><dd>{formatNumber(row.value,'eur')}</dd></div>)}</dl> : null; }
 function Card({ metric, compare, onOpen, booked }: { metric: Metric; compare: boolean; onOpen: (metric: Metric) => void; booked?: Metric }) {
   const state = resultState(metric);
   if (metric.id === 'appointments') return <article className="a-d-card results-kpi" data-metric={metric.id}><h3>Rendez-vous</h3><div className="results-appointment-counts"><div><strong>{formatNumber(booked?.value ?? null)}</strong><span>Réservés · date de réservation</span></div><div><strong>{formatNumber(metric.value)}</strong><span>Réalisés · date du créneau</span></div></div><div className="results-card-foot"><span className="results-state">Deux bases de dates : un écart entre les deux n’est pas une erreur.</span><button className="a-button a-n-quiet" onClick={() => onOpen(metric)} aria-label="Voir les rendez-vous réservés et réalisés">Détail <Arrow /></button></div></article>;
-  return <article className="a-d-card results-kpi" data-metric={metric.id}><h3>{name(metric)}</h3><div className="a-d-value">{formatNumber(metric.value, metric.unit)}</div><div className="results-card-foot"><span>{state ? <span className="results-state">{state}</span> : <Change metric={metric} compare={compare} />}</span><button className="a-button a-n-quiet" onClick={() => onOpen(metric)} aria-label={`Voir le détail : ${name(metric)}`}>Détail <Arrow /></button></div></article>;
+  return <article className="a-d-card results-kpi" data-metric={metric.id}><h3>{name(metric)}</h3>{metric.scopeLabel && <p className="results-finance-scope">{metric.scopeLabel}</p>}<div className="a-d-value">{formatNumber(metric.value, metric.unit)}</div><SeparateAmounts metric={metric} /><div className="results-card-foot"><span>{state ? <span className="results-state">{state}</span> : <Change metric={metric} compare={compare} />}</span><button className="a-button a-n-quiet" onClick={() => onOpen(metric)} aria-label={`Voir le détail : ${name(metric)}`}>Détail <Arrow /></button></div></article>;
 }
 
 export function ReportStatus({reports,retry}:{reports:PostHogClientState;retry?:()=>void}) {
@@ -84,6 +85,8 @@ function MetricDrawer({ metric, onClose, filters,posthog={},retryPosthog }: { me
   return <ResultDialog title={name(metric)} onClose={onClose}>
     <p className="results-drawer-period">Du {formatDate(filters.from)} au {formatDate(filters.to)}</p>
     <div className="a-d-value">{formatNumber(metric.value, metric.unit)}</div>
+    {metric.scopeLabel && <p className="results-finance-scope">{metric.scopeLabel}</p>}
+    <SeparateAmounts metric={metric} />
     <Change metric={metric} compare={filters.compare} />
     {metric.value === null && <span className="results-state">{report?.state==='waiting'&&report.retryable?'En attente':report && ['loading','waiting'].includes(report.state)?'Chargement…':'Indisponible'}</span>}
     {text && <p className="results-drawer-description">{text.description}</p>}
