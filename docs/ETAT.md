@@ -1,3 +1,11 @@
+## 18 octobre 2026 : correction ciblée de la publication des statistiques
+
+La migration032 prépare une correction de la jointure utilisée pour publier les statistiques. La jointure complète matérialisée évite le parcours de chaque ligne courante pour chaque ligne préparée lorsque les estimations du moteur sont faibles. Les périmètres, comparaisons, identifiants stables, règles de retrait et droits privés restent identiques. Aucun délai augmenté et aucune nouvelle règle de suppression. Le retour arrière rétablit le corps de la fonction030, sans réécrire les données.
+
+Essai synthétique local :940000 lignes historiques et4001 courantes ; premier traitement environ2874ms avant,128ms après. Publication complète2244ms avant,186ms après. Huit contrôles ciblés de résultat, reprise, isolation, concurrence et retour arrière passent. Ces mesures sont locales ; les logs de production localisent les interruptions dans ce traitement mais ne prouvent pas le même plan. Revue indépendante favorable ;186 contrôles PostgreSQL réussis,762 tests unitaires réussis (11 contrôles SQL conditionnels exécutés dans la suite dédiée), typage et compilation réussis. Mise en service et observations automatiques restent à recevoir.
+
+Le candidat031 du lecteur de premiers contacts est arrêté et non publié : équivalence réussie mais coût structurel encore excessif. La réparation globale reste ouverte ; aucun nouveau calcul préparé à la publication ni index supplémentaire n’est installé.
+
 ## 18 octobre 2026 : actualisation et détail des ventes par offre
 
 Réparation automatique publiée via les PR33 à35 : lecteur financier actif, reprise indexée, couverture fondée sur le début de collecte, lectures Wix mensuelles rapprochées, écran actualisé automatiquement et surveillance des quinze flux. Les migrations029/030 sont appliquées. Les tests et reprises observées restent distincts de la réception complète des ventes.

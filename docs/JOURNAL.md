@@ -519,3 +519,7 @@ Aucune migration de base supplémentaire, aucun appel Stripe, aucune écriture d
 La réception a retrouvé des interruptions de lecture malgré029, sur plusieurs rapports simultanés. Une mesure isolée bornée du rapport commercial réussit sous le délaiSQL. Le candidat conserve une file de quatre lectures par requête et ajoute une seule place commune pour les rapports commerciaux, les inscriptions et les fenêtres de sources. Les rapports en attente n’occupent aucune place de lecture légère. La période courante et sa comparaison partagent ces bornes, sans changement des requêtesSQL, des paramètres, des résultats ou du cache de sources.
 
 Tests ciblés : ordre des rapports, circulation des lectures légères, libération après erreur, transmission des options et comparaison. Réception réelle requise sur plusieurs publications, avec et sans comparaison, sous le délai client existant. Aucun nouveauSQL ou changement de source.
+
+## 18 octobre 2026 : publication des statistiques, option A
+
+Correction032 préparée après reproduction du coût du rapprochement sur copie PostgreSQL17 synthétique. Changement borné à la jointure matérialisée et au filtre des lignes appariées. Équivalence030/032, rejeu, interruption transactionnelle, identité des lignes et manifeste contrôlés. Le candidat031 du lecteur reste horspublication après échec du critère structurel. Revue indépendante favorable ;186 contrôles PostgreSQL et762 tests unitaires réussis, typage et compilation réussis. Les observations automatiques en production restent nécessaires avant toute clôture métier.
