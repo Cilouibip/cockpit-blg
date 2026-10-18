@@ -70,3 +70,55 @@ test('le wrapper conserve le cache source et son invalidation ciblée sur la bas
  await readSourceSnapshot(second,'posthog','synthetic',window);
  assert.equal(reads,2,'l’invalidation de la base d’origine atteint le cache partagé');
 });
+
+test('les rapports lourds sont séquentiels sans occuper les places des lectures légères en attente',async()=>{
+ let releaseFirst!:()=>void;
+ const firstGate=new Promise<void>(resolve=>{releaseFirst=resolve;});
+ const started:string[]=[];
+ let activeHeavy=0,peakHeavy=0;
+ const db:Database={
+  async select(){started.push('light');return [{value:42}];},
+  async rpc<T>(name:string,args:Row){
+   started.push(name);activeHeavy++;peakHeavy=Math.max(peakHeavy,activeHeavy);
+   try{if(name==='cockpit_business_rollup')await firstGate;return {name,args} as T;}
+   finally{activeHeavy--;}
+  },
+  async upsert(){assert.fail('aucune écriture attendue');},async probe(){},
+ };
+ const limited=limitDatabaseReads(db,2);
+ const jobs=[
+  limited.rpc('cockpit_business_rollup',{period:'current'}),
+  limited.rpc('cockpit_lead_entry_rollup_v2',{period:'current'}),
+  limited.rpc('cockpit_source_window',{period:'previous'}),
+ ];
+ try{
+  const light=await limited.select('sync_runs');
+  assert.deepEqual(light,[{value:42}]);
+  assert.ok(started.includes('light'));
+  assert.ok(!started.includes('cockpit_lead_entry_rollup_v2'));
+  assert.ok(!started.includes('cockpit_source_window'));
+ }finally{releaseFirst();}
+ const reports=await Promise.all(jobs);
+ assert.equal(peakHeavy,1);
+ assert.deepEqual(started.filter(s=>s!=='light'),['cockpit_business_rollup','cockpit_lead_entry_rollup_v2','cockpit_source_window']);
+ assert.deepEqual(reports,[{name:'cockpit_business_rollup',args:{period:'current'}},{name:'cockpit_lead_entry_rollup_v2',args:{period:'current'}},{name:'cockpit_source_window',args:{period:'previous'}}]);
+});
+
+test('une erreur lourde libère les deux files et préserve les options de lecture',async()=>{
+ const failure=new Error('synthetic report timeout'),signal=new AbortController().signal;
+ const options={timeoutMs:1234,signal};
+ const received:unknown[]=[];
+ const db:Database={
+  async select(){return [];},
+  async rpc<T>(name:string,_args:Row,readOptions?:Parameters<Database['rpc']>[2]){
+   received.push(readOptions);if(name==='cockpit_business_rollup')throw failure;return 'complete' as T;
+  },
+  async upsert(){assert.fail('aucune écriture attendue');},async probe(){},
+ };
+ const limited=limitDatabaseReads(db,1);
+ const reports=await Promise.allSettled([limited.rpc('cockpit_business_rollup',{},options),limited.rpc('cockpit_source_window',{},options)]);
+ assert.equal(reports[0].status,'rejected');if(reports[0].status==='rejected')assert.equal(reports[0].reason,failure);
+ assert.deepEqual(reports[1],{status:'fulfilled',value:'complete'});
+ assert.deepEqual(received,[options,options]);
+ assert.equal((received[0] as typeof options).signal,signal);
+});
