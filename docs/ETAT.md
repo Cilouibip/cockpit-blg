@@ -1,8 +1,8 @@
-## 18 octobre 2026 : réparation de l’actualisation, candidat avant publication
+## 18 octobre 2026 : réparation publiée, observation automatique en cours
 
 Réactivation par défaut du lecteur financier avec arrêt explicite conservé, reprise indexée et publication confirmée, fraîcheur fondée sur le début réel de collecte, lectures Wix mensuelles rapprochées, actualisation automatique de l’écran et surveillance des quinze flux. Les jours historiques couverts restent lisibles ; les périodes non couvertes restent sans valeur.
 
-La revue indépendante des correctifs ciblés est terminée. La réception globale, la publication et l’observation de plusieurs passages réels restent des étapes séparées. Aucun changement de définition métier, de source externe, de base ou de cadence des flux n’est inclus. Le déclencheur Supabase existant reste utilisé.
+La revue indépendante, 744 tests, la compilation et les contrôles PostgreSQL distants ont réussi. La réparation est publiée via la PR 33. Deux passages automatiques successifs ont repris la lecture financière sans erreur ; la publication complète et son rapprochement restent en cours. Le journal privé du déclencheur doit aussi conserver le nom du flux financier parmi ses quinze flux. Aucun changement de définition métier, de source externe, de base ou de cadence des flux n’est inclus. Le déclencheur Supabase existant reste utilisé.
 
 ## 26 septembre 2026 — complément des exclusions avant mise en service
 

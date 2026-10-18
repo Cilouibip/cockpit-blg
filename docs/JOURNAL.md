@@ -492,3 +492,8 @@ La collecte financière était exclue par défaut après une panne de reprise. L
 La collecte du CA Wix découpe la période en mois Paris disjoints et rapproche chaque réponse avant de publier. Le défaut de réponse multi-mois est couvert par un test synthétique, sans donnée ou montant réel embarqué. L’écran observe les nouvelles publications et recharge ses filtres appliqués automatiquement. La surveillance indépendante vérifie les quinze flux et les échecs de reprise récents.
 
 Revue indépendante : trois réserves de couverture et de surveillance corrigées puis retestées. Contrôles réels et version publiée à consigner séparément ; les tests locaux ne sont pas présentés comme des cycles de production.
+
+
+### Réception initiale et journal des quinze flux
+
+PR 33 publiée après revue et contrôles distants réussis. Deux passages automatiques de finance confirment une reprise sans déclenchement manuel. La recette relève une omission du nom « commerce » dans la liste autorisée du journal privé du déclencheur. Le complément SQL ne change que cette liste, avec contrôle de la définition attendue et rejeu idempotent ; collecte, cadence, droits et données métier restent identiques. La réception des publications complètes reste en cours.

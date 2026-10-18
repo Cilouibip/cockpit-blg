@@ -27,3 +27,17 @@ test('complete with failed units or without shared lease cannot suppress subsequ
 test('transaction beginning before dispatch cannot admit an old response with a reused id',async()=>{await reset();await a.query('BEGIN');await a.query('SELECT pg_sleep(0.01)');const seq=(await a.query('SELECT last_value FROM cockpit_ops.synthetic_requests')).rows[0].last_value;await reply(String(Number(seq)+1),good);await a.query('SELECT pg_sleep(0.01)');const id=await invoke();assert.equal(id,String(Number(seq)+1));await a.query('COMMIT');assert.equal(await invoke(),null);assert.equal((await latest()).observed_at,null);});
 test('a completed paginated job keeps intermediate units without reporting a false failure',async()=>{for(const unitResults of [[{job:'notion',status:'partial'},{job:'notion',status:'complete'}],[{job:'notion',status:'partial'},{job:'meta_ads',status:'partial'},{job:'notion',status:'complete'},{job:'meta_ads',status:'complete'}]]){await reset();const id=await invoke();await reply(id,{...good,units:unitResults.length,unitResults});assert.equal(await invoke(),null,'all final job states are complete: use the idle gate');const row=await latest();assert.equal(row.response_error,null);assert.equal(row.business_status,'complete');assert.deepEqual(row.unit_results,unitResults);}});
 test('complete cannot conceal an unfinished final job or any failed/malformed unit',async()=>{for(const unitResults of [[{job:'notion',status:'complete'},{job:'notion',status:'partial'}],[{job:'notion',status:'partial'},{job:'meta_ads',status:'complete'}],[{job:'notion',status:'failed'},{job:'notion',status:'complete'}],[{job:'notion',status:'unknown'},{job:'notion',status:'complete'}],[{status:'partial'},{job:'notion',status:'complete'}]]){await reset();const id=await invoke();await reply(id,{...good,units:unitResults.length,unitResults});assert.notEqual(await invoke(),null);assert.equal((await a.query('SELECT response_error FROM cockpit_ops.refresh_dispatch WHERE request_id=$1',[id])).rows[0].response_error,'INVALID_RESPONSE');}});
+
+
+test('finance units survive the private journal allowlist patch, replay preserves schedule and ACLs',async()=>{
+ const patch=readFileSync('supabase/manual/2026-10-18_refresh_finance_log.sql','utf8');
+ await a.query(migration.replace("'kpi_email','commerce')","'kpi_email')"));
+ const before=(await a.query("SELECT pg_get_functiondef('cockpit_ops.run_refresh_scheduler()'::regprocedure) AS definition")).rows[0].definition;
+ await a.query(patch);await a.query(patch);
+ assert.equal((await a.query("SELECT pg_get_functiondef('cockpit_ops.run_refresh_scheduler()'::regprocedure) AS definition")).rows[0].definition,before);
+ await reset();const id=await invoke();
+ const unitResults=[{job:'commerce',status:'partial'},{job:'commerce',status:'complete'}];
+ await reply(id,{...good,units:2,unitResults:unitResults.map(x=>({...x,private:'never-store'}))});
+ assert.equal(await invoke(),null);const row=await latest();assert.deepEqual(row.unit_results,unitResults);assert.equal(row.business_status,'complete');assert.equal(row.response_error,null);assert.ok(!JSON.stringify(row).includes('never-store'));
+ for(const role of ['anon','authenticated','service_role']) assert.equal((await a.query("SELECT has_function_privilege($1,'cockpit_ops.capture_refresh_responses()','EXECUTE') AS allowed",[role])).rows[0].allowed,false);
+});

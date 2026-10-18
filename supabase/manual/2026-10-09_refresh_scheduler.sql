@@ -67,7 +67,7 @@ BEGIN
       ELSE NULL END;
     SELECT coalesce(jsonb_agg(jsonb_build_object('job',u->>'job','status',u->>'status')),'[]'::jsonb) INTO safe_units
     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload->'unitResults')='array' THEN payload->'unitResults' ELSE '[]'::jsonb END) u
-    WHERE u->>'job' IN ('notion','meta','wix','receipts','meta_ads','meta_catalog','quiz','masterclass','forms','quiz_entries','client_history','kpi_meta','kpi_posthog','kpi_email')
+    WHERE u->>'job' IN ('notion','meta','wix','receipts','meta_ads','meta_catalog','quiz','masterclass','forms','quiz_entries','client_history','kpi_meta','kpi_posthog','kpi_email','commerce')
       AND u->>'status' IN ('complete','empty','partial','pending','waiting','failed');
     UPDATE cockpit_ops.refresh_dispatch SET observed_at=clock_timestamp(),
       http_status=item.status_code,timed_out=item.timed_out,late_response=(response_error='RESPONSE_MISSING') IS TRUE,response_error=verdict,
