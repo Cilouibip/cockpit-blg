@@ -2,7 +2,9 @@
 
 Réactivation par défaut du lecteur financier avec arrêt explicite conservé, reprise indexée et publication confirmée, fraîcheur fondée sur le début réel de collecte, lectures Wix mensuelles rapprochées, actualisation automatique de l’écran et surveillance des quinze flux. Les jours historiques couverts restent lisibles ; les périodes non couvertes restent sans valeur.
 
-La revue indépendante, 744 tests, la compilation et les contrôles PostgreSQL distants ont réussi. La réparation est publiée via la PR 33. Deux passages automatiques successifs ont repris la lecture financière sans erreur ; la publication complète et son rapprochement restent en cours. Le journal privé du déclencheur doit aussi conserver le nom du flux financier parmi ses quinze flux. Aucun changement de définition métier, de source externe, de base ou de cadence des flux n’est inclus. Le déclencheur Supabase existant reste utilisé.
+La revue indépendante, 744 tests, la compilation et les contrôles PostgreSQL distants ont réussi. La réparation est publiée via la PR 33 ; la PR 34 et sa migration ont complété le journal privé des quinze flux. La collecte Wix corrigée a publié automatiquement un relevé rapproché et le contrôleur a relu le nouveau chiffre sans bouton. Le rattrapage financier a repris seul après une interruption, achevé l'ancienne collecte en conservant sa couverture historique, puis démarré une collecte actuelle. Son rapprochement final reste en cours.
+
+La réception a aussi relevé des requêtes interrompues par le délai PostgreSQL : lectures de la page et publication des agrégats email. La reprise email a abouti automatiquement ; des optimisations SQL ciblées sont préparées pour réduire le coût de ces opérations, avec comparaison des résultats et revue avant application. Le déclencheur Supabase et la cadence existante sont conservés ; les tests de performance ne valent pas réception de production.
 
 ## 26 septembre 2026 — complément des exclusions avant mise en service
 

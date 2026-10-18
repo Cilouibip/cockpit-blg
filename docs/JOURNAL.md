@@ -497,3 +497,9 @@ Revue indépendante : trois réserves de couverture et de surveillance corrigée
 ### Réception initiale et journal des quinze flux
 
 PR 33 publiée après revue et contrôles distants réussis. Deux passages automatiques de finance confirment une reprise sans déclenchement manuel. La recette relève une omission du nom « commerce » dans la liste autorisée du journal privé du déclencheur. Le complément SQL ne change que cette liste, avec contrôle de la définition attendue et rejeu idempotent ; collecte, cadence, droits et données métier restent identiques. La réception des publications complètes reste en cours.
+
+### Réduction des lectures et publications interrompues
+
+La réception automatique a relevé des interruptions PostgreSQL sur les lectures de la page et la publication des agrégats email. La migration 029 réduit les projections de métadonnées des publications et borne la lecture d'un rapport exact à son identifiant avant ses autres filtres. Elle conserve le miroir incrémental, les profils et les dates de couverture. La migration 030 prépare une seule fois les deux périmètres de la première jointure de publication, sans changer les identités, comparaisons de contenu, confirmations, retraits, réapparitions ou garanties transactionnelles.
+
+Chaque migration refuse une signature, une définition ou des droits inattendus et accepte son propre rejeu. Une première variante 029 fondée sur une définition historique a été refusée en revue puis corrigée avant publication. Les tests ajoutés comparent les résultats et contrats des lecteurs, la publication complète, les reprises, la concurrence et les plans sur données synthétiques. La revue statique finale est favorable ; leur exécution PostgreSQL en CI est un préalable à l'application. Les mesures de requêtes en lecture seule ne prouvent pas à elles seules le gain de toute la page ni celui de la mutation.
