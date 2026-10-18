@@ -1,10 +1,10 @@
-## 18 octobre 2026 : réparation publiée, observation automatique en cours
+## 18 octobre 2026 : actualisation et détail des ventes par offre
 
-Réactivation par défaut du lecteur financier avec arrêt explicite conservé, reprise indexée et publication confirmée, fraîcheur fondée sur le début réel de collecte, lectures Wix mensuelles rapprochées, actualisation automatique de l’écran et surveillance des quinze flux. Les jours historiques couverts restent lisibles ; les périodes non couvertes restent sans valeur.
+Réparation automatique publiée via les PR33 à35 : lecteur financier actif, reprise indexée, couverture fondée sur le début de collecte, lectures Wix mensuelles rapprochées, écran actualisé automatiquement et surveillance des quinze flux. Les migrations029/030 sont appliquées. Les tests et reprises observées restent distincts de la réception complète des ventes.
 
-La revue indépendante, 744 tests, la compilation et les contrôles PostgreSQL distants ont réussi. La réparation est publiée via la PR 33 ; la PR 34 et sa migration ont complété le journal privé des quinze flux. La collecte Wix corrigée a publié automatiquement un relevé rapproché et le contrôleur a relu le nouveau chiffre sans bouton. Le rattrapage financier a repris seul après une interruption, achevé l'ancienne collecte en conservant sa couverture historique, puis démarré une collecte actuelle. Son rapprochement final reste en cours.
+Le nouveau candidat conserve les paiements contradictoires et leurs dépendances en attente au lieu de refuser tout le relevé. Il ne choisit aucun montant, ne modifie aucune source et ne promeut pas une mensualité en premier achat. Les autres ventes vérifiées peuvent être publiées. Le total toutes offres dispose d’un détail BLG90, Défi, Club, autres offres et offres à préciser, établi depuis les champs explicites de paiement. Le CA Wix conserve sa définition.
 
-La réception a aussi relevé des requêtes interrompues par le délai PostgreSQL : lectures de la page et publication des agrégats email. La reprise email a abouti automatiquement ; des optimisations SQL ciblées sont préparées pour réduire le coût de ces opérations, avec comparaison des résultats et revue avant application. Le déclencheur Supabase et la cadence existante sont conservés ; les tests de performance ne valent pas réception de production.
+Le nouveau profil impose une collecte neuve avec les champs d’offre. La publication antérieure sert seulement à préserver les Clients archivés confirmés, avec contrôle de l’identité du lecteur. Les anciens paiements ne sont jamais présentés comme relus. Vérification locale :760 tests réussis,11 tests SQL conditionnels ignorés dans cette commande, typage et compilation réussis. Revue indépendante puis CI et réception automatique en production avant clôture.
 
 ## 26 septembre 2026 — complément des exclusions avant mise en service
 

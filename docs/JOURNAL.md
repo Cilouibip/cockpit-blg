@@ -503,3 +503,12 @@ PR 33 publiée après revue et contrôles distants réussis. Deux passages autom
 La réception automatique a relevé des interruptions PostgreSQL sur les lectures de la page et la publication des agrégats email. La migration 029 réduit les projections de métadonnées des publications et borne la lecture d'un rapport exact à son identifiant avant ses autres filtres. Elle conserve le miroir incrémental, les profils et les dates de couverture. La migration 030 prépare une seule fois les deux périmètres de la première jointure de publication, sans changer les identités, comparaisons de contenu, confirmations, retraits, réapparitions ou garanties transactionnelles.
 
 Chaque migration refuse une signature, une définition ou des droits inattendus et accepte son propre rejeu. Une première variante 029 fondée sur une définition historique a été refusée en revue puis corrigée avant publication. Les tests ajoutés comparent les résultats et contrats des lecteurs, la publication complète, les reprises, la concurrence et les plans sur données synthétiques. La revue statique finale est favorable ; leur exécution PostgreSQL en CI est un préalable à l'application. Les mesures de requêtes en lecture seule ne prouvent pas à elles seules le gain de toute la page ni celui de la mutation.
+
+
+### Total toutes offres et anomalies localisées
+
+Choix métier confirmé : total des nouvelles ventes payées et détail par offre. Les contradictions entre fiches partageant une référence de paiement sont conservées en attente. L’incertitude se propage aux Client, identités et échéanciers reliés ; un antécédent incertain ne permet jamais de promouvoir un paiement ultérieur. Les ventes indépendantes continuent à être calculées selon la définition existante.
+
+La ventilation est fondée sur Catégorie et Description du paiement, sans déduction depuis le prix, le nom de personne ou une formule produit comportant une valeur par défaut. Les libellés ambigus restent à préciser. Le détail et le total partagent les mêmes dates et la même population confirmée. Un profil de collecte neuf protège contre la réutilisation d’un ancien relevé dépourvu d’offre ; le maintien des archives ne réutilise que les preuves Client confirmées. Tests ciblés de propagation, dates absentes, remboursements, archivage, changement de secret, total/détail et rendu.
+
+Aucune migration de base supplémentaire, aucun appel Stripe, aucune écriture dans les sources. Réception réelle après publication encore requise.

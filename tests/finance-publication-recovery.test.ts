@@ -108,3 +108,16 @@ test('les détails historiques et la couverture de période ont des contrats dis
  assert.equal(daily!.available,true);assert.equal(daily!.periodCovered,false);assert.equal(daily!.counts,null);assert.equal(daily!.paidSales!.details.length,2);
  assert.equal(Date.parse(daily!.observedAt!),Date.parse(report.startedAt));
 });
+
+test('publication avec conflit isolé conserve les originaux, le total vérifié et sa ventilation sur la même période',async()=>{
+ const memory=storage(),report=buildNotionCommerceReport(snapshot({clients:[client(),client('safe')],payments:[payment('conflict-a',{providerId:'ch_synthetic'}),payment('conflict-b',{providerId:'ch_synthetic',amountMinor:0}),payment('safe',{clientIds:['safe'],emailKey:'identity-safe',offerCategory:'club',offerRaw:'Club explicite'})],schedules:[{...snapshot().schedules[0],id:'safe-plan',clientIds:['safe'],paymentIds:['safe']}]}));
+ await publishNotionCommerceReport(memory.db,commerceConfig,report);
+ const read=await readNotionCommerceReport(memory.db,filters,commerceEnv);
+ assert.equal(read!.paidSales!.confirmedInitialSales,1);assert.deepEqual(read!.paidSales!.confirmedByOffer,{blg90:0,defi:0,club:1,other:0,unknown:0});assert.equal(read!.paidSales!.pendingInitialPaymentCases,2);assert.equal(read!.paidSales!.details.length,3);assert.equal(read!.coverage!.conflictingPaymentGroups,1);
+ assert.equal(Object.values(read!.paidSales!.confirmedByOffer).reduce((a,b)=>a+b,0),read!.paidSales!.confirmedInitialSales);
+ const invalid=structuredClone(report);invalid.paidSales.confirmedByOffer.club=2;
+ const before=memory.runs.length;await assert.rejects(()=>publishNotionCommerceReport(memory.db,commerceConfig,invalid),/COMMERCE_REPORT_INCOMPLETE/);assert.equal(memory.runs.length,before);
+ const overview=memory.rows.find(row=>row.metric_key==='notion_commerce_overview')!.dimensions as Row;
+ (overview.paidSalesSummary as Row).confirmedByOffer={blg90:999,defi:0,club:0,other:0,unknown:0};
+ const corrupted=await readNotionCommerceReport(memory.db,filters,commerceEnv);assert.equal(corrupted!.available,false);assert.equal(corrupted!.paidSales,null);
+});

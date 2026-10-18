@@ -3,7 +3,7 @@ import {Temporal} from '@js-temporal/polyfill';
 import type {Database,Row} from './db';
 import {startOfParisDay} from '../domain/dates';
 import {COMMERCE_COUNTERS,NOTION_COMMERCE_VERSION,type CommerceCounters,type CommerceReport} from './notion-commerce-report';
-import {selectPaidSalesPeriod,type PaidSalesReport} from './paid-sales';
+import {selectPaidSalesPeriod,confirmedSalesByOffer,OFFER_CATEGORIES,type PaidSalesReport} from './paid-sales';
 import {notionCommerceConfig,notionCommerceProfile,type NotionCommerceConfig} from '../connectors/notion-commerce';
 import type {DashboardFilters} from './ui-contract';
 const STREAM='commerce_declared_snapshot',OVERVIEW='notion_commerce_overview',DAY='notion_commerce_day',MEMBERS='notion_commerce_membership',PAID_SALES='notion_commerce_paid_sales';
@@ -12,7 +12,12 @@ export const paidSalesChunkKey=(index:number)=>'paid-sales:'+String(index).padSt
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const zero=()=>Object.fromEntries(COMMERCE_COUNTERS.map(k=>[k,0])) as CommerceCounters;
-const paidSalesSummary=(report:CommerceReport)=>({confirmedInitialSales:report.paidSales.confirmedInitialSales,reconciledInitialSales:report.paidSales.reconciledInitialSales,pendingInitialPaymentCases:report.paidSales.pendingInitialPaymentCases,excludedSubsequentPayments:report.paidSales.excludedSubsequentPayments,refundCases:report.paidSales.refundCases,coverage:report.paidSales.coverage});
+const paidSalesSummary=(report:CommerceReport)=>({confirmedByOffer:report.paidSales.confirmedByOffer,confirmedInitialSales:report.paidSales.confirmedInitialSales,reconciledInitialSales:report.paidSales.reconciledInitialSales,pendingInitialPaymentCases:report.paidSales.pendingInitialPaymentCases,excludedSubsequentPayments:report.paidSales.excludedSubsequentPayments,refundCases:report.paidSales.refundCases,coverage:report.paidSales.coverage});
+function validPaidSales(report:PaidSalesReport):boolean {
+ return report.details.every(d=>['confirmed','reconciled','pending','excluded'].includes(d.state)&&(!d.offerCategory||OFFER_CATEGORIES.includes(d.offerCategory)))
+  &&report.confirmedInitialSales===report.details.filter(d=>d.state==='confirmed').length
+  &&digest(report.confirmedByOffer)===digest(confirmedSalesByOffer(report.details));
+}
 function validCounts(value:unknown):value is CommerceCounters{return !!value&&typeof value==='object'&&COMMERCE_COUNTERS.every(k=>Number.isSafeInteger((value as CommerceCounters)[k])&&(value as CommerceCounters)[k]>=0);}
 async function rowsForRun(db:Database,runId:string,metric:string,max=10000){const rows:Row[]=[];for(let from=0;from<max;from+=1000){const page=await db.select('source_aggregates',{eq:{sync_run_id:runId,metric_key:metric},order:'period_from,dimensions_key',from,limit:1000});rows.push(...page);if(page.length<1000)return rows;}throw Error('COMMERCE_REPORT_READ_LIMIT');}
 /** Keeps each JSONB dimensions payload beneath the database's 4 kB limit. */
@@ -29,7 +34,7 @@ async function storedPublicationMatches(db:Database,run:Row,report:CommerceRepor
 }
 /** One full source report is the publication unit. Sparse days never revive rows from a previous report. */
 export async function publishNotionCommerceReport(db:Database,config:NotionCommerceConfig,report:CommerceReport){
- if(report.version!==NOTION_COMMERCE_VERSION||!report.paginationComplete||!validCounts(report.totals)||report.daily.length>=1000||report.members.length>=10000)throw Error('COMMERCE_REPORT_INCOMPLETE');
+ if(!validPaidSales(report.paidSales)||report.version!==NOTION_COMMERCE_VERSION||!report.paginationComplete||!validCounts(report.totals)||report.daily.length>=1000||report.members.length>=10000)throw Error('COMMERCE_REPORT_INCOMPLETE');
  // Collection completion does not refresh families read in earlier passes.
  // Preserve completion separately; publication coverage stops at the oldest read.
  try{if(Temporal.Instant.compare(report.startedAt,report.observedAt)>0||Temporal.Instant.compare(report.startedAt,'1970-01-01T00:00:00Z')<=0)throw Error();}catch{throw Error('COMMERCE_OBSERVATION_INVALID');}
@@ -90,6 +95,9 @@ export async function readNotionCommerceReport(db:Database,filters:DashboardFilt
    const paidDetails=paidRows.flatMap(r=>((r.dimensions as {details?:unknown}).details??[]));
    if(info.paidSalesCount!==paidDetails.length||info.paidSalesHash!==digest(paidDetails))continue;
    const historical={...((info.paidSalesSummary as Omit<PaidSalesReport,'details'>)),details:paidDetails as PaidSalesReport['details']};
+   // Legacy summaries had no offer attribution; preserve their rows as unknown.
+   historical.confirmedByOffer??=confirmedSalesByOffer(historical.details);
+   if(!validPaidSales(historical))continue;
    paidSales=options.details==='all-history'?historical:selectPaidSalesPeriod(historical,filters.from,filters.to);
   }
   const counts=zero();for(const day of daily)if(day.date>=filters.from&&day.date<=filters.to)for(const key of COMMERCE_COUNTERS)counts[key]+=(day.counts as CommerceCounters)[key];

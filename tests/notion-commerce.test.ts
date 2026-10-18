@@ -27,7 +27,7 @@ test('DUO Format is independent of attached payment, payer identity and source f
 test('only exact provider copies deduplicate, repeated titles/source rows and refunds keep historical evidence',()=>{
  const a=payment('a',{providerId:'pi_synthetic'});const report=buildNotionCommerceReport(snapshot({payments:[a,{...a,id:'copy'},payment('another',{day:'2024-03-03'})]}));
  assert.equal(report.coverage.deduplicatedPayments,1);assert.equal(report.members[0].paymentIds.length,2);
- assert.throws(()=>buildNotionCommerceReport(snapshot({payments:[a,{...a,id:'copy',emailKey:'another'}]})),/PAYMENT_PROVIDER_CONFLICT/);
+ const conflicted=buildNotionCommerceReport(snapshot({payments:[a,{...a,id:'copy',emailKey:'another'}]}));assert.equal(conflicted.coverage.conflictingPaymentGroups,1);assert.equal(conflicted.paidSales.confirmedInitialSales,0);assert.equal(conflicted.paidSales.pendingInitialPaymentCases,2);
  assert.equal(buildNotionCommerceReport(snapshot({payments:[payment('refund',{status:'refunded'})]})).totals.firstPurchaseEvidenceConcordant,1);
  assert.equal(buildNotionCommerceReport(snapshot({payments:[payment('unknown',{amountMinor:null})]})).totals.firstNoPaymentObserved,1);
 });
@@ -77,4 +77,19 @@ test('truncated relations and duplicate provider pages reject before a misleadin
 test('report capacity is an explicit refusal before any database write, never truncation',async()=>{
  const {publishNotionCommerceReport}=await import('../src/lib/notion-commerce-storage');const report=buildNotionCommerceReport(snapshot());report.daily=Array.from({length:1000},()=>report.daily[0]);let called=false;const db={select:async()=>{called=true;return [];},upsert:async()=>{called=true;},rpc:async()=>{called=true;throw Error('unexpected');},probe:async()=>{called=true;}};
  await assert.rejects(()=>publishNotionCommerceReport(db,commerceConfig,report),/COMMERCE_REPORT_INCOMPLETE/);assert.equal(called,false);
+});
+
+test('source conflict isolation is deterministic and keeps unrelated verified sales and original membership',()=>{
+ const payments=[payment('conflict-a',{providerId:'ch_synthetic'}),payment('conflict-b',{providerId:'ch_synthetic',amountMinor:0,clientIds:[]}),payment('safe',{clientIds:['safe'],emailKey:'identity-safe',offerCategory:'blg90',offerRaw:'BLG 90'})];
+ const schedules=[{...snapshot().schedules[0],id:'safe-plan',clientIds:['safe'],paymentIds:['safe']}];
+ const input=snapshot({clients:[client(),client('safe')],payments,schedules});
+ const report=buildNotionCommerceReport(input),reversed=buildNotionCommerceReport({...input,payments:[...payments].reverse()});
+ assert.equal(report.paidSales.confirmedInitialSales,1);assert.equal(report.paidSales.confirmedByOffer.blg90,1);assert.equal(report.paidSales.pendingInitialPaymentCases,2);
+ assert.deepEqual(report.paidSales,reversed.paidSales);assert.equal(report.coverage.conflictingPaymentRows,2);assert.equal(report.coverage.affectedPaymentRows,2);
+ assert.deepEqual(report.sourceMembers.payments,['conflict-a','conflict-b','safe']);assert.ok(report.members[0].reasons.includes('payment_history_affected_by_provider_conflict'));assert.equal(report.totals.firstNoPaymentObserved,0);
+});
+test('provider copies with contradictory explicit offers are isolated instead of arbitrarily attributed',()=>{
+ const a=payment('a',{providerId:'ch_synthetic',offerCategory:'club',offerRaw:'Club'});
+ const report=buildNotionCommerceReport(snapshot({payments:[a,{...a,id:'b',offerCategory:'defi',offerRaw:'Défi'}]}));
+ assert.equal(report.coverage.deduplicatedPayments,0);assert.equal(report.coverage.conflictingPaymentGroups,1);assert.equal(report.paidSales.confirmedInitialSales,0);assert.equal(report.paidSales.details.length,2);
 });

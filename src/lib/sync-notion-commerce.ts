@@ -80,19 +80,19 @@ function decodeCheckpoint(rows: Row[]): CommerceReadCheckpoint | null {
   } catch { return null; }
 }
 
-async function checkpointPair(db: Database, namespace: string, profile: string): Promise<{ latest: StoredCheckpoint | null; published: StoredCheckpoint | null }> {
-  const runOptions = { eq: { source: 'notion', source_namespace: namespace, stream_key: STREAM, query_profile_key: profile, status: 'complete', pagination_complete: 'true', rows_rejected: '0' }, order: 'finished_at,id', descending: true } as const;
+async function checkpointPair(db: Database, namespace: string, profile?: string): Promise<{ latest: StoredCheckpoint | null; published: StoredCheckpoint | null }> {
+  const runOptions = { eq: { source: 'notion', source_namespace: namespace, stream_key: STREAM, ...(profile?{query_profile_key:profile}:{}), status: 'complete', pagination_complete: 'true', rows_rejected: '0' }, order: 'finished_at,id', descending: true } as const;
   let latest: StoredCheckpoint | null = null;
   // Stop as soon as the nearest published baseline is found. Older runs remain
   // available, without making every refresh load the entire checkpoint history.
   for (let from = 0; from < MAX_CHECKPOINT_RUNS; from += CHECKPOINT_RUN_PAGE_SIZE) {
-    const runs = await db.select('sync_runs', { ...runOptions, columns: ['id'], from, limit: CHECKPOINT_RUN_PAGE_SIZE });
+    const runs = await db.select('sync_runs', { ...runOptions, columns: ['id','query_profile_key'], from, limit: CHECKPOINT_RUN_PAGE_SIZE });
     if (!runs.length) return { latest, published: null };
     if (!latest) {
       const latestRunId = typeof runs[0].id === 'string' ? runs[0].id : null;
       if (!latestRunId) throw new Error('CHECKPOINT_RUN_INVALID');
       const checkpoint = decodeCheckpoint(await rowsForRun(db, latestRunId, CHECKPOINT));
-      if (!checkpoint) throw new Error('CHECKPOINT_LATEST_INVALID');
+      if (!checkpoint||checkpoint.profile!==(profile??runs[0].query_profile_key)) throw new Error('CHECKPOINT_LATEST_INVALID');
       latest = { runId: latestRunId, checkpoint };
     }
 
@@ -103,7 +103,15 @@ async function checkpointPair(db: Database, namespace: string, profile: string):
       const batch = runs.slice(offset, offset + CHECKPOINT_MARKER_BATCH_SIZE);
       const runIds = batch.map(run => typeof run.id === 'string' ? run.id : '').filter(Boolean);
       if (runIds.length !== batch.length || new Set(runIds).size !== runIds.length) throw new Error('CHECKPOINT_RUN_INVALID');
-      const publications = await db.select('source_aggregates', { eq: { source: 'notion', source_namespace: namespace, report_profile_key: profile, metric_key: PUBLICATION }, in: { sync_run_id: runIds }, columns: ['sync_run_id', 'dimensions_key', 'dimensions'], order: 'sync_run_id,dimensions_key', limit: runIds.length + 1 });
+      // A profile change starts a new collection. The older published checkpoint
+      // can supply archived Client evidence only, with its original identity key.
+      const publications:Row[]=[];
+      const profiles=new Set(batch.map(run=>profile??String(run.query_profile_key??'')));
+      for(const historicalProfile of profiles){
+        if(!historicalProfile)throw new Error('CHECKPOINT_RUN_INVALID');
+        const ids=profile?runIds:batch.filter(run=>run.query_profile_key===historicalProfile).map(run=>String(run.id));
+        publications.push(...await db.select('source_aggregates', { eq: { source: 'notion', source_namespace: namespace, report_profile_key: historicalProfile, metric_key: PUBLICATION }, in: { sync_run_id: ids }, columns: ['sync_run_id', 'dimensions_key', 'dimensions'], order: 'sync_run_id,dimensions_key', limit: ids.length + 1 }));
+      }
       if (publications.length > runIds.length) throw new Error('CHECKPOINT_PUBLICATION_MARKER_CARDINALITY');
       const publishedByRun = new Map<string, string>();
       for (const row of publications) {
@@ -121,7 +129,7 @@ async function checkpointPair(db: Database, namespace: string, profile: string):
           return { latest, published: latest };
         }
         const checkpoint = decodeCheckpoint(await rowsForRun(db, runId, CHECKPOINT));
-        if (!checkpoint?.completedAt) throw new Error('CHECKPOINT_PUBLISHED_INVALID');
+        if (!checkpoint?.completedAt||checkpoint.profile!==(profile??run.query_profile_key)) throw new Error('CHECKPOINT_PUBLISHED_INVALID');
         return { latest, published: { runId, checkpoint, publishedRunId } };
       }
     }
@@ -167,7 +175,8 @@ export async function refreshNotionCommerce(options: { db: Database; config: Not
   try {
     try { runId = await db.rpc<string>('begin_sync_stream', { p_source: 'notion', p_namespace: namespace, p_from: '1970-01-01T00:00:00Z', p_to: now, p_profile: profile, p_coverage_kind: 'source_snapshot', p_stream: STREAM }); }
     catch (error) { if (error instanceof AppError && error.status === 409) return { status: 'partial', counts: { pages: 0, read: 0 }, coverage: 'unavailable', reason: 'actualisation_en_cours' }; throw error; }
-    const { latest: previous, published: baseline } = await checkpointPair(db, namespace, profile);
+    const { latest: previous, published: currentBaseline } = await checkpointPair(db, namespace, profile);
+    const baseline=currentBaseline??(await checkpointPair(db,namespace)).published;
     const deadline = Date.now() + 30_000;
     const fetcher = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const remaining = deadline - Date.now();

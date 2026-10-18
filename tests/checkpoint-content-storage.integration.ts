@@ -127,7 +127,7 @@ test('two PostgreSQL sessions share one exact content; byte inequality defeats a
 test('real compact refresh preserves published baseline, newer checkpoint, archived clients and report-before-marker recovery',async()=>{
  const config={
   clients:{dataSourceId:'cp-clients',fields:{email:'Email',emailBis:'Email 2',started:'Début',prospect:'Prospect',binome:'Binôme'}},
-  payments:{dataSourceId:'cp-payments',fields:{client:'Client',email:'Email',date:'Date',amount:'Montant',status:'Statut',provider:'Transaction',invoice:'Facture'}},
+  payments:{dataSourceId:'cp-payments',fields:{client:'Client',email:'Email',date:'Date',amount:'Montant',status:'Statut',provider:'Transaction',invoice:'Facture',category:'Catégorie',description:'Description'}},
   parcours:{dataSourceId:'cp-parcours',fields:{client:'Client',order:'Ordre',format:'Format',start:'Début',closing:'Closing',status:'Statut'}},
  };
  const clientId='11111111-1111-4111-8111-111111111111',calls:string[]=[];
