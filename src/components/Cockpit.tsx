@@ -1,5 +1,5 @@
 'use client';
-import {metaRefreshPeriods,refreshNotionToCompletion} from '../lib/refresh-plan';
+import {refreshNotionToCompletion} from '../lib/refresh-plan';
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { ApiError, Connection, ConnectionsResponse, DashboardFilters, DashboardResponse, DataMode, DetailsResponse, Pagination, ProspectsQuery, LinkInput, LinkMutation, LinkPlacement, LinksResponse, Metric, Prospect, ProspectsResponse, TrackedLink } from '../lib/ui-contract';
@@ -9,7 +9,8 @@ import JourneyFilters from './JourneyFilters';
 import type { CommercialDashboard, CommercialQuery } from '../lib/commercial-contract';
 import { serializeCommercialQuery } from '../lib/commercial-query';
 import type { LinkWriteResult } from '../lib/link-write-result';
-import { CockpitRequestError, request } from '../lib/cockpit-request';
+import { request } from '../lib/cockpit-request';
+import { createAutoRefresh, createVisibleReadRetry, type RefreshState } from '../lib/auto-refresh';
 import ResultsPage, { DemoIndicator, ResultsFilters, ReportStatus } from './ResultsPage';
 import {usePostHogReports} from './use-posthog-reports';
 import type {PostHogClientState} from '../lib/posthog-report-client';
@@ -59,6 +60,7 @@ function useRemote<T>(path: string | null, revision: number, keepPrevious = fals
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const previousPath = useRef<string | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (!path) { setLoading(false); return; }
     const controller = new AbortController();
@@ -69,7 +71,18 @@ function useRemote<T>(path: string | null, revision: number, keepPrevious = fals
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'La lecture a été interrompue. Réessaie.');
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [path, revision, keepPrevious]);
+  }, [path, revision, keepPrevious, retry]);
+  useEffect(() => {
+    if (!path || !error) return;
+    const controller = createVisibleReadRetry({ retry: () => setRetry(value => value + 1), isVisible: () => !document.hidden });
+    window.addEventListener('focus', controller.wake);
+    document.addEventListener('visibilitychange', controller.visibilityChanged);
+    return () => {
+      controller.stop();
+      window.removeEventListener('focus', controller.wake);
+      document.removeEventListener('visibilitychange', controller.visibilityChanged);
+    };
+  }, [path, error]);
   return { data, loading, error, setData };
 }
 
@@ -242,46 +255,37 @@ export default function Cockpit({ mode, user }: { mode: DataMode; user: string }
   const connections = useRemote<ConnectionsResponse>(view === 'connections' ? '/api/connections' : null, revision);
   const current = view === 'results' || view === 'journey' ? dashboard : view === 'links' ? links : view === 'sales' ? sales : connections;
   const refresh = useCallback(() => setRevision(value => value + 1), []);
+  const autoRefresh = useRef<ReturnType<typeof createAutoRefresh> | null>(null);
+  const manualRefreshPending = useRef(false);
+  useEffect(() => {
+    if (mode !== 'live') return;
+    const controller = createAutoRefresh({
+      read: signal => request<RefreshState>('/api/refresh', { signal, timeoutMs: 15_000 }),
+      kick: signal => request<RefreshState>('/api/refresh', { method: 'POST', body: '{}', signal, timeoutMs: 75_000 }),
+      isVisible: () => !document.hidden,
+      onPublication: refresh,
+    });
+    autoRefresh.current = controller;
+    const wake = () => { void controller.wake().catch(() => {}); };
+    const visibility = () => { void controller.visibilityChanged().catch(() => {}); };
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', visibility);
+    wake();
+    return () => {
+      controller.stop();
+      if (autoRefresh.current === controller) autoRefresh.current = null;
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [mode, refresh]);
   async function refreshSources() {
-    if(view==='journey'){refresh();return;}
-    if(view==='sales'){
-      if(mode==='demo'){refresh();return;}
-      setSyncing(true);
-      try {
-        const invoke=()=>request<import('../lib/refresh-plan').RefreshResult>('/api/sync/notion',{method:'POST',body:'{}',timeoutMs:75_000});
-        const result=await refreshNotionToCompletion(invoke,read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`));
-        const label:Record<string,string>={complete:'Lecture Notion terminée.',empty:'Aucune fiche retournée par Notion.',partial:'Lecture Notion partielle ou en cours.',failed:'Lecture Notion interrompue.'};
-        setNotice((label[result.status]??'Lecture Notion interrompue.')+(result.coverage?.reason?` ${result.coverage.reason}`:'')); refresh();
-      } catch(error) { setNotice(error instanceof Error ? error.message : 'Lecture Notion interrompue. Les données déjà importées restent disponibles.'); }
-      finally {setSyncing(false);} return;
-    }
-    if(mode==='demo'||!['results','journey'].includes(view)){refresh();return;}
+    if (mode === 'demo') { refresh(); return; }
+    if (manualRefreshPending.current) return;
+    manualRefreshPending.current = true;
     setSyncing(true);
-    try {
-      const invoke=(path:string)=>request<import('../lib/refresh-plan').RefreshResult>(path,{method:'POST',body:'{}',timeoutMs:75_000});
-      const query=filtersQuery(filters);
-      // État de la lecture des ventes lu dans Connexions ; si l’état est illisible, le serveur refuse lui-même une lecture suspendue.
-      const commercePaused=await request<ConnectionsResponse>('/api/connections',{timeoutMs:15_000}).then(commerceReaderPaused,()=>false);
-      const work:Record<RefreshSource,()=>Promise<{status:string;coverage?:{reason?:string}}>>={
-        wix:()=>invoke(`/api/sync/wix?${query}`),
-        notion:()=>refreshNotionToCompletion(()=>invoke('/api/sync/notion'),read=>setNotice(`Notion : ${read} fiches lues, lecture en cours…`)),
-        commerce:()=>refreshNotionToCompletion(()=>invoke('/api/sync/commerce'),read=>setNotice(`Ventes : ${read} éléments lus, rapprochement en cours…`)),
-        receipts:()=>invoke(`/api/sync/receipts?${query}`),
-        inscriptions:()=>refreshLeadEntries((path,init)=>request(path,init),message=>setNotice(message)),
-        meta:async()=>{for(const period of metaRefreshPeriods(filters.from,filters.to)){const result=await invoke(`/api/sync/meta?${filtersQuery({...filters,...period})}`);if(result.status!=='complete')return result;}return {status:'complete'};},
-        quiz:()=>invoke(`/api/sync/analytics?${query}&type=quiz`),
-        masterclass:()=>invoke(`/api/sync/analytics?${query}&type=masterclass`),
-      };
-      const jobs=resultsRefreshSources(filters,commercePaused).map(source=>({source,work:work[source]()}));
-      const tasks=await Promise.allSettled(jobs.map(job=>job.work));
-      const sources=tasks.map((r,i)=>({source:jobs[i].source as string,status:r.status==='rejected'?(r.reason instanceof CockpitRequestError&&r.reason.status===423?'paused':'failed'):r.value.status,detail:r.status==='rejected'&&['notion','commerce'].includes(jobs[i].source)&&!(r.reason instanceof CockpitRequestError&&r.reason.status===423)?'Clique à nouveau sur Actualiser pour reprendre la lecture.':r.status==='fulfilled'&&r.value.status==='partial'?r.value.coverage?.reason:undefined}));
-      if(commercePaused)sources.push({source:'commerce',status:'paused',detail:undefined});
-      const labels:Record<string,string>={complete:'actualisé',partial:'lecture partielle ou en cours',pending:'lecture en cours, reprise disponible',empty:'aucune mesure retournée',failed:'échec',paused:'lecture suspendue, dernière publication conservée'};
-      const names:Record<string,string>={wix:'Wix',quiz:'Quiz',masterclass:'Masterclass',notion:'Notion',receipts:'Paiements reçus',commerce:'Ventes payées',meta:'Meta',inscriptions:'Inscriptions Wix'};
-      setNotice(sources.map((s:{source:string;status:string;detail?:string})=>`${names[s.source]??s.source} : ${labels[s.status]??'échec'}${s.detail?` — ${s.detail}`:''}`).join(' · '));
-      refresh();
-    } catch {setNotice('Actualisation interrompue. Les données déjà enregistrées restent disponibles.');}
-    finally {setSyncing(false);}
+    try { await autoRefresh.current?.check(true); refresh(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : 'L’actualisation a été interrompue. Les données précédentes restent affichées.'); }
+    finally { manualRefreshPending.current = false; setSyncing(false); }
   }
   function navigate(id: View) { setView(id); setNotice(''); setTimeout(() => title.current?.focus(), 0); }
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 7000); return () => clearTimeout(timer); }, [notice]);

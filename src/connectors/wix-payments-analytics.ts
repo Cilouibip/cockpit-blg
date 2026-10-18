@@ -127,8 +127,11 @@ export async function syncWixPaymentsAnalytics(config: WixPaymentsAnalyticsConfi
     const from = Temporal.Instant.from(config.from), to = Temporal.Instant.from(config.to);
     const observedAt = Temporal.Instant.from(config.now?.() ?? new Date().toISOString()).toString();
     const pageSize = config.pageSize ?? 1000, maxPages = config.maxPages ?? 100;
+    const firstDay = from.toZonedDateTimeISO(config.timezone).toPlainDate();
+    const lastDay = to.toZonedDateTimeISO(config.timezone).toPlainDate();
+    const days = firstDay.until(lastDay).days;
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(config.siteId) ||
-      config.timezone !== 'Europe/Paris' || Temporal.Instant.compare(from, to) >= 0 || config.cursor ||
+      config.timezone !== 'Europe/Paris' || Temporal.Instant.compare(from, to) >= 0 || days < 1 || days > 367 || config.cursor ||
       !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isInteger(maxPages) || maxPages < 1 || maxPages > 1000 ||
       [from, to].some(i => i.toZonedDateTimeISO(config.timezone).toPlainTime().toString() !== '00:00:00')) throw new ConnectorError('INVALID_CONFIGURATION');
     const headers = { Authorization: config.apiKey, 'wix-site-id': config.siteId, 'Content-Type': 'application/json' };
@@ -149,52 +152,79 @@ export async function syncWixPaymentsAnalytics(config: WixPaymentsAnalyticsConfi
     const date = available.find(row => row.name === mapping.dimensions.day)!;
     const filters = object(date.filters);
     if (!date.sortable || !Array.isArray(filters.conditions) || !filters.conditions.includes('RANGE_IE') || !Array.isArray(filters.prefixes) || !filters.prefixes.includes('IS')) throw new ConnectorError('WIX_DATE_FILTER_UNSUPPORTED');
-    const seen = new Set<string>(); let offset = 0, totalsFingerprint: string | null = null;
-    for (let page = 0; page < maxPages; page++) {
-      const payload = object(await readJson(new URL(`${base}/query-data`), { method: 'POST', headers,
-        body: JSON.stringify({ semanticModelId: mapping.modelId, interval: { start: from.toString(), end: to.toString(), timezone: config.timezone }, fields,
-          filters: [{ field: mapping.dimensions.day, prefix: 'IS', condition: 'RANGE_IE', values: [from.toString(), to.toString()] }],
-          sort: { fieldName: mapping.dimensions.day, order: 'ASC' }, paging: { limit: pageSize, offset }, formattingEnabled: false, totalsIncluded: true }) }, config));
-      if (!Array.isArray(payload.results)) throw new ConnectorError('INVALID_RESPONSE');
-      const metadata = object(payload.pagingMetadata);
-      // Wix may return more rows than requested. Consume every acknowledged row
-      // within the API ceiling, retain duplicate/offset/totals reconciliation.
-      if (metadata.count !== payload.results.length || metadata.offset !== offset || payload.results.length > 1000) throw new ConnectorError('INVALID_PAGINATION');
-      // Empty response has no measured zero. Missing totals on an empty result is valid.
-      if (!payload.results.length && !offset) {
-        batch.status = 'empty'; batch.coverage = { from: config.from, to: config.to, complete: false, observedAt, reason: 'Aucune mesure Wix ; aucun zéro normalisé créé.' }; return batch;
+    // Wix returned different data for the same days in a multi-month request.
+    // Read disjoint Paris calendar months and reconcile each before combining.
+    // Schema and site identity are checked once; maxPages bounds the whole batch.
+    const seen = new Set<string>();
+    const windowTotals: Record<Measure, number | null>[] = [];
+    let allWindowsNetEligible = true;
+    for (let windowFrom = firstDay; Temporal.PlainDate.compare(windowFrom, lastDay) < 0;) {
+      const nextMonth = windowFrom.with({ day: 1 }).add({ months: 1 });
+      const windowTo = Temporal.PlainDate.compare(nextMonth, lastDay) < 0 ? nextMonth : lastDay;
+      const start = windowFrom.toZonedDateTime({ timeZone: config.timezone, plainTime: '00:00' }).toInstant().toString();
+      const end = windowTo.toZonedDateTime({ timeZone: config.timezone, plainTime: '00:00' }).toInstant().toString();
+      const windowRows: WixPaymentAnalyticsSlice[] = [];
+      let offset = 0, totalsFingerprint: string | null = null;
+      let totals: Record<Measure, number | null> | null = null;
+      for (;;) {
+        if (batch.counts.pages >= maxPages) throw new ConnectorError('PAGE_LIMIT_REACHED');
+        const payload = object(await readJson(new URL(`${base}/query-data`), { method: 'POST', headers,
+          body: JSON.stringify({ semanticModelId: mapping.modelId, interval: { start, end, timezone: config.timezone }, fields,
+            filters: [{ field: mapping.dimensions.day, prefix: 'IS', condition: 'RANGE_IE', values: [start, end] }],
+            sort: { fieldName: mapping.dimensions.day, order: 'ASC' }, paging: { limit: pageSize, offset }, formattingEnabled: false, totalsIncluded: true }) }, config));
+        if (!Array.isArray(payload.results)) throw new ConnectorError('INVALID_RESPONSE');
+        const metadata = object(payload.pagingMetadata);
+        // Wix may acknowledge more rows than requested, up to its API ceiling.
+        if (metadata.count !== payload.results.length || metadata.offset !== offset || payload.results.length > 1000) throw new ConnectorError('INVALID_PAGINATION');
+        // An unmeasured month cannot become zero in a larger measured period.
+        if (!payload.results.length && !offset) {
+          batch.status = 'empty'; batch.coverage = { from: config.from, to: config.to, complete: false, observedAt, reason: 'Aucune mesure Wix sur une sous-période ; aucun zéro normalisé créé.' }; return batch;
+        }
+        // Totals are scoped to this month and may be omitted after its first page.
+        totals = payload.totals === undefined && offset > 0 && totals ? totals : values(object(payload.totals).fields);
+        const currentFingerprint = fingerprint(totals);
+        if (totalsFingerprint !== null && totalsFingerprint !== currentFingerprint) throw new ConnectorError('WIX_TOTALS_CHANGED');
+        totalsFingerprint = currentFingerprint;
+        const rows: WixPaymentAnalyticsSlice[] = [];
+        for (const raw of payload.results) {
+          batch.counts.read++;
+          const row = parseSlice(raw, start, end), key = fingerprint(row.dimensions);
+          if (seen.has(key)) throw new ConnectorError('DUPLICATE_WIX_AGGREGATE');
+          seen.add(key); rows.push(row);
+        }
+        windowRows.push(...rows); batch.breakdown.push(...rows); batch.counts.pages++; batch.counts.accepted = batch.breakdown.length;
+        if (payload.results.length < pageSize) {
+          const reconciliation = reconcileWixPaymentsAnalytics(windowRows, totals);
+          allWindowsNetEligible &&= reconciliation.eligible;
+          windowTotals.push(totals);
+          break;
+        }
+        offset += payload.results.length;
       }
-      // The source supplies whole-period totals on its first page only.
-      // If repeated later, they must still match; final row sums must reconcile.
-      const totals = payload.totals === undefined && offset > 0 && batch.sourceTotals ? batch.sourceTotals : values(object(payload.totals).fields);
-      const currentFingerprint = fingerprint(totals);
-      if (totalsFingerprint !== null && totalsFingerprint !== currentFingerprint) throw new ConnectorError('WIX_TOTALS_CHANGED');
-      totalsFingerprint = currentFingerprint; batch.sourceTotals = totals;
-      const rows: WixPaymentAnalyticsSlice[] = [];
-      for (const raw of payload.results) {
-        batch.counts.read++;
-        const row = parseSlice(raw, from.toString(), to.toString()), key = fingerprint(row.dimensions);
-        if (seen.has(key)) throw new ConnectorError('DUPLICATE_WIX_AGGREGATE');
-        seen.add(key); rows.push(row);
-      }
-      batch.breakdown.push(...rows); batch.counts.pages++; batch.counts.accepted = batch.breakdown.length;
-      if (payload.results.length < pageSize) {
-        const reconciliation = reconcileWixPaymentsAnalytics(batch.breakdown, totals);
-        const metricNames: Partial<Record<Measure, string>> = { paid: 'wix_amount_paid', refunds: 'wix_refunds_signed', revenue: 'wix_total_revenue', giftCards: 'wix_gift_cards_redeemed', successfulPayments: 'wix_successful_payments' };
-        const aggregate = (metric: string, amount: Money | null, count: number | null): SourceAggregate => ({ source: 'wix', accountId: config.siteId!,
-          externalId: fingerprint([mapping.version, config.siteId, metric, config.from, config.to, config.timezone, 'EUR']), observedAt, connectorVersion: mapping.version,
-          metric, from: config.from, to: config.to, timezone: config.timezone, amount, count, taxBasis: 'gross', dimensions: {}, transactionGrain: false });
-        const records = keys.filter(key => metricNames[key] && totals[key] !== null).map(key => aggregate(metricNames[key]!, key === 'successfulPayments' ? null : { minor: totals[key]!, currency: 'EUR' }, key === 'successfulPayments' ? totals[key] : null));
-        if (reconciliation.eligible) records.push(aggregate('net_cash', { minor: totals.revenue!, currency: 'EUR' }, null));
-        await config.commitPage?.({ records, checkpoint: { completedThrough: config.to }, terminal: true });
-        batch.records = records; batch.normalizedNetEligible = reconciliation.eligible; batch.normalizationReason = reconciliation.reason;
-        batch.definitionVersion = reconciliation.eligible ? 'net-ttc-v1' : null; batch.checkpoint = { completedThrough: config.to }; batch.status = 'complete';
-        batch.coverage = { from: config.from, to: config.to, complete: true, observedAt, reason: `${reconciliation.reason} Devise de reporting du site ; données observées à la synchronisation.` };
-        return batch;
-      }
-      offset += payload.results.length;
+      windowFrom = windowTo;
     }
-    throw new ConnectorError('PAGE_LIMIT_REACHED');
+    const totals = {} as Record<Measure, number | null>;
+    for (const key of keys) {
+      // Unknown monthly measures remain unknown in the full period.
+      if (windowTotals.some(total => total[key] === null)) { totals[key] = null; continue; }
+      const sum = windowTotals.reduce((sum, total) => sum + BigInt(total[key]!), 0n);
+      if (sum > BigInt(Number.MAX_SAFE_INTEGER) || sum < BigInt(Number.MIN_SAFE_INTEGER)) throw new ConnectorError('INVALID_WIX_AMOUNT');
+      totals[key] = Number(sum);
+    }
+    const reconciliation = reconcileWixPaymentsAnalytics(batch.breakdown, totals);
+    const eligible = allWindowsNetEligible && reconciliation.eligible;
+    const reason = !allWindowsNetEligible && reconciliation.eligible ? 'Une sous-période ne permet pas net-ttc-v1 ; mesures Wix conservées.' : reconciliation.reason;
+    const metricNames: Partial<Record<Measure, string>> = { paid: 'wix_amount_paid', refunds: 'wix_refunds_signed', revenue: 'wix_total_revenue', giftCards: 'wix_gift_cards_redeemed', successfulPayments: 'wix_successful_payments' };
+    const aggregate = (metric: string, amount: Money | null, count: number | null): SourceAggregate => ({ source: 'wix', accountId: config.siteId!,
+      externalId: fingerprint([mapping.version, config.siteId, metric, config.from, config.to, config.timezone, 'EUR']), observedAt, connectorVersion: mapping.version,
+      metric, from: config.from, to: config.to, timezone: config.timezone, amount, count, taxBasis: 'gross', dimensions: {}, transactionGrain: false });
+    const records = keys.filter(key => metricNames[key] && totals[key] !== null).map(key => aggregate(metricNames[key]!, key === 'successfulPayments' ? null : { minor: totals[key]!, currency: 'EUR' }, key === 'successfulPayments' ? totals[key] : null));
+    if (eligible) records.push(aggregate('net_cash', { minor: totals.revenue!, currency: 'EUR' }, null));
+    await config.commitPage?.({ records, checkpoint: { completedThrough: config.to }, terminal: true });
+    batch.sourceTotals = totals; batch.records = records; batch.normalizedNetEligible = eligible; batch.normalizationReason = reason;
+    batch.definitionVersion = eligible ? 'net-ttc-v1' : null; batch.checkpoint = { completedThrough: config.to }; batch.status = 'complete';
+    batch.coverage = { from: config.from, to: config.to, complete: true, observedAt, reason: `${reason} Devise de reporting du site ; données observées à la synchronisation.` };
+    return batch;
   } catch (error) {
     batch.status = batch.counts.pages ? 'partial' : 'failed'; batch.safeError = safeConnectorError(error);
     batch.normalizationReason = 'Lecture ou réconciliation incomplète ; aucun agrégat publié.';

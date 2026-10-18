@@ -1,3 +1,9 @@
+## 18 octobre 2026 : réparation de l’actualisation, candidat avant publication
+
+Réactivation par défaut du lecteur financier avec arrêt explicite conservé, reprise indexée et publication confirmée, fraîcheur fondée sur le début réel de collecte, lectures Wix mensuelles rapprochées, actualisation automatique de l’écran et surveillance des quinze flux. Les jours historiques couverts restent lisibles ; les périodes non couvertes restent sans valeur.
+
+La revue indépendante des correctifs ciblés est terminée. La réception globale, la publication et l’observation de plusieurs passages réels restent des étapes séparées. Aucun changement de définition métier, de source externe, de base ou de cadence des flux n’est inclus. Le déclencheur Supabase existant reste utilisé.
+
 ## 26 septembre 2026 — complément des exclusions avant mise en service
 
 Cinq sessions de recette supplémentaires ajoutées à la liste fermée : dix sessions exclues au total. Les sessions ordinaires restent conservées ; aucune personne ni plage horaire exclue par déduction. Les agrégats des jours concernés devront être renouvelés après publication, car le filtre ne corrige pas les totaux déjà stockés. Réception visuelle privée réservée au propriétaire.

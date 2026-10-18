@@ -61,7 +61,7 @@ export async function readLiveKpiFunnel(db: Database, filters: DashboardFilters,
   pagedRows(db,'ads',{order:'id',columns:['id','external_id','campaign_id','creative_id','ad_name']}),
   pagedRows(db,'link_revisions',{order:'id',columns:['id','campaign','medium','label']}),
   pagedRows(db,'appointments',{order:'id'}),
-  readNotionCommerceReport(db,{...filters,source:'all',campaign:'',tunnel:'all'},env).catch(()=>null),
+  readNotionCommerceReport(db,{...filters,source:'all',campaign:'',tunnel:'all'},env,undefined,{details:'all-history',coverage:'per-day'}).catch(()=>null),
   readKpiWindows(db,'meta',env.META_AD_ACCOUNT_ID?.replace(/^act_/,'')).catch(()=>{failures.push('meta (fenêtres)');return new Map<string,KpiStoredWindow>();}),
  ]);
  const completeRuns = runs.filter(complete), runById = new Map(completeRuns.map(r=>[r.id,r]));

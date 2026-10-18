@@ -483,3 +483,12 @@ Le SQL opérationnel installe un déclencheur privé et son journal technique li
 Une réponse complète peut contenir plusieurs unités pour le même flux, dont des étapes intermédiaires partielles. Le journal SQL conservait ces étapes mais classait à tort cette réponse comme invalide, provoquant un passage supplémentaire. Le contrôle utilise désormais la dernière unité de chaque flux ; une erreur réelle, une unité mal formée ou une dernière étape incomplète reste refusée. Les données métier et la cadence ne changent pas.
 
 Validation : anomalie reproduite avant correction ; onze tests PostgreSQL isolés réussis après correction, avec flux entrelacés et contre-exemples. La fonction corrigée reste à installer manuellement : MCP apply_migration renvoie Invalid or expired requestState. Le cron installé fonctionne ; deux passages automatiques complets ont été reçus. La tenue dans la durée reste à observer.
+
+
+## 18 octobre 2026 : réparation de l’actualisation complète
+
+La collecte financière était exclue par défaut après une panne de reprise. Les recherches de marqueurs utilisent désormais le périmètre indexé complet et une pagination bornée. La publication est confirmée avant clôture ; son début de lecture reste la borne de couverture. La réactivation conserve une pause explicite de secours. Les lectures de détails historiques restent disponibles aux consommateurs qui contrôlent chaque journée ; les totaux des périodes incomplètes restent absents.
+
+La collecte du CA Wix découpe la période en mois Paris disjoints et rapproche chaque réponse avant de publier. Le défaut de réponse multi-mois est couvert par un test synthétique, sans donnée ou montant réel embarqué. L’écran observe les nouvelles publications et recharge ses filtres appliqués automatiquement. La surveillance indépendante vérifie les quinze flux et les échecs de reprise récents.
+
+Revue indépendante : trois réserves de couverture et de surveillance corrigées puis retestées. Contrôles réels et version publiée à consigner séparément ; les tests locaux ne sont pas présentés comme des cycles de production.

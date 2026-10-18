@@ -80,7 +80,7 @@ test('une lecture acquisition interrompue conserve les autres métriques et ne r
  }finally{if(before===undefined)delete process.env.WIX_SITE_ID;else process.env.WIX_SITE_ID=before;}
 });
 
-// Lecteur des ventes suspendu (réglage absent) : publication synthétique relue telle quelle, dates issues du rapport.
+// Lecteur des ventes explicitement suspendu : publication synthétique relue telle quelle, dates issues du rapport.
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value as Row).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const commerceRaw=JSON.stringify({clients:{dataSourceId:'ds-clients'},payments:{dataSourceId:'ds-payments'},schedule:{dataSourceId:'ds-schedule'},parcours:{dataSourceId:'ds-parcours'}});
@@ -93,7 +93,7 @@ function commercePublication(observedAt:string):Record<string,Row[]>{
  return {
   sync_runs:[{id:run,source:'notion',source_namespace:'ds-parcours',stream_key:'commerce_declared_snapshot',status:'complete',pagination_complete:true,rows_rejected:0,query_profile_key:profile,period_to:observedAt,started_at:observedAt,finished_at:observedAt}],
   source_aggregates:[
-   {...base,metric_key:'notion_commerce_overview',dimensions_key:'all',dimensions:{version:NOTION_COMMERCE_VERSION,observedAt,totals:counts,dailyCount:1,dailyHash:digest(daily),paidSalesSummary:summary,paidSalesCount:1,paidSalesHash:digest(details),coverage:{sourceRows:{},undatedClientStarts:0,futureClientStarts:0}}},
+   {...base,metric_key:'notion_commerce_overview',dimensions_key:'all',dimensions:{version:NOTION_COMMERCE_VERSION,startedAt:observedAt,observedAt,totals:counts,dailyCount:1,dailyHash:digest(daily),paidSalesSummary:summary,paidSalesCount:1,paidSalesHash:digest(details),coverage:{sourceRows:{},undatedClientStarts:0,futureClientStarts:0}}},
    {...base,metric_key:'notion_commerce_day',dimensions_key:'2026-09-03',dimensions:daily[0]},
    {...base,metric_key:'notion_commerce_paid_sales',dimensions_key:'paid-sales:000000',dimensions:{details}},
   ],
@@ -102,14 +102,16 @@ function commercePublication(observedAt:string):Record<string,Row[]>{
 const selectFrom=(tables:Record<string,Row[]>)=>async(table:string,options:{eq?:Record<string,string>}={})=>(tables[table]??[]).filter(row=>Object.entries(options.eq??{}).every(([key,value])=>String(row[key])===value));
 test('pause du lecteur des ventes : la dernière publication reste lue avec sa propre date ; une lecture en échec ne fait pas échouer le tableau',async()=>{
  const saved={NOTION_COMMERCE_CONFIG:process.env.NOTION_COMMERCE_CONFIG,BLG_COMMERCE_READER:process.env.BLG_COMMERCE_READER};
- process.env.NOTION_COMMERCE_CONFIG=commerceRaw;delete process.env.BLG_COMMERCE_READER;
+ process.env.NOTION_COMMERCE_CONFIG=commerceRaw;process.env.BLG_COMMERCE_READER='paused';
  try{
-  for(const observedAt of ['2026-09-05T07:00:00Z','2026-08-20T16:30:00Z']){
+  for(const observedAt of ['2026-09-08T07:00:00Z','2026-09-05T07:00:00Z','2026-08-20T16:30:00Z']){
    const {db}=stub();db.select=selectFrom(commercePublication(observedAt)) as Database['select'];
    const result=await dashboard(db,filters,'live');
    const clients=result.metrics.find(m=>m.id==='new_clients')!,sales=result.metrics.find(m=>m.id==='paid_sales')!;
-   assert.equal(clients.value,1);assert.equal(clients.updatedAt,observedAt,'date du rapport lu, jamais figée');
-   assert.equal(sales.value,1);assert.equal(sales.updatedAt,observedAt);
+   const coversPeriod=observedAt.startsWith('2026-09-08');
+   assert.equal(clients.value,coversPeriod?1:null,'historique couvert relu; chevauchement ou absence de couverture sans faux zéro');assert.equal(clients.updatedAt,observedAt,'date du rapport lu, jamais figée');
+   assert.equal(sales.value,coversPeriod?1:null);assert.equal(sales.updatedAt,observedAt);
+   assert.equal(result.commerce?.available,coversPeriod);
    assert.equal(result.metrics.find(m=>m.id==='cash')?.value,199000);
   }
   const {db}=stub();let commerceReads=0;

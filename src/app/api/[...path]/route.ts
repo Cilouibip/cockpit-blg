@@ -20,6 +20,7 @@ import { postHogPeriod,postHogMasterclassPeriod,postHogScopeFromFilters } from '
 import { synchronizeWixTransactionCounts } from '@/lib/wix-transaction-counts';
 import { commerceControlPass, tickSyncJobs } from '@/lib/sync-jobs';
 import { readSyncHealth } from '@/lib/sync-health';
+import { readRefreshState } from '@/lib/refresh-state';
 import { synchronizeLeadEntries } from '@/lib/sync-lead-entries';
 import { postHogReportRequest,requestPostHogReport } from '@/lib/posthog-report-request';
 import { invalidateSourceWindow } from '@/lib/source-snapshots';
@@ -68,6 +69,15 @@ async function handle(request:Request){
   requireUser(request,config);
   if(!['GET','HEAD'].includes(method))requireOrigin(request,config);
   if(route==='logout'&&method==='POST')return json({ok:true},200,{'Set-Cookie':cookieHeader('',config,true)});
+  if(route==='refresh'&&(method==='GET'||method==='POST')){
+   if(config.mode==='demo')return json({publicationId:null,pending:false,stale:false});
+   const state=await readRefreshState();
+   if(method==='GET'||(!state.stale&&!state.pending))return json(state);
+   await rateLimit(config,'refresh','shared',2,60);
+   // Uses the exact background collector and shared lease, never a parallel import.
+   await tickSyncJobs();
+   return json(await readRefreshState());
+  }
   if(route==='connections'&&method==='GET')return json(await connections());
   if(route==='kpi-funnel'&&method==='GET')return json(await readLiveKpiFunnel(database(),parseFilters(url),{includeTests:url.searchParams.get('includeTests')==='true'}));
   if(route==='dashboard'&&method==='GET'){

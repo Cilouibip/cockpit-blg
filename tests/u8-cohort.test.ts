@@ -122,7 +122,7 @@ import { buildNotionCommerceReport } from '../src/lib/notion-commerce-report';
 import { publishNotionCommerceReport } from '../src/lib/notion-commerce-storage';
 import { commerceConfig, payment, schedule, parcours, client, snapshot as commerceSnapshot } from './commerce-fixtures';
 
-async function commerceScenario(options: { reader?: string; observedAt?: string; now?: string } = {}) {
+async function commerceScenario(options: { reader?: string; observedAt?: string; startedAt?:string; now?: string } = {}) {
   const at = '2026-09-23T08:50:00Z', observedAt = options.observedAt ?? '2026-09-22T12:55:00Z';
   const memory = memoryKpiDatabase({
     sync_runs: [
@@ -139,7 +139,7 @@ async function commerceScenario(options: { reader?: string; observedAt?: string;
   const report = buildNotionCommerceReport(commerceSnapshot({
     clients: [client('client-a')], payments: [payment('payment-a', { day: '2026-09-21', rawDate: '2026-09-21' })],
     schedules: [schedule('schedule-a', { day: '2026-09-21', rawDate: '2026-09-21' })], parcours: [parcours('parcours-a', { startDay: '2026-09-21', rawStart: '2026-09-21', closingDay: '2026-09-20', rawClosing: '2026-09-20' })],
-    startedAt: '2026-09-22T12:50:00Z', observedAt,
+    startedAt: options.startedAt ?? '2026-09-22T12:50:00Z', observedAt,
   }));
   await publishNotionCommerceReport(memory.db, commerceConfig, report);
   const commerceEnv: NodeJS.ProcessEnv = { ...env, NOTION_CLIENT_DATA_SOURCE_ID: 'clients-ds', NOTION_COMMERCE_CONFIG: JSON.stringify(commerceConfig), ...(options.reader ? { BLG_COMMERCE_READER: options.reader } : {}) };
@@ -149,16 +149,16 @@ async function commerceScenario(options: { reader?: string; observedAt?: string;
 }
 
 test('U8 ventes sous pause : lecture suspendue, dernière publication et dernière tentative datées, jours non couverts jamais à zéro', async () => {
-  const snapshot = await commerceScenario();
-  assert.deepEqual(snapshot.daily.map(d => [d.date, d.sales, d.cash_collected_eur]), [['2026-09-21', 1, 100], ['2026-09-22', null, null], ['2026-09-23', null, null]], 'le 22/09 n’est couvert que jusqu’à 14:55 ; le 23/09 pas du tout');
+  const snapshot = await commerceScenario({reader:'paused'});
+  assert.deepEqual(snapshot.daily.map(d => [d.date, d.sales, d.cash_collected_eur]), [['2026-09-21', 1, 100], ['2026-09-22', null, null], ['2026-09-23', null, null]], 'le 22/09 n’est couvert que jusqu’à 14:50 ; le 23/09 pas du tout');
   assert.equal(snapshot.totals.sales, null, 'un seul jour inconnu rend le total indisponible');
   assert.equal(snapshot.totals.cash_collected_eur, null);
   const line = snapshot.coverage.find(c => c.field_group === 'Ventes payées et cash')!;
   assert.equal(line.status, 'available', 'la dernière publication complète reste valide et lue ; les jours qu’elle ne couvre pas sont non mesurés');
   assert.match(line.reason!, /^Lecture suspendue \(réglage BLG_COMMERCE_READER\)/);
-  assert.match(line.reason!, /dernière publication complète du 22\/09\/2026 14:55/);
+  assert.match(line.reason!, /dernière publication complète du 22\/09\/2026 14:50/);
   assert.match(line.reason!, /dernière tentative le 23\/09\/2026 08:00 \(échec\)/);
-  assert.equal(line.through, '2026-09-22T12:55:00Z');
+  assert.equal(line.through, '2026-09-22T12:50:00Z');
   assert.equal(line.stale, true, 'une publication de la veille est ancienne');
   assert.equal(line.last_error, 'COMMERCE_CHECKPOINT_TIMEOUT');
   const contracted = snapshot.coverage.find(c => c.field_group === 'CA contracté')!;
@@ -169,8 +169,8 @@ test('U8 ventes sous pause : lecture suspendue, dernière publication et derniè
 test('U8 ventes : lecteur actif avec tentative en échec, et publication couvrant toute la veille', async () => {
   const active = await commerceScenario({ reader: 'active' });
   const line = active.coverage.find(c => c.field_group === 'Ventes payées et cash')!;
-  assert.match(line.reason!, /^Dernier rapport valide conservé \(dernière publication complète du 22\/09\/2026 14:55\) ; dernière tentative le 23\/09\/2026 08:00 \(échec\)/);
-  const covered = await commerceScenario({ observedAt: '2026-09-22T22:30:00Z' });
-  assert.deepEqual(covered.daily.map(d => [d.sales, d.partial_day !== null]), [[1, false], [0, false], [0, true]], 'publiée à 00:30 le 23/09 : le 22/09 est entièrement couvert, le 23/09 est partiel et signalé');
+  assert.match(line.reason!, /^Dernier rapport valide conservé \(dernière publication complète du 22\/09\/2026 14:50\) ; dernière tentative le 23\/09\/2026 08:00 \(échec\)/);
+  const covered = await commerceScenario({ startedAt:'2026-09-22T22:30:00Z', observedAt: '2026-09-22T22:35:00Z' });
+  assert.deepEqual(covered.daily.map(d => [d.sales, d.partial_day !== null]), [[1, false], [0, false], [0, true]], 'collecte commencée à 00:30 le 23/09 : le 22/09 est entièrement couvert, le 23/09 est partiel et signalé');
   assert.equal(covered.totals.sales, 1);
 });

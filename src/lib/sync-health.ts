@@ -1,6 +1,6 @@
 import { Temporal } from '@js-temporal/polyfill';
 import { database, type Database, type Row } from './db';
-import { jobScope, loadSyncJobRuns, PILOT_REFRESH_JOBS, syncJobRunFilter, type SyncJob } from './sync-jobs';
+import { jobScope, loadSyncJobRuns, ALL_REFRESH_JOBS, syncJobRunFilter, syncJobWorkRunFilter, type SyncJob } from './sync-jobs';
 
 export type SyncHealthState = 'healthy' | 'stale' | 'unknown';
 export const SYNC_HEALTH_CODES = ['PUBLICATION_CURRENT','CONFIGURATION_UNKNOWN','DATABASE_UNAVAILABLE','CLOCK_INVALID','PUBLICATION_ABSENT','PUBLICATION_INVALID','TIMESTAMP_INVALID','TIMESTAMP_FUTURE','TIMESTAMP_ORDER_INVALID','CURRENT_WINDOW_MISMATCH','COVERAGE_INVALID','PUBLICATION_STALE','LATEST_ATTEMPT_FAILED'] as const;
@@ -32,7 +32,7 @@ export function evaluateSyncJobHealth(job: SyncJob, rows: Row[], scope: { namesp
  if ([publication.started_at,publication.finished_at,publication.source_as_of].some(at => compare(at,new Date(now).toISOString()) > 0)) return result(job, 'unknown', 'TIMESTAMP_FUTURE');
  if (compare(publication.started_at,publication.finished_at) > 0 || compare(publication.source_as_of,publication.finished_at) > 0 || compare(publication.period_from,publication.period_to) >= 0) return result(job, 'unknown', 'TIMESTAMP_ORDER_INVALID');
  let cutoff = Math.min(started, finished, observed);
- if (job === 'notion' || job === 'forms') {
+ if (['notion','forms','quiz_entries','client_history','commerce','meta_catalog'].includes(job)) {
   // Forms uses DEFAULT now() for source_as_of/start (transaction start), but clock_timestamp()
   // for period_to (claim cutoff). Their order is not a coverage invariant; both stay in the conservative min.
   // Notion explicitly publishes source_as_of=period_to. Lower delta bounds stay the worker's existing ones.
@@ -41,7 +41,7 @@ export function evaluateSyncJobHealth(job: SyncJob, rows: Row[], scope: { namesp
   cutoff = Math.min(cutoff, to);
  } else {
   const today = Temporal.Instant.fromEpochMilliseconds(now).toZonedDateTimeISO('Europe/Paris').toPlainDate();
-  const expectedFrom = job === 'masterclass' ? today.with({ day: 1 }).subtract({ months: 1 }) : today.subtract({ days: 35 });
+  const expectedFrom = ['masterclass','quiz','wix','receipts'].includes(job) ? today.with({ day: 1 }).subtract({ months: 1 }) : today.subtract({ days: 35 });
   const expectedTo = today.add({ days: 1 });
   const bound = (day: Temporal.PlainDate) => day.toZonedDateTime('Europe/Paris').toInstant().epochMilliseconds;
   if (compare(publication.period_from,new Date(bound(expectedFrom)).toISOString()) !== 0 || compare(publication.period_to,new Date(bound(expectedTo)).toISOString()) !== 0) return result(job, 'unknown', 'CURRENT_WINDOW_MISMATCH');
@@ -52,7 +52,9 @@ export function evaluateSyncJobHealth(job: SyncJob, rows: Row[], scope: { namesp
  const proof = { cutoff, finished, now };
  if (now - cutoff > MAX_AGE_MS) return result(job, 'stale', 'PUBLICATION_STALE', proof);
  // Only an attempt from this exact scope can flag a collector failure.
- const latest = exact.sort((a,b) => (instant(b.started_at) ?? Infinity) - (instant(a.started_at) ?? Infinity))[0];
+ const workFilter = syncJobWorkRunFilter(job,scope);
+ const attempts = workFilter ? [...exact,...rows.filter(row=>Object.entries(workFilter).every(([key,value])=>row[key]===value))] : exact;
+ const latest = attempts.sort((a,b) => (instant(b.started_at) ?? Infinity) - (instant(a.started_at) ?? Infinity))[0];
  const latestAt = latest && instant(latest.started_at);
  if (latestAt === null || latestAt === undefined) return result(job, 'unknown', 'TIMESTAMP_INVALID', proof);
  if (compare(latest.started_at,new Date(now).toISOString()) > 0) return result(job, 'unknown', 'TIMESTAMP_FUTURE', proof);
@@ -62,7 +64,7 @@ export function evaluateSyncJobHealth(job: SyncJob, rows: Row[], scope: { namesp
 
 export async function readSyncHealth(db: Database | undefined = undefined, env: NodeJS.ProcessEnv = process.env, now: number = Date.now()): Promise<SyncHealthReport> {
  const store = (() => { try { return db ?? database(); } catch { return null; } })();
- const jobs = await Promise.all(PILOT_REFRESH_JOBS.map(async job => {
+ const jobs = await Promise.all(ALL_REFRESH_JOBS.map(async job => {
   if (!validClock(now)) return result(job, 'unknown', 'CLOCK_INVALID');
   let scope: ReturnType<typeof jobScope>;
   try { scope = jobScope(job, env); } catch { return result(job, 'unknown', 'CONFIGURATION_UNKNOWN'); }
@@ -74,5 +76,5 @@ export async function readSyncHealth(db: Database | undefined = undefined, env: 
   } catch { return result(job, 'unknown', 'DATABASE_UNAVAILABLE'); }
  }));
  const status = jobs.some(job => job.state === 'unknown') ? 'unknown' : jobs.some(job => job.state === 'stale') ? 'stale' : 'healthy';
- return { status, checkedAt: validClock(now) ? new Date(now).toISOString() : null, maxAgeMinutes: 60, jobs, limits: ['GITHUB_SCHEDULE_CAN_BE_DELAYED','NOTION_ARCHIVE_INVENTORY_HAS_SEPARATE_COVERAGE','LIVE_BROWSER_DETAIL_NOT_MONITORED','NOTIFICATION_DELIVERY_NOT_GUARANTEED'] };
+ return { status, checkedAt: validClock(now) ? new Date(now).toISOString() : null, maxAgeMinutes: 60, jobs, limits: ['INDEPENDENT_MONITOR_SCHEDULE_CAN_BE_DELAYED','NOTION_ARCHIVE_INVENTORY_HAS_SEPARATE_COVERAGE','LIVE_BROWSER_DETAIL_NOT_MONITORED','NOTIFICATION_DELIVERY_NOT_GUARANTEED'] };
 }
