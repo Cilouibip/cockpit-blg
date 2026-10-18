@@ -182,3 +182,9 @@
 #atelier-a .results-table-wide th,#atelier-a .results-table-wide td { width:7%; }
 #atelier-a .results-table-wide th:first-child,#atelier-a .results-table-wide td:first-child { width:23%; }
 #atelier-a .results-table-wide td .a-t-context { display:block; white-space:normal; }
+
+/* Finance amounts remain visibly separate in the existing summary card. */
+.results-finance-scope{margin:0;color:var(--a-muted);font-size:13px}
+.results-finance-separate{margin:12px 0 0;border-top:1px solid var(--a-line);padding-top:10px;font-size:14px}
+.results-finance-separate>div{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.results-finance-separate dt{font-weight:500}.results-finance-separate dd{margin:0;font-weight:600;white-space:nowrap}

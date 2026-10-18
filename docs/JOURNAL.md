@@ -523,3 +523,7 @@ Tests ciblés : ordre des rapports, circulation des lectures légères, libérat
 ## 18 octobre 2026 : publication des statistiques, option A
 
 Correction032 préparée après reproduction du coût du rapprochement sur copie PostgreSQL17 synthétique. Changement borné à la jointure matérialisée et au filtre des lignes appariées. Équivalence030/032, rejeu, interruption transactionnelle, identité des lignes et manifeste contrôlés. Le candidat031 du lecteur reste horspublication après échec du critère structurel. Revue indépendante favorable ;186 contrôles PostgreSQL et762 tests unitaires réussis, typage et compilation réussis. Les observations automatiques en production restent nécessaires avant toute clôture métier.
+
+## 2026-10-18 : finance demandée, candidate revue
+
+Raccordement du CA contracté depuis les dates de closing et totaux de vente déjà collectés, montant compté une fois par parcours identifiable. Les offres inconnues restent distinctes et les contrats ambigus ne deviennent pas des zéros. Carte autonome pour BLG Club encaissé sans addition au relevé Wix. Nouveaux clients rattachés au premier paiement confirmé, sans nouvelle vente pour les échéances suivantes. Aucun changement des collecteurs email/prospects, de la cadence ni du schéma SQL. Revue indépendante corrigée ; tests financiers ciblés, contrôle de types et build. Réception après publication et observation des cycles automatiques à effectuer.

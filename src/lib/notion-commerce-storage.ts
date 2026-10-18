@@ -1,3 +1,4 @@
+import {contractsInPeriod,type SignedContract} from './finance-summary';
 import {createHash} from 'node:crypto';
 import {Temporal} from '@js-temporal/polyfill';
 import type {Database,Row} from './db';
@@ -6,7 +7,7 @@ import {COMMERCE_COUNTERS,NOTION_COMMERCE_VERSION,type CommerceCounters,type Com
 import {selectPaidSalesPeriod,confirmedSalesByOffer,OFFER_CATEGORIES,type PaidSalesReport} from './paid-sales';
 import {notionCommerceConfig,notionCommerceProfile,type NotionCommerceConfig} from '../connectors/notion-commerce';
 import type {DashboardFilters} from './ui-contract';
-const STREAM='commerce_declared_snapshot',OVERVIEW='notion_commerce_overview',DAY='notion_commerce_day',MEMBERS='notion_commerce_membership',PAID_SALES='notion_commerce_paid_sales';
+const STREAM='commerce_declared_snapshot',OVERVIEW='notion_commerce_overview',DAY='notion_commerce_day',MEMBERS='notion_commerce_membership',PAID_SALES='notion_commerce_paid_sales',CONTRACTS='notion_commerce_contracts';
 /** Padded because source_aggregates sorts dimensions_key lexically when reconstructing detail chunks. */
 export const paidSalesChunkKey=(index:number)=>'paid-sales:'+String(index).padStart(6,'0');
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
@@ -25,10 +26,11 @@ export function paidSalesDetailChunks(details:PaidSalesReport['details'],maxByte
 async function publications(db:Database,namespace:string,profile?:string,periodTo?:string){return db.select('sync_runs',{eq:{source:'notion',source_namespace:namespace,stream_key:STREAM,status:'complete',pagination_complete:'true',rows_rejected:'0',...(profile?{query_profile_key:profile}:{}),...(periodTo?{period_to:periodTo}:{})},order:'period_to,started_at,id',descending:true,limit:5});}
 async function storedPublicationMatches(db:Database,run:Row,report:CommerceReport,memberKeys:string[],fingerprint:string){
  const overview=await rowsForRun(db,String(run.id),OVERVIEW),info=overview.length===1?overview[0].dimensions as Row:null;
- if(!info||info.reportFingerprint!==fingerprint||info.version!==NOTION_COMMERCE_VERSION||info.observedAt!==report.startedAt||info.readCompletedAt!==report.observedAt||info.startedAt!==report.startedAt||!info.coverage||!info.paidSalesSummary||digest(info.coverage)!==digest(report.coverage)||digest(info.paidSalesSummary)!==digest(paidSalesSummary(report))||!validCounts(info.totals)||digest(info.totals)!==digest(report.totals)||info.dailyCount!==report.daily.length||info.dailyHash!==digest(report.daily)||info.paidSalesHash!==digest(report.paidSales.details)||info.paidSalesCount!==report.paidSales.details.length||info.membershipHash!==report.membershipHash||info.sourceMemberCount!==memberKeys.length||info.sourceMemberHash!==digest(memberKeys))return false;
+ if(!info||info.reportFingerprint!==fingerprint||info.version!==NOTION_COMMERCE_VERSION||info.observedAt!==report.startedAt||info.readCompletedAt!==report.observedAt||info.startedAt!==report.startedAt||!info.coverage||!info.paidSalesSummary||digest(info.coverage)!==digest(report.coverage)||digest(info.paidSalesSummary)!==digest(paidSalesSummary(report))||!validCounts(info.totals)||digest(info.totals)!==digest(report.totals)||info.dailyCount!==report.daily.length||info.dailyHash!==digest(report.daily)||info.paidSalesHash!==digest(report.paidSales.details)||info.paidSalesCount!==report.paidSales.details.length||info.contractsCount!==report.contracts.length||info.contractsHash!==digest(report.contracts)||info.membershipHash!==report.membershipHash||info.sourceMemberCount!==memberKeys.length||info.sourceMemberHash!==digest(memberKeys))return false;
  const days=await rowsForRun(db,String(run.id),DAY),storedDays=days.map(r=>({date:String((r.dimensions as Row).date),counts:(r.dimensions as Row).counts}));
  if(days.length!==report.daily.length||digest(storedDays)!==digest(report.daily))return false;
  const paid=(await rowsForRun(db,String(run.id),PAID_SALES)).flatMap(r=>((r.dimensions as {details?:unknown}).details??[]));if(digest(paid)!==digest(report.paidSales.details))return false;
+ const contracts=(await rowsForRun(db,String(run.id),CONTRACTS)).flatMap(r=>((r.dimensions as {contracts?:unknown}).contracts??[]));if(digest(contracts)!==digest(report.contracts))return false;
  const members=(await rowsForRun(db,String(run.id),MEMBERS)).flatMap(r=>((r.dimensions as {keys?:unknown}).keys??[])).sort();
  return Array.isArray(members)&&digest(members)===digest(memberKeys);
 }
@@ -43,7 +45,7 @@ export async function publishNotionCommerceReport(db:Database,config:NotionComme
  const profile=notionCommerceProfile(config),namespace=config.parcours.dataSourceId,memberKeys=Object.entries(report.sourceMembers).flatMap(([family,ids])=>ids.map(id=>digest([namespace,family,id]))).sort();
  if(memberKeys.length>=29970)throw Error('COMMERCE_SOURCE_MEMBERS_LIMIT');
  if(new Set(memberKeys).size!==memberKeys.length)throw Error('DUPLICATE_COMMERCE_MEMBERS');
- const fingerprint=digest({profile,version:report.version,observedAt:report.startedAt,readCompletedAt:report.observedAt,startedAt:report.startedAt,totals:report.totals,paidSales:report.paidSales,coverage:report.coverage,daily:report.daily,membershipHash:report.membershipHash,memberKeys});
+ const fingerprint=digest({profile,version:report.version,observedAt:report.startedAt,readCompletedAt:report.observedAt,startedAt:report.startedAt,totals:report.totals,paidSales:report.paidSales,contracts:report.contracts,coverage:report.coverage,daily:report.daily,membershipHash:report.membershipHash,memberKeys});
  for(const run of await publications(db,namespace,profile,report.startedAt))if(await storedPublicationMatches(db,run,report,memberKeys,fingerprint))return {status:'complete' as const,runId:String(run.id),profile,counts:report.totals,membershipHash:report.membershipHash};
  const previous=(await publications(db,namespace))[0];
  if(previous){const oldRows=await rowsForRun(db,String(previous.id),MEMBERS),oldKeys=oldRows.flatMap(r=>((r.dimensions as Row).keys as string[])??[]).sort(),overview=await rowsForRun(db,String(previous.id),OVERVIEW),info=overview.length===1?overview[0].dimensions as Row:null;if(!info||oldKeys.length!==info.sourceMemberCount||digest(oldKeys)!==info.sourceMemberHash)throw Error('COMMERCE_PREVIOUS_MEMBERSHIP_INVALID');if(oldKeys.some(k=>!memberKeys.includes(k)))throw Error('COMMERCE_HISTORICAL_SOURCE_MEMBER_MISSING');}
@@ -54,14 +56,15 @@ export async function publishNotionCommerceReport(db:Database,config:NotionComme
   const rows:Row[]=report.daily.map(d=>({...base,metric_key:DAY,period_from:startOfParisDay(d.date),period_to:startOfParisDay(Temporal.PlainDate.from(d.date).add({days:1}).toString()),dimensions_key:d.date,value:d.counts.firstAccompanimentsStarted,dimensions:{date:d.date,counts:d.counts},source_locator:'notion:declared-commerce-day'}));
   for(let i=0;i<memberKeys.length;i+=30)rows.push({...base,metric_key:MEMBERS,period_from:'1970-01-01T00:00:00Z',period_to:report.startedAt,dimensions_key:'membership:'+i,value:memberKeys.slice(i,i+30).length,dimensions:{keys:memberKeys.slice(i,i+30)},source_locator:'notion:declared-commerce-source-membership'});
   let paidOffset=0;for(const chunk of paidSalesDetailChunks(report.paidSales.details)){rows.push({...base,metric_key:PAID_SALES,period_from:'1970-01-01T00:00:00Z',period_to:report.startedAt,dimensions_key:paidSalesChunkKey(paidOffset),value:chunk.length,dimensions:{details:chunk},source_locator:'notion:paid-sales-classification'});paidOffset+=chunk.length;}
-  rows.push({...base,metric_key:OVERVIEW,period_from:'1970-01-01T00:00:00Z',period_to:report.startedAt,dimensions_key:'all',value:report.totals.firstAccompanimentsStarted,dimensions:{version:report.version,observedAt:report.startedAt,readCompletedAt:report.observedAt,startedAt:report.startedAt,totals:report.totals,paidSalesSummary:paidSalesSummary(report),paidSalesCount:report.paidSales.details.length,paidSalesHash:digest(report.paidSales.details),coverage:report.coverage,dailyCount:report.daily.length,dailyHash:digest(report.daily),membershipHash:report.membershipHash,sourceMemberCount:memberKeys.length,sourceFamilyCounts:Object.fromEntries(Object.entries(report.sourceMembers).map(([family,ids])=>[family,ids.length])),sourceMemberHash:digest(memberKeys),reportFingerprint:fingerprint},source_locator:'notion:declared-commerce-overview'});
+  for(let i=0;i<report.contracts.length;i+=3)rows.push({...base,metric_key:CONTRACTS,period_from:'1970-01-01T00:00:00Z',period_to:report.startedAt,dimensions_key:'contracts:'+String(i).padStart(6,'0'),value:report.contracts.slice(i,i+3).length,dimensions:{contracts:report.contracts.slice(i,i+3)},source_locator:'notion:parcours-closing-and-schedule-total'});
+  rows.push({...base,metric_key:OVERVIEW,period_from:'1970-01-01T00:00:00Z',period_to:report.startedAt,dimensions_key:'all',value:report.totals.firstAccompanimentsStarted,dimensions:{version:report.version,observedAt:report.startedAt,readCompletedAt:report.observedAt,startedAt:report.startedAt,totals:report.totals,paidSalesSummary:paidSalesSummary(report),paidSalesCount:report.paidSales.details.length,paidSalesHash:digest(report.paidSales.details),contractsCount:report.contracts.length,contractsHash:digest(report.contracts),coverage:report.coverage,dailyCount:report.daily.length,dailyHash:digest(report.daily),membershipHash:report.membershipHash,sourceMemberCount:memberKeys.length,sourceFamilyCounts:Object.fromEntries(Object.entries(report.sourceMembers).map(([family,ids])=>[family,ids.length])),sourceMemberHash:digest(memberKeys),reportFingerprint:fingerprint},source_locator:'notion:declared-commerce-overview'});
   for(let i=0;i<rows.length;i+=100)await db.upsert('source_aggregates',rows.slice(i,i+100),'source,source_namespace,metric_key,period_from,period_to,dimensions_key,report_profile_key,sync_run_id');
   if(!await storedPublicationMatches(db,{id:runId},report,memberKeys,fingerprint))throw Error('COMMERCE_STAGED_REPORT_MISMATCH');
   await db.rpc('finish_sync',{p_run:runId,p_status:'complete',p_read:Object.values(report.coverage.sourceRows).reduce((a,b)=>a+b,0),p_rejected:0,p_complete:true,p_error:null});
   return {status:'complete' as const,runId,profile,counts:report.totals,membershipHash:report.membershipHash};
  }catch(e){if(runId)await db.rpc('finish_sync',{p_run:runId,p_status:'failed',p_read:0,p_rejected:0,p_complete:false,p_error:'COMMERCE_REPORT_FAILED'}).catch(()=>undefined);throw e;}
 }
-export interface CommerceDashboard {available:boolean;source:string;definitionState:'pending_business_choice';observedAt:string|null;counts:CommerceCounters|null;paidSales:PaidSalesReport|null;coverage:CommerceReport['coverage']|null;reason:string;runId?:string;provisional?:boolean;periodCovered?:boolean}
+export interface CommerceDashboard {available:boolean;source:string;definitionState:'pending_business_choice';observedAt:string|null;counts:CommerceCounters|null;paidSales:PaidSalesReport|null;contracts?:SignedContract[]|null;coverage:CommerceReport['coverage']|null;reason:string;runId?:string;provisional?:boolean;periodCovered?:boolean}
 /** Reads of one request share each publication row family; the memo never outlives the request. */
 export type CommerceReadMemo=Map<string,Promise<Row[]>>;
 export const commerceReadMemo=():CommerceReadMemo=>new Map();
@@ -76,14 +79,14 @@ export interface CommerceReadOptions {
 /** Indexed reads of a single immutable publication; no source call, write, or browser event. */
 export async function readNotionCommerceReport(db:Database,filters:DashboardFilters,env:Record<string,string|undefined>=process.env,memo?:CommerceReadMemo,options:CommerceReadOptions={}):Promise<CommerceDashboard|null>{
  const config=notionCommerceConfig(env.NOTION_COMMERCE_CONFIG);if(!config)return null;
- const unavailable=(reason:string):CommerceDashboard=>({available:false,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt:null,counts:null,paidSales:null,coverage:null,reason});
+ const unavailable=(reason:string):CommerceDashboard=>({available:false,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt:null,counts:null,paidSales:null,contracts:null,coverage:null,reason});
  if(filters.source!=='all'||filters.tunnel!=='all'||filters.campaign&&filters.campaign!=='all')return unavailable('Le rattachement de ces achats au filtre source, campagne ou parcours n’est pas établi.');
  const profile=notionCommerceProfile(config),namespace=config.parcours.dataSourceId,runs=await memoised(memo,'publications:'+namespace+':'+profile,()=>publications(db,namespace,profile));
  for(const run of runs){
   try{
   const id=String(run.id),rows=(metric:string)=>memoised(memo,id+':'+metric,()=>rowsForRun(db,id,metric));
   // The row families of a complete publication are immutable: read them together, validate them in order.
-  const [overview,stored,paidRows]=await Promise.all([rows(OVERVIEW),rows(DAY),rows(PAID_SALES)]);
+  const [overview,stored,paidRows,contractRows]=await Promise.all([rows(OVERVIEW),rows(DAY),rows(PAID_SALES),rows(CONTRACTS)]);
   if(overview.length!==1)continue;const info=overview[0].dimensions as Row;
   if(info.version!==NOTION_COMMERCE_VERSION||!validCounts(info.totals)||!Number.isSafeInteger(info.dailyCount)||Number(info.dailyCount)>=1000)continue;
   if(stored.length!==info.dailyCount)continue;
@@ -100,6 +103,12 @@ export async function readNotionCommerceReport(db:Database,filters:DashboardFilt
    if(!validPaidSales(historical))continue;
    paidSales=options.details==='all-history'?historical:selectPaidSalesPeriod(historical,filters.from,filters.to);
   }
+  let contracts:SignedContract[]|null=null;
+  if(info.contractsCount!==undefined||info.contractsHash!==undefined){
+   const allContracts=contractRows.flatMap(r=>((r.dimensions as {contracts?:SignedContract[]}).contracts??[]));
+   if(!Number.isSafeInteger(info.contractsCount)||allContracts.length!==info.contractsCount||digest(allContracts)!==info.contractsHash)continue;
+   contracts=options.details==='all-history'?allContracts:contractsInPeriod(allContracts,filters.from,filters.to);
+  }
   const counts=zero();for(const day of daily)if(day.date>=filters.from&&day.date<=filters.to)for(const key of COMMERCE_COUNTERS)counts[key]+=(day.counts as CommerceCounters)[key];
   // Legacy publications used completion for observedAt; their real collection
   // start is still available. Never turn that old cutoff into fresh coverage.
@@ -113,7 +122,7 @@ export async function readNotionCommerceReport(db:Database,filters:DashboardFilt
   if(!periodCovered&&options.coverage!=='per-day')return {...unavailable('La période demandée dépasse la dernière observation complète des achats.'),observedAt,runId:id,provisional:true,periodCovered:false};
   const coverage=info.coverage as CommerceReport['coverage'];
   const archiveNote=coverage?.retainedArchivedClients?` ${coverage.retainedArchivedClients} fiche Client conservée dans l’historique après confirmation de son statut archivé/corbeille dans Notion.`:'';
-  return {available:true,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt,counts:periodCovered?counts:null,paidSales,coverage,periodCovered,runId:String(run.id),provisional:filters.to>=observedDay,reason:'Sous-totaux des Parcours Notion disponibles. Personnes accompagnées, classement payeur, paiement rattaché et dates divergentes restent distincts ; historique métier non exhaustif.'+archiveNote};
+  return {available:true,source:'Notion · achats déclarés et paiements rapprochés',definitionState:'pending_business_choice',observedAt,counts:periodCovered?counts:null,paidSales,contracts,coverage,periodCovered,runId:String(run.id),provisional:filters.to>=observedDay,reason:'Sous-totaux des Parcours Notion disponibles. Personnes accompagnées, classement payeur, paiement rattaché et dates divergentes restent distincts ; historique métier non exhaustif.'+archiveNote};
   }catch(e){if(e instanceof TypeError||e instanceof RangeError)continue;throw e;}
  }
  return unavailable('Le rapport des achats déclarés n’a pas encore de publication complète pour ce profil.');

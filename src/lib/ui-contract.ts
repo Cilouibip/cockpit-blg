@@ -13,6 +13,8 @@ export type Metric = {
   completeness?: 'complete' | 'partial';
   missingDays?: string[]; provisionalDays?: string[]; latestAttempt?: SourceAttempt | null;
   paidSales?: import('./paid-sales').PaidSalesReport;
+  scopeLabel?: string;
+  separateAmounts?: {label:string;value:number|null;updatedAt:string|null}[];
 };
 export type DetailRow = { id: string; label: string; source: string; leads: number | null; appointments: number | null; clients: number | null; spend: number | null; coverage: string };
 export type Pagination = { page: number; pageSize: number; total: number };

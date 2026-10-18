@@ -4,6 +4,7 @@ import type {DashboardResponse,DashboardFilters,Metric} from './ui-contract';
 import {readWixTransactionCount} from './wix-transaction-counts';
 import {readMetaAccountPeriod} from './meta-account-dashboard';
 import {readNotionCommerceReport,type CommerceDashboard,type CommerceReadMemo} from './notion-commerce-storage';
+import {clubCashMinor,contractTotalMinor} from './finance-summary';
 import {readLeadDefinitions} from './lead-entry-dashboard';
 export interface BusinessRollup {
  available:boolean;observedAt:string|null;sourceRows:number;
@@ -62,9 +63,20 @@ export function applyBusinessReads(response:DashboardResponse,reads:StoredBusine
   response.commerce=commerce;
   const clientMetric=response.metrics.find(metric=>metric.id==='new_clients');
   if(clientMetric){
-   const value=commerce.available&&all?commerce.counts!.firstAccompanimentsStarted:null;
-   Object.assign(clientMetric,{value,source:'Notion · démarrages Client',updatedAt:commerce.observedAt,definition:'Personnes qui commencent leur premier accompagnement à leur Démarrage Client effectif. Les binômes sont inclus.',coverage:commerce.available?`${commerce.counts!.firstAccompanimentsStarted} démarrages · ${commerce.coverage!.undatedClientStarts} sans date · ${commerce.coverage!.futureClientStarts} à venir non comptés.`:commerce.reason,completeness:commerce.available?'partial':undefined,unavailableReason:value===null?commerce.reason:undefined});
+   const value=commerce.available&&all?commerce.paidSales?.confirmedInitialSales??null:null;
+   Object.assign(clientMetric,{value,source:'Notion · premiers paiements',updatedAt:commerce.observedAt,definition:'Nouveaux clients à leur premier paiement encaissé identifié. Les mensualités suivantes ne créent pas de nouveau client.',coverage:commerce.available&&commerce.paidSales?`${commerce.paidSales.confirmedInitialSales} premiers paiements identifiés sur la période.`:commerce.reason,completeness:commerce.available?'partial':undefined,unavailableReason:value===null?commerce.reason:undefined});
   }
+ }
+ if(all&&commerce){
+  response.metrics.push({id:'cash_club',label:'BLG Club encaissé',value:commerce.available&&commerce.paidSales?clubCashMinor(commerce.paidSales.details)/100:null,unit:'eur',source:'Notion · paiements BLG Club',definition:'Encaissements BLG Club identifiés dans le suivi des paiements. Les mensualités sont incluses ; les paiements remboursés sont exclus. Ce montant est présenté séparément du CA encaissé, sans addition entre les deux relevés.',coverage:commerce.reason,updatedAt:commerce.observedAt,completeness:'partial',unavailableReason:commerce.available?undefined:commerce.reason});
+ }
+ const contracted=response.metrics.find(metric=>metric.id==='contracted');
+ if(contracted&&commerce){
+  const contracts=commerce.available&&all?commerce.contracts:null;
+  const identified=contracts?.filter(row=>row.state==='identified').length??0,pending=contracts?.filter(row=>row.state==='pending').length??0;
+  const labels={blg90:'BLG 90',defi:'Défi',club:'BLG Club',other:'Autres offres',unknown:'À classer'} as const;
+  const breakdown=contracts?Object.entries(labels).map(([category,label])=>({label,value:contractTotalMinor(contracts,category as keyof typeof labels)/100,updatedAt:commerce.observedAt})).filter(row=>row.value>0||row.label==='BLG Club'):undefined;
+  Object.assign(contracted,{value:contracts&&(identified>0||pending===0)?contractTotalMinor(contracts)/100:null,scopeLabel:pending?`${identified} ventes identifiées · ${pending} à compléter`:undefined,separateAmounts:breakdown,source:'Notion · ventes signées',updatedAt:commerce.observedAt,definition:'Total vente compté une fois par vente signée, à sa Date de closing. Les échéances suivantes ne sont pas de nouveaux contrats. Les offres non identifiées restent à classer.',coverage:contracts?`${identified} contrats identifiés ; ${pending} montants à compléter.`:commerce.reason,completeness:pending?'partial':undefined,unavailableReason:contracts?(pending&&!identified?'Les montants de ces ventes restent à compléter.':undefined):'Les montants des ventes signées attendent la prochaine publication commerciale.'});
  }
  const paidIndex=response.metrics.findIndex(m=>m.id==='paid_sales');
  if(paidIndex>=0){
