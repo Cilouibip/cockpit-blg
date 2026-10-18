@@ -9,7 +9,7 @@ import { notionCommerceProfile, type CommerceReadCheckpoint } from '../src/conne
 
 const config = {
   clients: { dataSourceId: 'clients', fields: { email: 'Email', emailBis: 'Email 2', started: 'Début', prospect: 'Prospect', binome: 'Binôme' } },
-  payments: { dataSourceId: 'payments', fields: { client: 'Client', email: 'Email', date: 'Date', amount: 'Montant', status: 'Statut', provider: 'Transaction', invoice: 'Facture' } },
+  payments: { dataSourceId: 'payments', fields: { client: 'Client', email: 'Email', date: 'Date', amount: 'Montant', status: 'Statut', provider: 'Transaction', invoice: 'Facture', category:'Catégorie', description:'Description' } },
   parcours: { dataSourceId: 'parcours', fields: { client: 'Client', order: 'Ordre', format: 'Format', start: 'Début', closing: 'Closing', status: 'Statut' } },
 } as const;
 
@@ -297,4 +297,20 @@ test('une reprise vieille de vingt-six jours garde son cutoff, puis le passage s
  for(const family of ['clients','payments','parcours'])assert.ok(calls.some(path=>path.includes('/'+family+'/query')));
  const fresh=memory.runs.filter(run=>run.stream_key==='commerce_declared_snapshot').at(-1)!;
  assert.ok(Date.parse(String(fresh.period_to))>Date.parse(startedAt));
+});
+
+for(const changedSecret of [false,true])test(`un nouveau profil relit la source et garde la baseline historique seulement pour les archives (secret changé : ${changedSecret})`,async()=>{
+ const memory=statefulMemoryDb(),calls:string[]=[],secret='synthetic-identity-secret-32-characters';
+ const baseline=await refreshNotionCommerce({db:memory.db,config,token:'synthetic',identitySecret:secret,fetcher:commerceFetcher({mode:'baseline',calls}) as typeof fetch,maxPages:6});
+ assert.equal(baseline.status,'complete');
+ const historicalProfile=notionCommerceProfile(config),nextConfig={...config,clients:{...config.clients,fields:{...config.clients.fields,started:'Autre début explicite'}}};
+ assert.notEqual(notionCommerceProfile(nextConfig),historicalProfile);
+ const nextCalls:string[]=[],fresh=commerceFetcher({mode:'missing',calls:nextCalls});
+ const fetcher=async(input:unknown,init?:RequestInit)=>{const url=new URL(String(input));if(url.pathname==='/v1/data_sources/clients'){nextCalls.push(url.pathname);return schema(nextConfig.clients.fields);}return fresh(input);};
+ const result=await refreshNotionCommerce({db:memory.db,config:nextConfig,token:'synthetic',identitySecret:changedSecret?secret+'changed':secret,fetcher:fetcher as typeof fetch,maxPages:6});
+ const current=memory.runs.filter(run=>run.stream_key==='commerce_reader_checkpoint'&&run.query_profile_key===notionCommerceProfile(nextConfig)).at(-1)!;
+ const checkpoint=memory.readerCheckpoint(String(current.id));
+ assert.equal(checkpoint.profile,notionCommerceProfile(nextConfig));assert.equal(checkpoint.snapshot.clients.length,0);assert.equal(checkpoint.pages,6,'new profile queries every family rather than publishing the old terminal snapshot');
+ if(changedSecret){assert.equal(result.status,'failed');assert.equal(current.error,'COMMERCE_ARCHIVE_IDENTITY_CHANGED');assert.equal(checkpoint.retainedArchivedClients?.length??0,0);assert.equal(nextCalls.some(path=>path.startsWith('/v1/pages/')),false);}
+ else{assert.equal(result.status,'complete');assert.deepEqual(checkpoint.retainedArchivedClients!.map(proof=>proof.client.id),[ARCHIVED_CLIENT]);assert.equal(checkpoint.snapshot.payments.length,0);assert.ok(nextCalls.some(path=>path===`/v1/pages/${ARCHIVED_CLIENT}`));const overview=memory.rows.filter(row=>row.metric_key==='notion_commerce_overview').at(-1)!;assert.equal((overview.dimensions as Row).startedAt,checkpoint.startedAt);}
 });
