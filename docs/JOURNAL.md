@@ -512,3 +512,10 @@ Choix métier confirmé : total des nouvelles ventes payées et détail par offr
 La ventilation est fondée sur Catégorie et Description du paiement, sans déduction depuis le prix, le nom de personne ou une formule produit comportant une valeur par défaut. Les libellés ambigus restent à préciser. Le détail et le total partagent les mêmes dates et la même population confirmée. Un profil de collecte neuf protège contre la réutilisation d’un ancien relevé dépourvu d’offre ; le maintien des archives ne réutilise que les preuves Client confirmées. Tests ciblés de propagation, dates absentes, remboursements, archivage, changement de secret, total/détail et rendu.
 
 Aucune migration de base supplémentaire, aucun appel Stripe, aucune écriture dans les sources. Réception réelle après publication encore requise.
+
+
+### Lecture des rapports lourds en séquence
+
+La réception a retrouvé des interruptions de lecture malgré029, sur plusieurs rapports simultanés. Une mesure isolée bornée du rapport commercial réussit sous le délaiSQL. Le candidat conserve une file de quatre lectures par requête et ajoute une seule place commune pour les rapports commerciaux, les inscriptions et les fenêtres de sources. Les rapports en attente n’occupent aucune place de lecture légère. La période courante et sa comparaison partagent ces bornes, sans changement des requêtesSQL, des paramètres, des résultats ou du cache de sources.
+
+Tests ciblés : ordre des rapports, circulation des lectures légères, libération après erreur, transmission des options et comparaison. Réception réelle requise sur plusieurs publications, avec et sans comparaison, sous le délai client existant. Aucun nouveauSQL ou changement de source.

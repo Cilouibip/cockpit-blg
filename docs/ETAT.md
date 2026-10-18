@@ -394,3 +394,10 @@ Le SQL opérationnel installe un déclencheur privé et son journal technique li
 Une réponse complète peut contenir plusieurs unités pour le même flux, dont des étapes intermédiaires partielles. Le journal SQL conservait ces étapes mais classait à tort cette réponse comme invalide, provoquant un passage supplémentaire. Le contrôle utilise désormais la dernière unité de chaque flux ; une erreur réelle, une unité mal formée ou une dernière étape incomplète reste refusée. Les données métier et la cadence ne changent pas.
 
 Validation : anomalie reproduite avant correction ; onze tests PostgreSQL isolés réussis après correction, avec flux entrelacés et contre-exemples. La fonction corrigée reste à installer manuellement : MCP apply_migration renvoie Invalid or expired requestState. Le cron installé fonctionne ; deux passages automatiques complets ont été reçus. La tenue dans la durée reste à observer.
+
+
+### Lecture des rapports lourds en séquence
+
+La réception a retrouvé des interruptions de lecture malgré029, sur plusieurs rapports simultanés. Une mesure isolée bornée du rapport commercial réussit sous le délaiSQL. Le candidat conserve une file de quatre lectures par requête et ajoute une seule place commune pour les rapports commerciaux, les inscriptions et les fenêtres de sources. Les rapports en attente n’occupent aucune place de lecture légère. La période courante et sa comparaison partagent ces bornes, sans changement des requêtesSQL, des paramètres, des résultats ou du cache de sources.
+
+Tests ciblés : ordre des rapports, circulation des lectures légères, libération après erreur, transmission des options et comparaison. Réception réelle requise sur plusieurs publications, avec et sans comparaison, sous le délai client existant. Aucun nouveauSQL ou changement de source.
