@@ -5,18 +5,18 @@ import { spawnSync } from 'node:child_process';
 import { Temporal } from '@js-temporal/polyfill';
 import { passwordHash } from '../src/lib/auth';
 import { evaluateSyncJobHealth, readSyncHealth } from '../src/lib/sync-health';
-import { jobScope, PILOT_REFRESH_JOBS, syncJobRunFilter, type SyncJob } from '../src/lib/sync-jobs';
+import { jobScope, ALL_REFRESH_JOBS, syncJobRunFilter, type SyncJob } from '../src/lib/sync-jobs';
 import type { Database, Row, SelectOptions } from '../src/lib/db';
 
 const now = Date.parse('2026-10-06T08:00:00Z');
 const iso = (minutes: number) => new Date(now-minutes*60_000).toISOString();
-const env: NodeJS.ProcessEnv = { NODE_ENV:'test', NOTION_DATA_SOURCE_ID:'synthetic-notion', META_AD_ACCOUNT_ID:'act_synthetic-meta', META_ACCESS_TOKEN:'synthetic-token', WIX_SITE_ID:'synthetic-site', WIX_API_KEY:'synthetic-key', IDENTITY_HMAC_SECRET:'synthetic-hmac-secret-longer-than-32-chars', WIX_LEAD_ENTRY_CONFIG:JSON.stringify({formIds:['synthetic-form']}), POSTHOG_PROJECT_ID:'1', POSTHOG_PERSONAL_API_KEY:'synthetic-token' };
+const env: NodeJS.ProcessEnv = { NODE_ENV:'test', NOTION_TOKEN:'synthetic-token', NOTION_CLIENT_DATA_SOURCE_ID:'synthetic-clients', NOTION_COMMERCE_CONFIG:JSON.stringify({clients:{dataSourceId:'c'},payments:{dataSourceId:'p'},schedule:{dataSourceId:'s'},parcours:{dataSourceId:'r'}}), NOTION_DATA_SOURCE_ID:'synthetic-notion', META_AD_ACCOUNT_ID:'act_synthetic-meta', META_ACCESS_TOKEN:'synthetic-token', WIX_SITE_ID:'synthetic-site', WIX_API_KEY:'synthetic-key', IDENTITY_HMAC_SECRET:'synthetic-hmac-secret-longer-than-32-chars', WIX_LEAD_ENTRY_CONFIG:JSON.stringify({formIds:['synthetic-form'],quiz:{collectionId:'synthetic-quiz'}}), POSTHOG_PROJECT_ID:'1', POSTHOG_PERSONAL_API_KEY:'synthetic-token' };
 function publication(job: SyncJob, changes: Row = {}): Row {
  const scope = jobScope(job,env)!;
  const today = Temporal.Instant.fromEpochMilliseconds(now).toZonedDateTimeISO('Europe/Paris').toPlainDate();
  const bound = (day: Temporal.PlainDate) => day.toZonedDateTime('Europe/Paris').toInstant().toString();
- const from = job==='notion'||job==='forms' ? iso(35) : bound(job==='masterclass'?today.with({day:1}).subtract({months:1}):today.subtract({days:35}));
- const to = job==='notion'||job==='forms' ? iso(5) : bound(today.add({days:1}));
+ const from = ['notion','forms','quiz_entries','client_history','commerce','meta_catalog'].includes(job) ? iso(35) : bound(['masterclass','quiz','wix','receipts'].includes(job)?today.with({day:1}).subtract({months:1}):today.subtract({days:35}));
+ const to = ['notion','forms','quiz_entries','client_history','commerce','meta_catalog'].includes(job) ? iso(5) : bound(today.add({days:1}));
  return { id:'synthetic-'+job, ...syncJobRunFilter(job,scope), status:'complete', pagination_complete:true, rows_rejected:0, error_code:null, started_at:iso(5), finished_at:iso(2), source_as_of:iso(5), period_from:from, period_to:to, covered_from:from, covered_to:to, ...changes };
 }
 function db(rows: Row[], calls: SelectOptions[] = []): Database {
@@ -30,10 +30,10 @@ function db(rows: Row[], calls: SelectOptions[] = []): Database {
 }
 const evaluate = (job: SyncJob, rows: Row[]) => evaluateSyncJobHealth(job,rows,jobScope(job,env)!,now);
 
-test('seven complete exact publications are healthy through bounded SELECT only; empty is a valid publication',async()=>{
+test('all fifteen complete exact publications are healthy through bounded SELECT only; empty is a valid publication',async()=>{
  const calls: SelectOptions[]=[];
- const report=await readSyncHealth(db(PILOT_REFRESH_JOBS.map(job=>publication(job,{status:'empty'})),calls),env,now);
- assert.equal(report.status,'healthy');assert.equal(report.jobs.length,7);assert.equal(calls.length,14);
+ const report=await readSyncHealth(db(ALL_REFRESH_JOBS.map(job=>publication(job,{status:'empty'})),calls),env,now);
+ assert.equal(report.status,'healthy');assert.equal(report.jobs.length,15);assert.equal(calls.length,31);
  assert.ok(report.jobs.every(job=>job.cutoff===iso(5)&&job.ageMinutes===5));
  for (const call of calls) { assert.ok(call.eq?.source_namespace);assert.ok(call.eq?.query_profile_key);assert.equal(call.timeoutMs,5000); }
  const rendered=JSON.stringify(report);assert.ok(!rendered.includes('synthetic-'));assert.ok(!rendered.includes('query_profile_key'));
@@ -110,7 +110,7 @@ test('health endpoint rejects absent/wrong/short bearer before any DB; correct b
   process.env.CRON_SECRET='short';assert.equal((await GET(new Request(url,{headers:{Authorization:'Bearer short'}}))).status,401);process.env.CRON_SECRET=secret;assert.equal(calls,0);
   process.env.SUPABASE_SECRET_KEY='';
   const unconfigured=await GET(new Request(url,{headers:{Authorization:'Bearer '+secret}}));assert.equal(unconfigured.status,503);assert.equal((await unconfigured.json()).status,'unknown');assert.equal(calls,0);process.env.SUPABASE_SECRET_KEY='synthetic-private-db-key';
-  const response=await GET(new Request(url,{headers:{Authorization:'Bearer '+secret}}));assert.equal(response.status,503);const report=await response.json();assert.equal(report.status,'unknown');assert.equal(report.jobs.length,7);assert.equal(calls,14);assert.ok(!JSON.stringify(report).includes(secret));
+  const response=await GET(new Request(url,{headers:{Authorization:'Bearer '+secret}}));assert.equal(response.status,503);const report=await response.json();assert.equal(report.status,'unknown');assert.equal(report.jobs.length,15);assert.equal(calls,31);assert.ok(!JSON.stringify(report).includes(secret));
 
  } finally {globalThis.fetch=oldFetch;for(const key of Object.keys(process.env))if(!(key in previous))delete process.env[key];Object.assign(process.env,previous);}
 });
@@ -128,7 +128,7 @@ test('workflow execution logs anonymous verdicts only, rejects invalid HTTP200 a
  const secret='synthetic-cron-secret-with-32-characters';
  const run=(status:string, code:string, responseStatus=200, configured=true)=>{
   const at=Date.parse('2026-10-06T08:00:00Z'),stamp=(delta:number)=>new Date(at+delta).toISOString();
-  const report={status,checkedAt:stamp(50),maxAgeMinutes:60,jobs:PILOT_REFRESH_JOBS.map(job=>({job,state:status,code,cutoff:stamp(-300000),publishedAt:stamp(-120000),ageMinutes:5,namespace:'private-never-log',credential:secret})),private:'private-never-log'};
+  const report={status,checkedAt:stamp(50),maxAgeMinutes:60,jobs:ALL_REFRESH_JOBS.map(job=>({job,state:status,code,cutoff:stamp(-300000),publishedAt:stamp(-120000),ageMinutes:5,namespace:'private-never-log',credential:secret})),private:'private-never-log'};
   const prefix=`let clock=0;Date.now=()=>${at}+(clock++===0?0:100);globalThis.fetch=async(url,init)=>{if(!url.endsWith('/api/jobs/health')||init.method!=='GET')throw Error();return new Response(${JSON.stringify(JSON.stringify(report))},{status:${responseStatus}});};\n`;
   return spawnSync(process.execPath,['--input-type=module','-e',prefix+script],{env:{...process.env,CRON_SECRET:configured?secret:''},encoding:'utf8'});
  };
@@ -145,7 +145,7 @@ test('monitor clock rejects cached or future reports and recomputes healthy cuto
  const at=Date.parse('2026-10-06T08:00:00Z'),stamp=(delta:number)=>new Date(at+delta).toISOString();
  const secret='synthetic-cron-secret-with-32-characters';
  const run=(reportChanges:Row={},jobChanges:Row={},elapsed=100)=>{
-  const report={status:'healthy',checkedAt:stamp(50),maxAgeMinutes:60,jobs:PILOT_REFRESH_JOBS.map(job=>({job,state:'healthy',code:'PUBLICATION_CURRENT',cutoff:stamp(-300000),publishedAt:stamp(-120000),ageMinutes:5,...jobChanges})),private:secret,...reportChanges};
+  const report={status:'healthy',checkedAt:stamp(50),maxAgeMinutes:60,jobs:ALL_REFRESH_JOBS.map(job=>({job,state:'healthy',code:'PUBLICATION_CURRENT',cutoff:stamp(-300000),publishedAt:stamp(-120000),ageMinutes:5,...jobChanges})),private:secret,...reportChanges};
   const prefix=`let clock=0;Date.now=()=>${at}+(clock++===0?0:${elapsed});globalThis.fetch=async()=>Response.json(${JSON.stringify(report)});\n`;
   const result=spawnSync(process.execPath,['--input-type=module','-e',prefix+script],{env:{...process.env,CRON_SECRET:secret},encoding:'utf8'});
   assert.equal(result.stderr,'');assert.ok(!result.stdout.includes(secret));
@@ -203,4 +203,17 @@ test('Forms transaction timestamps precede clock_timestamp cutoff; exact coverag
  assert.equal(evaluate('forms',[{...row,period_to:'2026-10-06T07:55:01.564958Z',covered_to:'2026-10-06T07:55:01.564958Z'}]).state,'unknown');
  assert.equal(evaluate('forms',[{...row,started_at:'2026-10-06T05:55:00Z',source_as_of:'2026-10-06T05:55:00Z'}]).code,'PUBLICATION_STALE','fresh finish/cutoff cannot hide old observation');
  assert.equal(evaluate('notion',[{...publication('notion'),source_as_of:'2026-10-06T07:54:59Z'}]).code,'COVERAGE_INVALID','Notion explicit source_as_of=period_to publication invariant retained');
+});
+
+
+test('finance work failure alerts without treating checkpoints as publications or mixing namespaces',async()=>{
+ const fresh=publication('commerce');
+ const checkpoint={...fresh,id:'synthetic-work',stream_key:'commerce_reader_checkpoint',status:'failed',started_at:iso(1),finished_at:iso(1),error_code:'upstream-failed'};
+ const health=evaluate('commerce',[fresh,checkpoint]);
+ assert.equal(health.state,'stale');assert.equal(health.code,'LATEST_ATTEMPT_FAILED');assert.equal(health.cutoff,iso(5));
+ assert.equal(evaluate('commerce',[checkpoint]).code,'PUBLICATION_ABSENT');
+ for(const key of ['source_namespace','source','query_profile_key','stream_key']) assert.equal(evaluate('commerce',[fresh,{...checkpoint,[key]:'unrelated'}]).state,'healthy');
+ assert.equal(evaluate('commerce',[fresh,{...checkpoint,status:'complete',error_code:null}]).state,'healthy');
+ const integrated=await readSyncHealth(db([...ALL_REFRESH_JOBS.map(job=>publication(job)),checkpoint]),env,now);
+ assert.equal(integrated.jobs.find(row=>row.job==='commerce')?.code,'LATEST_ATTEMPT_FAILED');
 });

@@ -28,7 +28,7 @@ jobs:
           const emit = (status, codes) => console.log(JSON.stringify({status,codes}));
           const secret = process.env.CRON_SECRET;
           if (!secret || secret.length < 32) { emit('unknown',['HEALTH_CONFIG_MISSING']); process.exit(1); }
-          const expectedJobs = ['notion','meta_ads','masterclass','forms','kpi_meta','kpi_posthog','kpi_email'];
+          const expectedJobs = ['notion','meta','wix','receipts','meta_ads','meta_catalog','quiz','masterclass','forms','quiz_entries','client_history','kpi_meta','kpi_posthog','kpi_email','commerce'];
           const allowedCodes = new Set(['PUBLICATION_CURRENT','CONFIGURATION_UNKNOWN','DATABASE_UNAVAILABLE','CLOCK_INVALID','PUBLICATION_ABSENT','PUBLICATION_INVALID','TIMESTAMP_INVALID','TIMESTAMP_FUTURE','TIMESTAMP_ORDER_INVALID','CURRENT_WINDOW_MISMATCH','COVERAGE_INVALID','PUBLICATION_STALE','LATEST_ATTEMPT_FAILED']);
           const instant = value => {
             if (typeof value !== 'string') return null;

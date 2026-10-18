@@ -10,7 +10,7 @@ test('pause du lecteur des ventes : refus des appels directs, passage de contrô
   for (const key of Object.keys(process.env)) if (/^(NOTION_|WIX_|META_|POSTHOG_|VERCEL|DATABASE_URL|BLG_COMMERCE_READER)/.test(key)) delete process.env[key];
   const secret = 'synthetic-cron-secret-for-route-32-characters';
   Object.assign(process.env, {
-    COCKPIT_MODE: 'live', APP_ORIGIN: 'http://127.0.0.1:3192', COCKPIT_SESSION_SECRET: 'synthetic-session-secret-with-32-characters', COCKPIT_PASSWORD_HASH: passwordHash('synthetic-only'),
+    COCKPIT_MODE: 'live', BLG_COMMERCE_READER:'paused', APP_ORIGIN: 'http://127.0.0.1:3192', COCKPIT_SESSION_SECRET: 'synthetic-session-secret-with-32-characters', COCKPIT_PASSWORD_HASH: passwordHash('synthetic-only'),
     CRON_SECRET: secret, SUPABASE_URL: 'https://synthetic.supabase.co', SUPABASE_SECRET_KEY: 'synthetic-secret', IDENTITY_HMAC_SECRET: 'synthetic-identity-secret-with-32-characters',
     NOTION_TOKEN: 'synthetic', NOTION_COMMERCE_CONFIG: JSON.stringify({ clients: { dataSourceId: 'ds-clients' }, payments: { dataSourceId: 'ds-payments' }, schedule: { dataSourceId: 'ds-schedule' }, parcours: { dataSourceId: 'ds-parcours' } }),
   });

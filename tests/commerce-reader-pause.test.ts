@@ -17,18 +17,19 @@ const baseEnv = { NODE_ENV: 'test', COCKPIT_MODE: 'live', NOTION_DATA_SOURCE_ID:
 const withReader = (value?: string) => { const env = { ...baseEnv }; if (value !== undefined) env.BLG_COMMERCE_READER = value; return env; };
 const COMMERCE_STREAMS = ['commerce_declared_snapshot', 'commerce_reader_checkpoint'];
 
-test('réglage serveur : pause par défaut, seule la valeur active rétablit le lecteur des ventes', () => {
-  assert.equal(commerceReaderMode({}), 'paused', 'variable absente = pause');
-  for (const value of ['', 'paused', 'Active', 'ACTIVE', 'on', 'true', 'yes']) assert.equal(commerceReaderMode({ BLG_COMMERCE_READER: value }), 'paused', `« ${value} » ne réactive pas le lecteur`);
+test('réglage serveur : actif par défaut, pause explicite conservée', () => {
+  assert.equal(commerceReaderMode({}), 'active', 'variable absente = collecte automatique');
+  assert.equal(commerceReaderMode({ BLG_COMMERCE_READER: '' }), 'active');
+  for (const value of ['paused', 'Active', 'ACTIVE', 'on', 'true', 'yes']) assert.equal(commerceReaderMode({ BLG_COMMERCE_READER: value }), 'paused', `« ${value} » ne réactive pas le lecteur`);
   assert.equal(commerceReaderMode({ BLG_COMMERCE_READER: 'active' }), 'active');
   assert.equal(commerceReaderMode({ BLG_COMMERCE_READER: ' active\n' }), 'active', 'un retour à la ligne copié avec la valeur ne change pas son sens');
-  assert.equal(getConfig({}).commerceReader, 'paused');
+  assert.equal(getConfig({}).commerceReader, 'active');
   assert.equal(getConfig({ BLG_COMMERCE_READER: 'active' }).commerceReader, 'active');
 });
 
 test('planning : en pause, seule l’unité commerce disparaît ; la configuration reste lisible pour les publications', () => {
   const jobs: SyncJob[] = ['notion', 'meta', 'wix', 'receipts', 'meta_ads', 'meta_catalog', 'quiz', 'masterclass', 'forms', 'quiz_entries', 'client_history', 'kpi_meta', 'kpi_posthog', 'kpi_email'];
-  for (const env of [withReader(), withReader('paused'), withReader('on')]) {
+  for (const env of [withReader('paused'), withReader('on')]) {
     assert.equal(jobScope('commerce', env), null);
     assert.deepEqual(configuredJobScope('commerce', env), jobScope('commerce', withReader('active')), 'le profil lu pour les dates reste celui du lecteur actif');
     for (const job of jobs) assert.deepEqual(jobScope(job, env), jobScope(job, withReader('active')), `${job} ne dépend pas du réglage des ventes`);
@@ -60,7 +61,7 @@ test('tick : réglage absent ou paused, aucune unité commerce lue ni exécutée
   const active = await runTick(withReader('active'));
   assert.equal(active.executed.filter(job => job === 'commerce').length, 1, 'actif : comportement d’origine, une unité commerce');
   assert.ok(active.summary.streams?.some(stream => stream.job === 'commerce'));
-  for (const env of [withReader(), withReader('paused')]) {
+  for (const env of [withReader('paused')]) {
     const paused = await runTick(env);
     assert.ok(!paused.executed.includes('commerce'), 'aucune unité commerce exécutée');
     assert.ok(!paused.summary.jobs.includes('commerce') && !paused.summary.unitResults.some(unit => unit.job === 'commerce'));
@@ -86,11 +87,11 @@ test('passage de contrôle : une seule unité bornée, même en pause, avec un c
   });
   let disposed = 0;
   const budget = () => ({ sourceFetch: async () => assert.fail('aucune requête Notion dans ce double'), canStart: () => true, dispose: () => { disposed++; } });
-  const busy = await commerceControlPass(control('busy'), withReader(), { budget: budget() });
+  const busy = await commerceControlPass(control('busy'), withReader('paused'), { budget: budget() });
   assert.deepEqual(busy, { job: 'commerce', readerMode: 'paused', status: 'partial', counts: { pages: 0, read: 0 }, coverage: 'unavailable', reason: 'actualisation_en_cours' });
   assert.deepEqual(calls, ['rpc:begin_sync_stream:commerce_reader_checkpoint'], 'un passage = une ouverture de lecture');
   calls.length = 0;
-  const slow = await commerceControlPass(control('slow'), withReader(), { budget: budget() });
+  const slow = await commerceControlPass(control('slow'), withReader('paused'), { budget: budget() });
   assert.deepEqual(slow, { job: 'commerce', readerMode: 'paused', status: 'failed', safeError: 'database_query_interrupted' });
   assert.deepEqual(calls, ['rpc:begin_sync_stream:commerce_reader_checkpoint', 'select:sync_runs:commerce_reader_checkpoint', 'rpc:finish_sync:failed'], 'échec persisté, aucune relance');
   assert.equal(finishes.at(-1)?.p_status, 'failed');
@@ -120,7 +121,7 @@ const commerceSection = (html: string) => html.split('<section').find(part => pa
 test('Connexions : lecture suspendue avec la vraie date de dernière publication complète, sans bouton de lecture', async () => {
   for (const [publishedAt, failedAt] of [['2026-06-10T08:15:00Z', '2026-06-11T06:05:00Z'], ['2026-05-03T17:40:00Z', '2026-05-04T21:20:00Z']]) {
     const observed: Row[] = [];
-    const response = await connections(connectionsDb(publishedAt, failedAt, observed), withReader());
+    const response = await connections(connectionsDb(publishedAt, failedAt, observed), withReader('paused'));
     const card = commerceCard(response);
     assert.equal(card.status, 'paused');
     assert.equal(card.lastSyncAt, new Date(publishedAt).toISOString(), 'date issue des lignes sync_runs, jamais une constante');

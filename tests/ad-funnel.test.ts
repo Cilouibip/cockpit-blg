@@ -17,20 +17,22 @@ const vid=(n:number)=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
 const commerceRaw=JSON.stringify({clients:{dataSourceId:'ds-clients'},payments:{dataSourceId:'ds-payments'},parcours:{dataSourceId:'ds-parcours'}});
 const env={WIX_SITE_ID:SITE,NOTION_COMMERCE_CONFIG:commerceRaw};
 const NOW='2026-09-25T12:00:00Z';
+// La collecte est récente; les dates des événements métier historiques restent celles des scénarios.
+const COMMERCE_OBSERVED_AT=new Date().toISOString();
 const obs=(id:string,family:'forms'|'quiz'|'client_history',extra:Partial<Row>&{origin?:Record<string,unknown>;firstTouch?:Record<string,unknown>|null;at?:string}):Row=>{
  const {origin={},firstTouch=null,at,...rest}=extra;
  const occurredAt=at??(rest.occurred_day?`${rest.occurred_day}T09:00:00Z`:'2026-09-05T09:00:00Z');
  return {id,source:family==='client_history'?'notion':'wix',source_namespace:family==='client_history'?'ds-clients':SITE,family,external_id:id,person_id:null,identity_state:'linked',eligible:true,occurred_at:occurredAt,occurred_day:occurredAt.slice(0,10),published_at:'2026-09-15T08:00:00Z',is_current:true,properties:{origin,firstTouch},...rest};
 };
-function commerceRows(details:Row[]):{runs:Row[];aggregates:Row[]}{
+function commerceRows(details:Row[],observedAt=COMMERCE_OBSERVED_AT):{runs:Row[];aggregates:Row[]}{
  const config=notionCommerceConfig(commerceRaw)!,profile=notionCommerceProfile(config),run='run-commerce';
  const totals=Object.fromEntries(COMMERCE_COUNTERS.map(k=>[k,0]));
  const summary={confirmedInitialSales:details.filter(d=>d.state==='confirmed').length,reconciledInitialSales:details.filter(d=>d.state==='reconciled').length,pendingInitialPaymentCases:details.filter(d=>d.state==='pending').length,excludedSubsequentPayments:0,refundCases:0,coverage:{payments:details.length,schedules:0,parcours:0,unlinkedPayments:0}};
- const base={source:'notion',source_namespace:'ds-parcours',report_profile_key:profile,sync_run_id:run,period_from:'1970-01-01T00:00:00Z',period_to:'2026-09-15T08:00:00Z'};
+ const base={source:'notion',source_namespace:'ds-parcours',report_profile_key:profile,sync_run_id:run,period_from:'1970-01-01T00:00:00Z',period_to:observedAt};
  return {
-  runs:[{id:run,source:'notion',source_namespace:'ds-parcours',stream_key:'commerce_declared_snapshot',status:'complete',pagination_complete:true,rows_rejected:0,query_profile_key:profile,period_to:'2026-09-15T08:00:00Z',started_at:'2026-09-15T08:00:00Z'}],
+  runs:[{id:run,source:'notion',source_namespace:'ds-parcours',stream_key:'commerce_declared_snapshot',status:'complete',pagination_complete:true,rows_rejected:0,query_profile_key:profile,period_to:observedAt,started_at:observedAt}],
   aggregates:[
-   {...base,metric_key:'notion_commerce_overview',dimensions_key:'all',dimensions:{version:NOTION_COMMERCE_VERSION,observedAt:'2026-09-15T08:00:00Z',totals,dailyCount:0,dailyHash:digest([]),paidSalesSummary:summary,paidSalesCount:details.length,paidSalesHash:digest(details),coverage:{sourceRows:{}}}},
+   {...base,metric_key:'notion_commerce_overview',dimensions_key:'all',dimensions:{version:NOTION_COMMERCE_VERSION,startedAt:observedAt,observedAt,totals,dailyCount:0,dailyHash:digest([]),paidSalesSummary:summary,paidSalesCount:details.length,paidSalesHash:digest(details),coverage:{sourceRows:{}}}},
    {...base,metric_key:'notion_commerce_paid_sales',dimensions_key:'paid-sales:000000',dimensions:{details}},
   ],
  };
@@ -38,7 +40,7 @@ function commerceRows(details:Row[]):{runs:Row[];aggregates:Row[]}{
 const sale=(paymentId:string,extra:Partial<Row>):Row=>({paymentId,paymentUrl:null,clientIds:['client-1'],clientName:null,clientUrl:null,scheduleIds:[],scheduleUrls:[],parcoursIds:[],day:'2026-09-10',amountMinor:39000,state:'confirmed',reasons:['first_succeeded_payment_for_client'],...extra});
 const business=(scheduledDay:string,attendance:string,extra:Record<string,unknown>={})=>({version:'notion-acquisition-known-v1',scheduledDay,attendance,attendanceBasis:'source_group',channels:['Facebook'],tunnels:['Quiz'],...extra});
 
-function fixture(extra:Row[]=[],additions:Partial<Record<string,Row[]>>={}){
+function fixture(extra:Row[]=[],additions:Partial<Record<string,Row[]>>={},commerceObservedAt=COMMERCE_OBSERVED_AT){
  const observations=[
   // P1 : arrivée A (quiz, 3 septembre) sans inscription, retour B (masterclass) et inscription le 5 : A conservée, B = arrivée.
   obs('mc-p1','forms',{person_id:'p1',at:'2026-09-05T09:00:00Z',origin:{ad:AD_B,campaign:'1202',source:'fb',visitor:VISITOR},firstTouch:{ad:AD_A,campaign:'1201',source:'fb',linkId:LINK,tunnel:'quiz',at:'2026-09-03T10:00:00Z'}}),
@@ -110,7 +112,7 @@ function fixture(extra:Row[]=[],additions:Partial<Record<string,Row[]>>={}){
   sale('pay-5',{clientIds:[],day:'2026-09-13',amountMinor:12000,state:'pending',reasons:['client_relation_missing_or_ambiguous']}),
   sale('pay-6',{clientIds:['client-9'],day:'2026-09-14',amountMinor:15000,state:'reconciled'}),
  ];
- const commerce=commerceRows(sales);
+ const commerce=commerceRows(sales,commerceObservedAt);
  adDaily.forEach(row=>Object.assign(row,{currency:'EUR',currency_exponent:2,timezone:'Europe/Paris'}));
  commerce.runs.push({id:'notion-current',source:'notion',source_namespace:'notion',stream_key:'prospects_business',status:'complete',pagination_complete:true,rows_rejected:0,started_at:NOW,finished_at:NOW,source_as_of:NOW,covered_to:NOW});
  const tables:Record<string,Row[]>={lead_source_observations:observations,ads,v_ad_daily:adDaily,appointments,prospects,link_revisions:linkRevisions,sync_runs:commerce.runs,source_aggregates:commerce.aggregates};
@@ -412,9 +414,9 @@ test('commerce absent : ventes, encaissements et remboursements restent indispon
 });
 
 test('pause du lecteur des ventes : ventes et encaissé restent lus avec la date du rapport ; une lecture en échec ne les transforme ni en zéro ni en erreur',async()=>{
- // env ne porte pas BLG_COMMERCE_READER : lecteur suspendu, lectures des publications conservées.
- const paused=await buildAdFunnel(fixture().db,period,{env,visits,now:NOW});const rowA=paused.rows.find(r=>r.adId===AD_A)!;
- assert.equal(paused.coverage.commerce.available,true);assert.equal(paused.coverage.commerce.observedAt,'2026-09-15T08:00:00Z');assert.equal(rowA.firstSalesConfirmed,1);assert.equal(rowA.cashMinor,78000);
+ // Pause explicite : les lectures des publications couvertes restent disponibles.
+ const paused=await buildAdFunnel(fixture().db,period,{env:{...env,BLG_COMMERCE_READER:'paused'},visits,now:NOW});const rowA=paused.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(paused.coverage.commerce.available,true);assert.equal(Date.parse(paused.coverage.commerce.observedAt!),Date.parse(COMMERCE_OBSERVED_AT));assert.equal(rowA.firstSalesConfirmed,1);assert.equal(rowA.cashMinor,78000);
  const failing=fixture(),select=failing.db.select.bind(failing.db);let commerceReads=0;
  failing.db.select=async(table,options)=>{if(table==='sync_runs'&&options?.eq?.stream_key==='commerce_declared_snapshot'){commerceReads++;throw new AppError('Le chargement des données a été interrompu. Réessaie.',503,'database_query_interrupted');}return select(table,options);};
  const report=await buildAdFunnel(failing.db,period,{env,visits,now:NOW});const row=report.rows.find(r=>r.adId===AD_A)!;
@@ -449,4 +451,29 @@ test('une mesure Meta absente ne devient zéro ni dans la ligne ni dans le total
  assert.equal(row.spendMinor,null);assert.equal(row.outboundClicks,null);
  assert.equal(report.totals.spendMinor,null);assert.equal(report.totals.outboundClicks,null);
  assert.ok(report.notices.some(n=>n.includes('Certaines mesures Meta')));
+});
+
+
+test('un relevé commercial ancien ne transforme pas le chevauchement de couverture en zéros attribués',async()=>{
+ const stale=fixture(),select=stale.db.select.bind(stale.db);
+ stale.db.select=async(table,options)=>{
+  const rows=await select(table,options);
+  return table==='source_aggregates'?rows.map(row=>row.metric_key==='notion_commerce_overview'?{...row,dimensions:{...(row.dimensions as Row),startedAt:'2026-09-15T08:00:00Z'}}:row):rows;
+ };
+ const report=await buildAdFunnel(stale.db,period,{env,visits,now:NOW}),row=report.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(report.coverage.commerce.available,false);
+ for(const value of [row.firstSalesConfirmed,row.cashMinor,row.refundsMinor,report.totals.firstSalesConfirmed,report.totals.cashMinor])assert.equal(value,null);
+ assert.equal(row.registrations,4);assert.equal(row.appointmentsBooked,2);assert.equal(row.spendMinor,10000);
+});
+
+
+test('un ancien relevé conserve une période entièrement couverte et son historique sans borne sentinelle',async()=>{
+ const observedAt='2026-09-15T08:00:00Z',memory=fixture([],{},observedAt);
+ const report=await buildAdFunnel(memory.db,{from:'2026-09-01',to:'2026-09-10',tunnel:'all'},{env,visits,now:NOW});
+ const row=report.rows.find(r=>r.adId===AD_A)!;
+ assert.equal(report.coverage.commerce.available,true);assert.equal(report.coverage.commerce.observedAt,observedAt);
+ assert.equal(row.firstSalesConfirmed,1);assert.equal(row.cashMinor,39000);
+ assert.equal(report.coverage.commerce.paidSaleRows,6,'l’historique complet reste disponible pour déterminer premier paiement et mensualités');
+ const overlapping=await buildAdFunnel(fixture([],{},observedAt).db,{from:'2026-09-01',to:'2026-09-20',tunnel:'all'},{env,visits,now:NOW});
+ assert.equal(overlapping.coverage.commerce.available,false);assert.equal(overlapping.totals.cashMinor,null);assert.equal(overlapping.totals.firstSalesConfirmed,null);
 });

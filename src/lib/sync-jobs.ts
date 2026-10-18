@@ -53,6 +53,7 @@ const RESUMABLE=new Set<SyncJob>(definitions.filter(d=>d.resumable).map(d=>d.id)
 const MAX_CHUNKS=4;
 const HOUR_MS=3_600_000;
 /** Flux du pilotage Masterclass soumis au réglage de cadence ; tous les autres restent à une heure. */
+export const ALL_REFRESH_JOBS:readonly SyncJob[]=definitions.map(d=>d.id);
 export const PILOT_REFRESH_JOBS:readonly SyncJob[]=definitions.filter(d=>d.pilot).map(d=>d.id);
 /** Réglage serveur unique BLG_REFRESH_CADENCE_MINUTES. Défaut de transition : absent, vide, `60` ou toute valeur
  * autre que `30` = 60 minutes (cadence horaire antérieure, à l'identique). `30` (espaces ignorés) est une activation
@@ -90,7 +91,7 @@ export function syncStreamStates(runs:Row[],now:number,enabled:SyncJob[],cadence
   const latest=rows[0],success=rows.find(r=>['complete','empty'].includes(String(r.status))&&r.pagination_complete!==false);
   const lastSuccessAt=success?String(success.finished_at??success.started_at):null;
   // Publication time and source coverage are different for a long Notion scan.
-  const bounds=success?[success.started_at,success.finished_at,d.id==='notion'?success.period_to:success.source_as_of].map(value=>Date.parse(String(value))).filter(value=>Number.isFinite(value)&&value<=now):[];
+  const bounds=success?[success.started_at,success.finished_at,(d.id==='notion'||d.id==='commerce')?success.period_to:success.source_as_of].map(value=>Date.parse(String(value))).filter(value=>Number.isFinite(value)&&value<=now):[];
   const dataAsOf=bounds.length?new Date(Math.min(...bounds)).toISOString():null;
   const base={job:d.id,lastSuccessAt,dataAsOf,stale:!dataAsOf||now-Date.parse(dataAsOf)>=cadence};
   const active=attempts.find(r=>r.status==='running'&&(r.lease_until?Date.parse(String(r.lease_until)):Date.parse(String(r.started_at))+600000)>now);
@@ -183,7 +184,7 @@ export function createProcessTickLock(staleMs=120_000,clock:()=>number=Date.now)
 const processTickLock=createProcessTickLock();
 type TickOptions={lock?:TickLock;sharedLease?:SharedTickLease|null;now?:()=>number;budget?:Budget;execute?:(job:SyncJob,options:{db:Database;env:NodeJS.ProcessEnv;fetcher:typeof fetch;signal?:AbortSignal;budget?:import('./sync-posthog-reports').PostHogSyncBudget})=>Promise<TickResult>};
 /** Espace de noms et profil d'une unité planifiable ; null = unité non configurée ou suspendue (elle n'est pas planifiée, jamais un zéro).
- * Le lecteur financier Notion reste hors planning tant que BLG_COMMERCE_READER n'est pas `active`. */
+ * Le lecteur financier reste hors planning uniquement pendant une pause explicite. */
 export function jobScope(job:SyncJob,env:NodeJS.ProcessEnv):{namespace:string;profile:string}|null {
  if(job==='commerce'&&commerceReaderMode(env)==='paused')return null;
  return configuredJobScope(job,env);
@@ -220,6 +221,10 @@ export function syncJobRunFilter(job:SyncJob,scope:{namespace:string;profile:str
  const definition=definitions.find(d=>d.id===job)!;
  return {source:definition.source,source_namespace:scope.namespace,stream_key:definition.stream,query_profile_key:scope.profile};
 }
+export function syncJobWorkRunFilter(job:SyncJob,scope:{namespace:string;profile:string}):Record<string,string>|null{
+ const definition=definitions.find(d=>d.id===job)!;
+ return definition.workStream?{...syncJobRunFilter(job,scope),stream_key:definition.workStream}:null;
+}
 /** Same recent-attempt/publication selection for the tick and monitor. No work is executed here. */
 export async function loadSyncJobRuns(db:Database,scopes:Map<SyncJob,{namespace:string;profile:string}>,enabled:readonly SyncJob[],select:(options:Parameters<Database['select']>[1])=>Promise<Row[]>=options=>db.select('sync_runs',options)):Promise<Row[]>{
  const groups=await Promise.all(definitions.filter(d=>enabled.includes(d.id)).map(async d=>{
@@ -227,7 +232,7 @@ export async function loadSyncJobRuns(db:Database,scopes:Map<SyncJob,{namespace:
   const [recent,published,work]=await Promise.all([
    select({eq,order:'started_at',descending:true,limit:5}),
    select({eq:{...eq,pagination_complete:'true'},in:{status:['complete','empty']},order:'finished_at',descending:true,limit:1}),
-   d.workStream?select({eq:{...eq,stream_key:d.workStream},columns:['id','source','stream_key','query_profile_key','started_at','finished_at','status','lease_until','error_code'],order:'started_at',descending:true,limit:1}):Promise.resolve([]),
+   d.workStream?select({eq:{...eq,stream_key:d.workStream},columns:['id','source','source_namespace','stream_key','query_profile_key','started_at','finished_at','status','lease_until','error_code'],order:'started_at',descending:true,limit:1}):Promise.resolve([]),
   ]);
   return [...recent,...published.filter(r=>['complete','empty'].includes(String(r.status))&&!recent.some(item=>item===r||(r.id&&item.id===r.id))),...work];
  }));

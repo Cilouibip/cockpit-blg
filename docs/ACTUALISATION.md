@@ -1,3 +1,17 @@
+# Actualisation automatique : état du 18 octobre 2026
+
+Le déclencheur Supabase est installé et actif. Il appelle le collecteur chaque minute pendant les reprises, puis espace les vérifications à cinq minutes lorsque le passage est terminé. Le workflow GitHub programmé est désactivé par la variable de bascule existante ; son déclenchement manuel reste un recours. Ces faits sont distincts des procédures historiques ci-dessous.
+
+La réparation du 18 octobre réintègre le lecteur financier dans les quinze flux collectés et surveillés. Une pause explicite reste possible et produit un état de santé non valide. La reprise utilise les index existants, conserve les étapes déjà enregistrées et publie seulement après confirmation complète. Le début réel de collecte reste la borne de fraîcheur, même si une ancienne collecte se termine aujourd’hui. Les lecteurs de périodes et de journées appliquent leurs bornes de couverture sans supprimer les journées historiques couvertes.
+
+Le CA Wix est relu par mois calendaires disjoints en heure de Paris, avec contrôle du total de chaque réponse avant agrégation. Cela évite de dépendre d’une réponse couvrant plusieurs mois qui peut omettre des journées. Aucune correction monétaire fixe n’est ajoutée.
+
+L’écran connecté vérifie les publications à l’ouverture, au retour sur l’onglet et toutes les trente secondes tant qu’il est visible. Une collecte due utilise le même verrou partagé que le déclencheur automatique ; les filtres appliqués sont conservés lorsque les nouveaux résultats arrivent. Les brouillons de filtres restent distincts. Les essais locaux et la revue ne constituent pas une preuve de fonctionnement en production : la version publiée, les publications datées et plusieurs passages automatiques doivent être rapprochés séparément.
+
+## Procédure historique de bascule du 23 septembre
+
+Les paragraphes suivants décrivent la préparation initiale. Les mentions « non appliqué » ou « lecteur suspendu » y désignent l’état à cette date, pas l’état courant.
+
 # Actualisation toutes les 30 minutes : analyse et procédure de bascule
 
 Document de travail pour Codex. Rien n'est activé : le code est local, le déclencheur est préparé dans `supabase/manual/`, les migrations 017 (verrou partagé du tick), 018 (état courant par identifiant stable), 019 (nettoyage borné de la zone de préparation, reprise de l'état courant après retour arrière), 020 (inscriptions en place), 021 (inventaire Notion tournant), 022 (réapparition = même ligne) et 023 (fenêtre de relecture Notion complète) sont préparées dans `supabase/migrations/` et testées sur PostgreSQL 17 jetable, non appliquées. Le workflow GitHub est inchangé. La collecte actuelle (GitHub, départs à 17, 37 et 57 minutes) reste en service jusqu'à la bascule décrite en section 5.
